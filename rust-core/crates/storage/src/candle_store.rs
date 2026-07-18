@@ -21,9 +21,23 @@ impl CandleStore {
         Ok(Self { root: root.to_path_buf() })
     }
 
+    /// Restrict a partition-key component (symbol/timeframe) to a safe character
+    /// set so it can never break out of the derived filename: every character
+    /// that is not ASCII alphanumeric is replaced with `_`. This guarantees the
+    /// output contains no quote characters (can't break the surrounding SQL
+    /// string literal in `write_candles`/`read_candles`), no path separators
+    /// (`/`, `\`), and no `.` at all, so `..` traversal is impossible.
+    fn sanitize_component(input: &str) -> String {
+        input
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect()
+    }
+
     fn partition_path(&self, symbol: &str, timeframe: &str) -> PathBuf {
-        let safe_symbol = symbol.replace(':', "_");
-        self.root.join(format!("{safe_symbol}_{timeframe}.parquet"))
+        let safe_symbol = Self::sanitize_component(symbol);
+        let safe_timeframe = Self::sanitize_component(timeframe);
+        self.root.join(format!("{safe_symbol}_{safe_timeframe}.parquet"))
     }
 
     pub fn write_candles(
@@ -81,5 +95,34 @@ impl CandleStore {
         })?;
 
         rows.collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// A symbol containing a single quote (SQL string-literal breakout) and a
+    /// path-traversal sequence (directory escape) must produce a partition
+    /// filename that stays a single component directly under `root`, with no
+    /// quote characters, no path separators, and no `..` sequence.
+    #[test]
+    fn partition_path_sanitizes_quotes_and_traversal_sequences() {
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        let hostile_symbol = "../../etc/NSE:INFY'; DROP TABLE candles; --";
+        let path = store.partition_path(hostile_symbol, "minute");
+
+        // Stays a direct child of root: no traversal out of the lake directory.
+        assert_eq!(path.parent(), Some(store.root.as_path()));
+
+        let filename = path.file_name().unwrap().to_str().unwrap();
+        assert!(!filename.contains('\''), "filename must not contain a quote: {filename}");
+        assert!(!filename.contains('"'), "filename must not contain a quote: {filename}");
+        assert!(!filename.contains('/'), "filename must not contain a path separator: {filename}");
+        assert!(!filename.contains('\\'), "filename must not contain a path separator: {filename}");
+        assert!(!filename.contains(".."), "filename must not contain a traversal sequence: {filename}");
     }
 }
