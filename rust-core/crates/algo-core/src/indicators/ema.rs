@@ -47,7 +47,7 @@ impl Algorithm for EmaAlgorithm {
     }
 }
 
-/// Wilder-style EMA: seed with the SMA of the first `period` values, then
+/// Standard EMA: seed with the SMA of the first `period` values, then
 /// apply the standard multiplier `2 / (period + 1)` to every value after.
 fn ema_series(closes: &[f64], period: usize) -> f64 {
     let k = 2.0 / (period as f64 + 1.0);
