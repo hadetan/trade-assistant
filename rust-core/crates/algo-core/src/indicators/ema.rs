@@ -90,3 +90,7 @@ mod tests {
         assert_eq!(output.computed_at, as_of);
     }
 }
+
+inventory::submit! {
+    crate::registry::AlgorithmFactory(|| Box::new(EmaAlgorithm::new(20)))
+}

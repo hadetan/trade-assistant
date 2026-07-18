@@ -125,3 +125,7 @@ mod tests {
         assert_eq!(classify_rsi(50.0), Direction::Neutral);
     }
 }
+
+inventory::submit! {
+    crate::registry::AlgorithmFactory(|| Box::new(RsiAlgorithm::new(14)))
+}

@@ -81,3 +81,7 @@ mod tests {
         window.iter().sum::<f64>() / period as f64
     }
 }
+
+inventory::submit! {
+    crate::registry::AlgorithmFactory(|| Box::new(SmaAlgorithm::new(20)))
+}

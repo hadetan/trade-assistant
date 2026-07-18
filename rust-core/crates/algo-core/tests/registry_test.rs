@@ -1,3 +1,4 @@
+use algo_core::registry;
 use algo_core::{AlgoOutput, Algorithm, Direction, Horizon, MarketContext, Timeframe};
 use chrono::{DateTime, Utc};
 
@@ -49,4 +50,15 @@ fn algorithm_trait_is_object_safe_and_computable() {
     assert_eq!(output.symbol, "NSE:INFY");
     assert_eq!(output.direction, Direction::Bullish);
     assert_eq!(output.computed_at, as_of);
+}
+
+#[test]
+fn registry_contains_all_three_phase_one_algorithms() {
+    let algos = registry::all();
+    let ids: Vec<&str> = algos.iter().map(|a| a.id()).collect();
+
+    assert!(ids.contains(&"sma"));
+    assert!(ids.contains(&"ema"));
+    assert!(ids.contains(&"rsi"));
+    assert_eq!(ids.len(), 3);
 }

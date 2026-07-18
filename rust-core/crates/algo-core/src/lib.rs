@@ -1,7 +1,8 @@
 mod algorithm;
 mod indicators;
+pub mod registry;
 
 pub use algorithm::{
     classify_by_distance, AlgoOutput, Algorithm, Direction, Horizon, MarketContext, Timeframe,
 };
-pub use indicators::SmaAlgorithm;
+pub use indicators::{EmaAlgorithm, RsiAlgorithm, SmaAlgorithm};
