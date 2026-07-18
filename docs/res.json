@@ -1,0 +1,59 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "api_error_status": null,
+  "duration_ms": 7656,
+  "duration_api_ms": 7391,
+  "ttft_ms": 6846,
+  "ttft_stream_ms": 1591,
+  "time_to_request_ms": 264,
+  "num_turns": 1,
+  "result": "Time = dimension where events happen in sequence. Flows one direction (entropy arrow). Linked to space in spacetime fabric per Einstein. Measured in units (seconds, hours) for bookkeeping but fundamentally tied to causality—effect follows cause, never reverse.",
+  "stop_reason": "end_turn",
+  "session_id": "10fb8b8d-e156-4d7f-9b16-0ec28c4ea166",
+  "total_cost_usd": 0.013731799999999999,
+  "usage": {
+    "input_tokens": 10,
+    "cache_creation_input_tokens": 4828,
+    "cache_read_input_tokens": 15158,
+    "output_tokens": 510,
+    "server_tool_use": { "web_search_requests": 0, "web_fetch_requests": 0 },
+    "service_tier": "standard",
+    "cache_creation": {
+      "ephemeral_1h_input_tokens": 4828,
+      "ephemeral_5m_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "iterations": [
+      {
+        "input_tokens": 10,
+        "output_tokens": 510,
+        "cache_read_input_tokens": 15158,
+        "cache_creation_input_tokens": 4828,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 4828
+        },
+        "type": "message"
+      }
+    ],
+    "speed": "standard"
+  },
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 10,
+      "outputTokens": 510,
+      "cacheReadInputTokens": 15158,
+      "cacheCreationInputTokens": 4828,
+      "webSearchRequests": 0,
+      "costUSD": 0.013731799999999999,
+      "contextWindow": 200000,
+      "maxOutputTokens": 32000
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "fast_mode_state": "off",
+  "uuid": "9e0cd703-85bc-4aa8-83d1-6775275314ad"
+}

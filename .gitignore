@@ -1,0 +1,12 @@
+# Local reference-only clones — not part of this project, not committed.
+__references/
+
+# OS cruft
+.DS_Store
+
+# Future build artifacts (Node/Electron/Rust) — pre-declared now, populated later.
+node_modules/
+dist/
+out/
+target/
+*.log
