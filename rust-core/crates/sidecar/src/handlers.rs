@@ -19,7 +19,15 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
         as_of: Utc::now(),
     };
 
-    let outputs: Vec<_> = registry::all().iter().map(|algo| algo.compute(&ctx)).collect();
+    // An algorithm whose `required_lookback()` exceeds the history we were
+    // given has no opinion to offer -- calling it anyway is what caused the
+    // underflow panic in sma.rs/ema.rs/rsi.rs's slice arithmetic on
+    // thin-history/newly-listed symbols. Skip it instead of calling compute().
+    let outputs: Vec<_> = registry::all()
+        .iter()
+        .filter(|algo| algo.required_lookback() <= ctx.closes.len())
+        .map(|algo| algo.compute(&ctx))
+        .collect();
 
     // Phase 1 uses equal weights for every algorithm; a later phase's
     // backtest engine supplies real rolling-hit-rate weights here instead.
@@ -45,5 +53,58 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
             neutral_count: confluence.neutral_count,
             weighted_vote: confluence.weighted_vote,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn closes_seq(n: usize) -> Vec<f64> {
+        (0..n).map(|i| 100.0 + i as f64).collect()
+    }
+
+    fn request(id: u64, closes: Vec<f64>) -> ComputeRequest {
+        ComputeRequest {
+            id,
+            symbol: "NSE:NEWLISTING".to_string(),
+            timeframe: "day".to_string(),
+            closes,
+        }
+    }
+
+    #[test]
+    fn skips_algorithms_without_enough_lookback_instead_of_panicking() {
+        // 15 closes: enough for rsi (required_lookback = period + 1 = 15),
+        // but short of sma/ema's required_lookback of 20. Before the fix,
+        // calling sma/ema here underflowed `closes.len() - period` and
+        // panicked the whole process.
+        let response = handle_request(request(42, closes_seq(15)));
+
+        assert_eq!(response.id, 42);
+        assert_eq!(response.algo_results.len(), 1);
+        assert_eq!(response.algo_results[0].algo_id, "rsi");
+    }
+
+    #[test]
+    fn empty_closes_yields_well_formed_zeroed_response() {
+        // No algorithm has enough lookback for zero closes -- handle_request
+        // must still return a well-formed response, not panic.
+        let response = handle_request(request(7, vec![]));
+
+        assert_eq!(response.id, 7);
+        assert!(response.algo_results.is_empty());
+        assert_eq!(response.confluence.bullish_count, 0);
+        assert_eq!(response.confluence.bearish_count, 0);
+        assert_eq!(response.confluence.neutral_count, 0);
+        assert_eq!(response.confluence.weighted_vote, 0.0);
+        assert!(!response.confluence.weighted_vote.is_nan());
+    }
+
+    #[test]
+    fn sufficient_closes_runs_all_registered_algorithms() {
+        let response = handle_request(request(1, closes_seq(21)));
+
+        assert_eq!(response.algo_results.len(), 3);
     }
 }
