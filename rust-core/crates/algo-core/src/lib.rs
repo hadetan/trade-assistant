@@ -1,4 +1,5 @@
 mod algorithm;
+pub mod confluence;
 mod indicators;
 pub mod registry;
 
