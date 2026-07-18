@@ -68,6 +68,7 @@ The sidecar is spawned and supervised (auto-restart on crash) by Electron's main
 | Claude subprocess invocation, persona pipeline | Electron main (TS) | Rust |
 | Algorithm computation, Kronos inference, backtesting/replay | Rust sidecar | Electron/TS — TS never re-implements indicator math |
 | Candle/indicator storage | Rust sidecar (DuckDB/Parquet + SQLite) | — |
+| Chat/session history persistence | Electron main (TS), its own SQLite store | Rust — kept separate from the candle/algorithm store in §5.3, see §8.5 |
 | Chat UI rendering | Electron renderer | Main process (renderer has no Node/Kite access) |
 
 Rationale for keeping Kite ownership in TS rather than Rust: the MCP TypeScript SDK has mature remote-HTTP/Streamable-HTTP client support; nothing equivalent exists ready-made in the Rust ecosystem (even the local `jcode` reference repo's own MCP client is stdio-only and hand-rolled — building an HTTP/SSE MCP client in Rust from scratch would be real, avoidable work). It also keeps every credential/session boundary in exactly one process, which matters for §4.
@@ -117,6 +118,7 @@ The candle/backtest workload is scan/aggregation-heavy (wide date-range reads, r
 - **Candle lake:** Parquet files, Hive-partitioned by symbol/timeframe/date, queried via embedded DuckDB (`duckdb-rs`) with SQL directly against the partitioned files (`read_parquet()` with predicate/projection pushdown) — one self-contained Rust binary, no server process. This same lake holds both live Kite-sourced candles and, distinctly partitioned/labeled, historical data imported from the public sources in §10 — the algorithm layer reads the same schema either way.
 - **Mutable state:** a small SQLite database (`rusqlite`, bundled) for watchlists, alert rules, ingestion checkpoints, and the Kite session-token cache — low-volume, transactional, a poor fit for Parquet's batch-write model.
 - Intraday ticks are buffered in memory/SQLite and batch-compacted into the day's Parquet partition at end-of-day, not written per-tick (Parquet is not suited to frequent single-row appends).
+- **This SQLite instance belongs to the Rust sidecar and holds only algorithm/market-data state.** Chat/session transcripts are a separate concern, owned and persisted by Electron main in its own store — see §8.5. Neither process reaches into the other's database file.
 
 ## 6. Algorithm Layer (Rust sidecar)
 
@@ -282,6 +284,15 @@ A dedicated Settings window (not buried in the chat UI) holds standing preferenc
 
 This window deliberately does **not** include a way to skip or pre-answer the per-session AI/Engine-Only prompt (§9) — that choice is asked fresh every session by design, never cached as a settings default.
 
+### 8.5 Chat / session history
+
+Standard chat-app behavior applies here too: **every session's full transcript persists locally, browsable and reopenable later, regardless of which response mode produced it.** This was missing from the earlier revision of this design and is now an explicit requirement, not an implementation detail left to chance.
+
+- **What's captured, for both modes identically:** every user turn (a free-text query in AI-Assisted mode, or the picked answers from the Engine-Only wizard, §9.2), every resulting answer (Claude's persona-pipeline narrative, or the deterministic template's rendered text), and the structured payload behind that answer (`AlgoOutput[]`, the confluence scorecard, the `Verdict`/templated-equivalent) so a past session can be inspected in full later, not just re-read as prose.
+- **Storage:** a small SQLite database owned by Electron main (per §3's ownership table and separate from the Rust sidecar's own SQLite, §5.3) — a `sessions` table (id, started_at, ended_at, response_mode, instrument(s) touched) and a `messages` table (id, session_id, role, rendered_text, structured_payload, created_at). Local-only, single-user, no additional exposure beyond what already applies to the rest of this app's on-disk state (§5.3's candle/position data sits under the same posture).
+- **UI:** a history list/sidebar (the same pattern as Claude Code's own `/resume` picker, or any ordinary chat app's conversation list) to browse and reopen past sessions — reopened sessions show the full past transcript.
+- **Distinct from Claude's own multi-turn memory** (§7.1's `--resume`/`--session-id`, which is what keeps one *active* AI-Assisted conversation coherent turn-to-turn to Claude itself): this is the UI-level record of every session ever run, in either mode, kept whether or not that session is ever resumed conversationally. Engine-Only mode has nothing analogous to `--resume` (there's no model to resume a conversation with — a follow-up just re-runs the wizard, §8.3), but its transcripts persist and are browsable exactly the same as AI-Assisted ones.
+
 ## 9. Response Modes: AI-Assisted vs Engine-Only
 
 Every new session starts with an explicit, mandatory choice presented in the UI before anything else happens (§8.3): **use AI this session, or run the algorithm engine alone.** This is asked every time, not cached as a settings default (§8.4) — the user may want a quick deterministic read one session and a fully-reasoned AI read the next, and the app should never assume which.
@@ -363,6 +374,7 @@ Research (confirmed by both adversarial verify passes, against the primary SEBI 
 - **Anti-lookahead:** backtest engine tests specifically assert that no algorithm's `compute()` ever receives a candle whose `EndTime` is in the future relative to the simulated "current" instant — mirroring the two concrete gates LEAN uses internally. The same assertion applies to the historical-replay harness (§10.3): the frontier-gating logic is one shared implementation, tested once.
 - **Historical-replay validation:** per §10.3, both response modes are run against the public-data harness across many historical points and checked for a sane hit-rate/expectancy distribution before ever being pointed at live Kite data — this is the primary pre-production confidence check for the whole pipeline, not just a nice-to-have.
 - **Response-mode parity:** a test confirms both response modes, given the identical `AlgoOutput[]`/confluence scorecard input, produce a verdict referencing the same underlying facts (even though Engine-Only's is templated and AI-Assisted's is Claude-authored) — catching any accidental divergence in what data reaches each path.
+- **History persistence:** a test confirms a completed session's transcript (messages + structured payloads) is written to Electron main's session store and reloads correctly after a full app restart, for both response modes — this is the concrete check behind §8.5's persistence requirement, not just a UI-level impression that it works.
 - **Safety allowlist:** an integration test asserts that the Kite session wrapper class exposes exactly the read-tool method set from §4 and no others — this test should fail loudly if a future refactor ever adds a write-tool method by accident.
 - **MCP drift detection:** a test/startup-check path exercises the `tools/list` diff logic against both an expected-shape response and a deliberately-mutated one (simulating a new tool appearing) to confirm the warning banner actually fires.
 - **Electron security:** a test confirms `contextIsolation`/`sandbox` are on for every created `BrowserWindow`, and a DOMPurify test feeds a known XSS payload class (matching the DeepChat CVE shape) through the markdown-render path to confirm it's neutralized — exercised against both response modes' output.
