@@ -46,6 +46,16 @@ fn donchian_matches_hand_computed_channels() {
     assert!((lower - 9.0).abs() < 1e-9);
     assert!((mid - 11.5).abs() < 1e-9);
 
+    // Assert the algorithm's OWN reported Upper/Lower, not just the test's
+    // hand-computed reference above — a (lower, mid, upper) destructuring
+    // swap in donchian.rs must make this fail.
+    assert_eq!(output.evidence.len(), 1);
+    let expected_evidence = format!(
+        "close {:.2} vs Donchian(3) mid {:.2} [lower {:.2}, upper {:.2}]",
+        13.0, mid, lower, upper
+    );
+    assert_eq!(output.evidence[0], expected_evidence);
+
     // last close (13.0) is above the mid (11.5) -> Bullish
     assert_eq!(output.direction, Direction::Bullish);
     let expected_magnitude: f64 = ((13.0 - 11.5) / 11.5f64).abs();
