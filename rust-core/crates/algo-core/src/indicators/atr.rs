@@ -138,9 +138,8 @@ mod tests {
 }
 
 inventory::submit! {
-    // Registered at the brief's period-3 test parameter, not the textbook
-    // period-14, so the external integration test (which can only reach
-    // this private struct through the registered instance) can assert the
-    // brief's exact Wilder-seeded reference value end to end.
-    crate::registry::AlgorithmFactory(|| Box::new(AtrAlgorithm::new(3)))
+    // Task spec is ATR (Wilder, 14); the inline unit test above uses period
+    // 3 purely for a hand-checkable smoothing walkthrough and constructs
+    // AtrAlgorithm directly, bypassing this registration.
+    crate::registry::AlgorithmFactory(|| Box::new(AtrAlgorithm::new(14)))
 }

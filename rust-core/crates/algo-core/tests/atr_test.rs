@@ -9,26 +9,15 @@ fn registry_contains_atr() {
     assert!(ids.contains(&"atr"));
 }
 
-#[test]
-fn atr_matches_hand_computed_wilder_smoothing() {
-    // seed close 10; bars (H,L,C) = (12,10,11),(13,11,12),(15,11,14),(16,14,15)
-    // TRs = 2, 2, 4, 2 (period 3) -> seed = (2+2+4)/3 = 8/3
-    // Wilder step = (8/3 * 2 + 2) / 3 = 22/9 ~= 2.444444
-    let algos = registry::all();
-    let algo = algos
-        .into_iter()
-        .find(|a| a.id() == "atr")
-        .expect("atr algorithm must be registered");
-
-    let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-    let ctx = MarketContext {
+fn flat_ohlc_context(bars: usize, price: f64, as_of: DateTime<Utc>) -> MarketContext {
+    MarketContext {
         symbol: "TEST".into(),
         timeframe: Timeframe::Day,
         horizon: Horizon::Positional,
-        closes: vec![10.0, 11.0, 12.0, 14.0, 15.0],
+        closes: vec![price; bars],
         opens: Vec::new(),
-        highs: vec![10.0, 12.0, 13.0, 15.0, 16.0],
-        lows: vec![10.0, 10.0, 11.0, 11.0, 14.0],
+        highs: vec![price; bars],
+        lows: vec![price; bars],
         volumes: Vec::new(),
         timestamps: Vec::new(),
         options: None,
@@ -36,13 +25,53 @@ fn atr_matches_hand_computed_wilder_smoothing() {
         peer: None,
         higher_tf: None,
         as_of,
-    };
+    }
+}
+
+#[test]
+fn atr_registered_instance_is_wilder_14_on_flat_series() {
+    // Registered period must be 14 (ATR (Wilder, 14) per the task brief). A
+    // flat OHLC series makes every true range 0, giving real ATR(14) an
+    // exact, unambiguous anchor (0.0) with no smoothing-formula guesswork,
+    // and the evidence string pins the period so a regression to period 3
+    // (still period-agnostic 0.0 on this fixture) is still caught.
+    let algos = registry::all();
+    let algo = algos
+        .into_iter()
+        .find(|a| a.id() == "atr")
+        .expect("atr algorithm must be registered");
+
+    let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let ctx = flat_ohlc_context(15, 100.0, as_of);
 
     let output = algo.compute(&ctx);
 
-    assert!((output.magnitude - 22.0 / 9.0).abs() < 1e-6);
     assert_eq!(output.direction, Direction::Neutral);
+    assert!((output.magnitude - 0.0).abs() < 1e-9);
+    assert_eq!(output.evidence, vec!["ATR(14) = 0.000000".to_string()]);
     assert_eq!(output.computed_at, as_of);
+}
+
+#[test]
+fn atr_registered_lookback_guards_at_fourteen_bars() {
+    // required_lookback is period + 1, so with the correct period-14
+    // registration, 14 highs/lows must still trip the no-op guard. If the
+    // registration regresses to period 3 (required_lookback 4), 14 bars
+    // would instead fall through to a real (wrong) computation.
+    let algos = registry::all();
+    let algo = algos
+        .into_iter()
+        .find(|a| a.id() == "atr")
+        .expect("atr algorithm must be registered");
+
+    let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let ctx = flat_ohlc_context(14, 100.0, as_of);
+
+    let output = algo.compute(&ctx);
+
+    assert_eq!(output.direction, Direction::Neutral);
+    assert_eq!(output.magnitude, 0.0);
+    assert_eq!(output.evidence, vec!["insufficient OHLCV".to_string()]);
 }
 
 #[test]
