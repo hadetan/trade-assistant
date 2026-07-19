@@ -34,6 +34,43 @@ fn adx_is_registered() {
 }
 
 #[test]
+fn adx_no_ops_on_fully_flat_window_without_nan() {
+    // Circuit-frozen NSE instrument: H=L=C constant across the whole
+    // lookback, so TR14 seeds at 0.0 and plus_di/minus_di = 0.0/0.0 would be
+    // NaN without the tr14 guard, poisoning downstream confluence.
+    let n = 30;
+    let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let ctx = MarketContext {
+        symbol: "NSE:FROZEN".to_string(),
+        timeframe: Timeframe::Day,
+        horizon: Horizon::Positional,
+        closes: vec![100.0; n],
+        opens: Vec::new(),
+        highs: vec![100.0; n],
+        lows: vec![100.0; n],
+        volumes: Vec::new(),
+        timestamps: Vec::new(),
+        options: None,
+        chain: None,
+        peer: None,
+        higher_tf: None,
+        as_of,
+    };
+
+    let algos = registry::all();
+    let adx = algos
+        .into_iter()
+        .find(|a| a.id() == "adx")
+        .expect("adx must be registered");
+
+    let output = adx.compute(&ctx);
+
+    assert_eq!(output.direction, Direction::Neutral);
+    assert!(!output.magnitude.is_nan());
+    assert!(!output.confidence.is_nan());
+}
+
+#[test]
 fn adx_matches_hand_verified_wilder_step_and_classifies_bullish() {
     let ctx = uptrend_ctx();
 

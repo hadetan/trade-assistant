@@ -39,8 +39,21 @@ impl Algorithm for AdxAlgorithm {
             };
         }
 
-        let (plus_di, minus_di, adx) =
-            wilder_dmi(&ctx.highs, &ctx.lows, &ctx.closes, self.period);
+        let Some((plus_di, minus_di, adx)) =
+            wilder_dmi(&ctx.highs, &ctx.lows, &ctx.closes, self.period)
+        else {
+            return crate::AlgoOutput {
+                algo_id: self.id(),
+                symbol: ctx.symbol.clone(),
+                timeframe: ctx.timeframe,
+                horizon: ctx.horizon,
+                direction: Direction::Neutral,
+                magnitude: 0.0,
+                confidence: 0.0,
+                evidence: vec!["flat window (zero true range)".into()],
+                computed_at: ctx.as_of,
+            };
+        };
 
         let direction = if plus_di > minus_di && adx > 20.0 {
             Direction::Bullish
@@ -76,8 +89,15 @@ impl Algorithm for AdxAlgorithm {
 /// brief's 2x-period lookback and 30-bar test can't satisfy, so this is
 /// hand-rolled per the brief's exact formula instead. ADX itself is then
 /// seeded from the average of the first `period` DX values and
-/// Wilder-smoothed the same way. Returns (+DI, -DI, ADX) as of the last bar.
-fn wilder_dmi(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> (f64, f64, f64) {
+/// Wilder-smoothed the same way. Returns `Some((+DI, -DI, ADX))` as of the
+/// last bar, or `None` on a fully-flat window (TR14 seed == 0) where +DI/-DI
+/// would otherwise divide 0.0/0.0 into NaN.
+fn wilder_dmi(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    period: usize,
+) -> Option<(f64, f64, f64)> {
     let n = highs.len();
     let mut trs = Vec::with_capacity(n - 1);
     let mut plus_dms = Vec::with_capacity(n - 1);
@@ -105,6 +125,12 @@ fn wilder_dmi(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> (f6
     }
 
     let mut tr14 = trs[..period].iter().sum::<f64>();
+    if tr14.abs() < 1e-12 {
+        // Circuit-frozen instrument (H=L=C constant across the whole
+        // lookback): TR14 seeds at 0, and 100.0*plus_dm14/tr14 below would
+        // divide 0.0/0.0 into NaN, unlike the DX-stage guard further down.
+        return None;
+    }
     let mut plus_dm14 = plus_dms[..period].iter().sum::<f64>();
     let mut minus_dm14 = minus_dms[..period].iter().sum::<f64>();
 
@@ -138,7 +164,7 @@ fn wilder_dmi(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> (f6
         adx = (adx * (period as f64 - 1.0) + dx) / period as f64;
     }
 
-    (*plus_dis.last().unwrap(), *minus_dis.last().unwrap(), adx)
+    Some((*plus_dis.last().unwrap(), *minus_dis.last().unwrap(), adx))
 }
 
 #[cfg(test)]
@@ -171,17 +197,67 @@ mod tests {
         }
     }
 
+    fn flat_ctx(n: usize) -> MarketContext {
+        let highs = vec![100.0; n];
+        let lows = vec![100.0; n];
+        let closes = vec![100.0; n];
+        let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+
+        MarketContext {
+            symbol: "TEST".to_string(),
+            timeframe: Timeframe::Day,
+            horizon: Horizon::Positional,
+            closes,
+            opens: Vec::new(),
+            highs,
+            lows,
+            volumes: Vec::new(),
+            timestamps: Vec::new(),
+            options: None,
+            chain: None,
+            peer: None,
+            higher_tf: None,
+            as_of,
+        }
+    }
+
     #[test]
     fn wilder_dmi_matches_hand_computed_first_step() {
         // 30-bar clean uptrend: TR/+DM/-DM are constant from bar 1 on, so
         // Wilder's recursion sits at a fixed point (steady state) throughout
         // -- +DI=80, -DI=0, ADX=100 exactly, not just asymptotically.
         let ctx = uptrend_ctx(30);
-        let (plus_di, minus_di, adx) = wilder_dmi(&ctx.highs, &ctx.lows, &ctx.closes, 14);
+        let (plus_di, minus_di, adx) = wilder_dmi(&ctx.highs, &ctx.lows, &ctx.closes, 14)
+            .expect("non-flat window must yield Some");
 
         assert!((plus_di - 80.0).abs() < 1e-9);
         assert!((minus_di - 0.0).abs() < 1e-9);
         assert!((adx - 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn wilder_dmi_returns_none_on_flat_window() {
+        let ctx = flat_ctx(30);
+        assert_eq!(wilder_dmi(&ctx.highs, &ctx.lows, &ctx.closes, 14), None);
+    }
+
+    #[test]
+    fn adx_no_ops_on_flat_window_without_nan() {
+        let algo = AdxAlgorithm::new(14);
+        let ctx = flat_ctx(30);
+
+        let output = algo.compute(&ctx);
+
+        assert_eq!(output.direction, Direction::Neutral);
+        assert_eq!(output.magnitude, 0.0);
+        assert_eq!(output.confidence, 0.0);
+        assert!(!output.magnitude.is_nan());
+        assert!(!output.confidence.is_nan());
+        assert_eq!(
+            output.evidence,
+            vec!["flat window (zero true range)".to_string()]
+        );
+        assert_eq!(output.computed_at, ctx.as_of);
     }
 
     #[test]
