@@ -1,5 +1,5 @@
 use sidecar::handlers::handle_request;
-use sidecar::protocol::{encode_response, parse_request};
+use sidecar::protocol::{empty_response, encode_response, parse_request};
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
 
@@ -32,9 +32,9 @@ fn main() {
             Ok(response) => response,
             Err(_) => {
                 eprintln!(
-                    "sidecar: request {request_id} panicked during compute; skipping it and continuing"
+                    "sidecar: request {request_id} panicked during compute; answering it with an empty result and continuing"
                 );
-                continue;
+                empty_response(request_id)
             }
         };
 
