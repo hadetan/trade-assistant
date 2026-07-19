@@ -1,5 +1,5 @@
 use crate::protocol::{AlgoResultWire, ComputeRequest, ComputeResponse, ConfluenceWire};
-use algo_core::{confluence::compute_confluence, registry, Horizon, MarketContext, Timeframe};
+use algo_core::{confluence::compute_confluence, registry::{self, run_applicable}, Horizon, MarketContext, Timeframe};
 use chrono::Utc;
 use std::collections::HashMap;
 
@@ -19,15 +19,11 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
         as_of: Utc::now(),
     };
 
-    // An algorithm whose `required_lookback()` exceeds the history we were
-    // given has no opinion to offer -- calling it anyway is what caused the
-    // underflow panic in sma.rs/ema.rs/rsi.rs's slice arithmetic on
-    // thin-history/newly-listed symbols. Skip it instead of calling compute().
-    let outputs: Vec<_> = registry::all()
-        .iter()
-        .filter(|algo| algo.required_lookback() <= ctx.closes.len())
-        .map(|algo| algo.compute(&ctx))
-        .collect();
+    // Route every compute() call through the one shared lookback gate
+    // (algo_core::registry::run_applicable) so the sidecar and the backtest
+    // engine cannot drift on the insufficient-history contract.
+    let algos = registry::all();
+    let outputs = run_applicable(&algos, &ctx);
 
     // Phase 1 uses equal weights for every algorithm; a later phase's
     // backtest engine supplies real rolling-hit-rate weights here instead.

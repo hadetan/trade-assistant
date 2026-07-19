@@ -28,11 +28,14 @@ fn main() {
         let request_id = request.id;
         let result = panic::catch_unwind(AssertUnwindSafe(|| handle_request(request)));
 
+        // A caught panic must still produce exactly one response line for this
+        // id: a stdio request/response client blocks waiting for it otherwise.
+        // Emit a well-formed empty response instead of dropping the reply.
         let response = match result {
             Ok(response) => response,
             Err(_) => {
                 eprintln!(
-                    "sidecar: request {request_id} panicked during compute; answering it with an empty result and continuing"
+                    "sidecar: request {request_id} panicked during compute; returning an empty response"
                 );
                 empty_response(request_id)
             }

@@ -81,16 +81,13 @@ fn write_and_read_survive_symbol_with_quote_and_path_traversal_characters() {
 }
 
 #[test]
-fn write_and_read_survive_a_root_path_containing_a_single_quote() {
-    // `sanitize_component` only cleans the symbol/timeframe-derived filename;
-    // the store's ROOT is the caller's own filesystem path and was
-    // interpolated raw into the SQL string literal at both the write
-    // (`COPY ... TO '{path}'`) and read (`read_parquet('{path}')`) sites. A
-    // legitimate root like `.../o'brien/lake` broke the SQL literal at both
-    // sites. This must round-trip cleanly once the path is escaped.
+fn write_and_read_survive_a_lake_root_path_containing_a_single_quote() {
+    // The lake root is the user's own filesystem path, not a sanitized
+    // component -- a legitimate path like /Users/o'brien/lake must not break
+    // the DuckDB COPY/read_parquet SQL string literals.
     let dir = tempdir().unwrap();
-    let root = dir.path().join("o'brien");
-    let store = CandleStore::open(&root).unwrap();
+    let quoted_root = dir.path().join("o'brien");
+    let store = CandleStore::open(&quoted_root).unwrap();
 
     let candles = vec![
         Candle { ts: 1_700_000_000, open: 10.0, high: 11.0, low: 9.5, close: 10.5, volume: 42 },
@@ -100,4 +97,75 @@ fn write_and_read_survive_a_root_path_containing_a_single_quote() {
     let read_back = store.read_candles("NSE:INFY", "minute").unwrap();
 
     assert_eq!(read_back, candles);
+}
+
+#[test]
+fn read_candles_on_never_written_partition_returns_empty_vec() {
+    // design §5.1: a from/to window with no data is "empty, not error".
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+
+    let got = store.read_candles("NSE:NEVERWRITTEN", "day").unwrap();
+
+    assert!(got.is_empty());
+}
+
+#[test]
+fn open_on_uncreatable_root_returns_err_not_panic() {
+    // create_dir_all fails when an ancestor of the requested root is a file.
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("iamafile");
+    std::fs::write(&file_path, b"x").unwrap();
+    let bogus_root = file_path.join("subdir");
+
+    let result = CandleStore::open(&bogus_root);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn write_sourced_candles_appends_merges_dedups_and_sorts() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+
+    store
+        .write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[
+            Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 10 },
+            Candle { ts: 200, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 20 },
+        ])
+        .unwrap();
+    // Second batch overlaps ts=200 (new value wins) and adds ts=300; ts arrives
+    // out of order to prove the merge sorts.
+    store
+        .write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[
+            Candle { ts: 300, open: 3.0, high: 3.0, low: 3.0, close: 3.0, volume: 30 },
+            Candle { ts: 200, open: 2.5, high: 2.5, low: 2.5, close: 2.5, volume: 25 },
+        ])
+        .unwrap();
+
+    let got = store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap();
+
+    assert_eq!(got.len(), 3);
+    assert_eq!(got.iter().map(|c| c.ts).collect::<Vec<_>>(), vec![100, 200, 300]);
+    assert_eq!(got[1].close, 2.5, "incoming candle must win on duplicate ts");
+}
+
+#[test]
+fn read_sourced_candles_on_missing_source_is_empty() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    assert!(store.read_sourced_candles("NSE:INFY", "day", "kaggle").unwrap().is_empty());
+}
+
+#[test]
+fn sources_are_partitioned_separately_for_the_same_symbol() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    store.write_sourced_candles("NSE:INFY", "day", "bhavcopy",
+        &[Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 10 }]).unwrap();
+    store.write_sourced_candles("NSE:INFY", "day", "kaggle",
+        &[Candle { ts: 100, open: 9.0, high: 9.0, low: 9.0, close: 9.0, volume: 90 }]).unwrap();
+
+    assert_eq!(store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap()[0].close, 1.0);
+    assert_eq!(store.read_sourced_candles("NSE:INFY", "day", "kaggle").unwrap()[0].close, 9.0);
 }

@@ -4,6 +4,8 @@ members = [
     "crates/algo-core",
     "crates/storage",
     "crates/sidecar",
+    "crates/ingestion",
+    "crates/backtest",
 ]
 
 [workspace.package]

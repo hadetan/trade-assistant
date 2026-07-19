@@ -58,3 +58,23 @@ pub fn parse_request(line: &str) -> serde_json::Result<ComputeRequest> {
 pub fn encode_response(response: &ComputeResponse) -> String {
     serde_json::to_string(response).expect("ComputeResponse always serializes")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_response_is_zeroed_and_carries_the_request_id() {
+        let response = empty_response(99);
+        assert_eq!(response.id, 99);
+        assert!(response.algo_results.is_empty());
+        assert_eq!(response.confluence.bullish_count, 0);
+        assert_eq!(response.confluence.bearish_count, 0);
+        assert_eq!(response.confluence.neutral_count, 0);
+        assert_eq!(response.confluence.weighted_vote, 0.0);
+
+        let line = encode_response(&response);
+        assert!(line.contains("\"id\":99"));
+        assert!(!line.contains('\n'));
+    }
+}

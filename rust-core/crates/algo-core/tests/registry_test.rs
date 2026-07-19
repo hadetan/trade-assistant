@@ -1,4 +1,5 @@
 use algo_core::registry;
+use algo_core::registry::run_applicable;
 use algo_core::{AlgoOutput, Algorithm, Direction, Horizon, MarketContext, Timeframe};
 use chrono::{DateTime, Utc};
 
@@ -61,4 +62,39 @@ fn registry_contains_all_three_phase_one_algorithms() {
     assert!(ids.contains(&"ema"));
     assert!(ids.contains(&"rsi"));
     assert_eq!(ids.len(), 3);
+}
+
+fn ctx_with_closes(n: usize) -> MarketContext {
+    let closes = (0..n).map(|i| 100.0 + i as f64).collect();
+    let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    MarketContext {
+        symbol: "NSE:TEST".to_string(),
+        timeframe: Timeframe::Day,
+        horizon: Horizon::Positional,
+        closes,
+        as_of,
+    }
+}
+
+#[test]
+fn run_applicable_skips_algorithms_without_enough_lookback() {
+    // 15 closes: rsi(14) needs 15 and runs; sma(20)/ema(20) need 20 and are skipped.
+    let algos = registry::all();
+    let outputs = run_applicable(&algos, &ctx_with_closes(15));
+    let ids: Vec<&str> = outputs.iter().map(|o| o.algo_id).collect();
+    assert_eq!(ids, vec!["rsi"]);
+}
+
+#[test]
+fn run_applicable_runs_all_when_history_is_sufficient() {
+    let algos = registry::all();
+    let outputs = run_applicable(&algos, &ctx_with_closes(21));
+    assert_eq!(outputs.len(), 3);
+}
+
+#[test]
+fn run_applicable_returns_empty_for_no_history_instead_of_panicking() {
+    let algos = registry::all();
+    let outputs = run_applicable(&algos, &ctx_with_closes(0));
+    assert!(outputs.is_empty());
 }
