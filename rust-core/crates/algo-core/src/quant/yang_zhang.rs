@@ -107,6 +107,36 @@ fn sample_variance(values: &[f64], n: f64) -> f64 {
     values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rogers_satchell_term_on_the_clean_bar_is_one() {
+        // Brief's anchor: H=e, L=1, O=C=1 -> ln(H/C)ln(H/O) + ln(L/C)ln(L/O)
+        // = ln(e)*ln(e) + ln(1)*ln(1) = 1*1 + 0*0 = 1.0.
+        let h = std::f64::consts::E;
+        let (l, o, c) = (1.0_f64, 1.0_f64, 1.0_f64);
+
+        assert!((rogers_satchell_term(h, l, o, c) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rogers_satchell_term_sums_both_product_terms() {
+        // O,H,L,C all distinct so neither product term is zero (unlike the
+        // clean-bar case above, whose low term is 0*0 and so can't tell a
+        // '+' from a '-' between the two terms). H=e^2, L=1/e, O=1, C=e:
+        //   ln(H/C)ln(H/O) = ln(e)   * ln(e^2)  =  1 *  2 = 2
+        //   ln(L/C)ln(L/O) = ln(e^-2)* ln(e^-1) = -2 * -1 = 2
+        // Summed the two terms give 4; subtracted they'd give 0.
+        let h = std::f64::consts::E.powi(2);
+        let l = 1.0 / std::f64::consts::E;
+        let (o, c) = (1.0_f64, std::f64::consts::E);
+
+        assert!((rogers_satchell_term(h, l, o, c) - 4.0).abs() < 1e-9);
+    }
+}
+
 inventory::submit! {
     crate::registry::AlgorithmFactory(|| Box::new(YangZhangAlgorithm::new()))
 }
