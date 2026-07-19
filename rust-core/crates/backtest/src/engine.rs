@@ -1,6 +1,6 @@
 use crate::frontier::context_at;
 use algo_core::{registry::run_applicable, Algorithm, Direction, Horizon, Timeframe};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use storage::Candle;
 
 #[derive(Debug, Clone)]
@@ -28,6 +28,13 @@ pub struct ReplayReport {
 impl ReplayReport {
     pub fn stat(&self, algo_id: &str) -> Option<&AlgoStats> {
         self.per_algo.iter().find(|s| s.algo_id == algo_id)
+    }
+
+    /// Per-algorithm hit-rate as the weight map `compute_confluence` accepts. In
+    /// the catalog phase these replace the sidecar handler's equal-weight
+    /// placeholder (design §6.3); here they prove the type-level bridge.
+    pub fn hit_rate_weights(&self) -> HashMap<String, f64> {
+        self.per_algo.iter().map(|s| (s.algo_id.clone(), s.hit_rate())).collect()
     }
 }
 
