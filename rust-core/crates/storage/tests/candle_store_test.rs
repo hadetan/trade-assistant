@@ -79,3 +79,25 @@ fn write_and_read_survive_symbol_with_quote_and_path_traversal_characters() {
     assert_eq!(entries.len(), 1, "expected exactly one partition file directly inside root");
     assert!(entries[0].path().is_file());
 }
+
+#[test]
+fn write_and_read_survive_a_root_path_containing_a_single_quote() {
+    // `sanitize_component` only cleans the symbol/timeframe-derived filename;
+    // the store's ROOT is the caller's own filesystem path and was
+    // interpolated raw into the SQL string literal at both the write
+    // (`COPY ... TO '{path}'`) and read (`read_parquet('{path}')`) sites. A
+    // legitimate root like `.../o'brien/lake` broke the SQL literal at both
+    // sites. This must round-trip cleanly once the path is escaped.
+    let dir = tempdir().unwrap();
+    let root = dir.path().join("o'brien");
+    let store = CandleStore::open(&root).unwrap();
+
+    let candles = vec![
+        Candle { ts: 1_700_000_000, open: 10.0, high: 11.0, low: 9.5, close: 10.5, volume: 42 },
+    ];
+
+    store.write_candles("NSE:INFY", "minute", &candles).unwrap();
+    let read_back = store.read_candles("NSE:INFY", "minute").unwrap();
+
+    assert_eq!(read_back, candles);
+}

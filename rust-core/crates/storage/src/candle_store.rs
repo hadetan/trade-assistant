@@ -40,6 +40,18 @@ impl CandleStore {
         self.root.join(format!("{safe_symbol}_{safe_timeframe}.parquet"))
     }
 
+    /// `partition_path` sanitizes the symbol/timeframe-derived filename, but
+    /// the store's root is the caller's own filesystem path and is not
+    /// restricted to a safe character set -- a root containing a single
+    /// quote (e.g. `/Users/o'brien/lake`) would otherwise break out of the
+    /// SQL string literal both sites below interpolate the path into.
+    /// DuckDB's `COPY ... TO` / `read_parquet(...)` take the path as a SQL
+    /// literal rather than a bindable parameter, so escaping it is the
+    /// correct fix, not parameterization.
+    fn escape_sql_literal(path_str: &str) -> String {
+        path_str.replace('\'', "''")
+    }
+
     pub fn write_candles(
         &self,
         symbol: &str,
@@ -65,7 +77,7 @@ impl CandleStore {
         appender.flush()?;
 
         let path = self.partition_path(symbol, timeframe);
-        let path_str = path.to_string_lossy();
+        let path_str = Self::escape_sql_literal(&path.to_string_lossy());
         conn.execute(
             &format!("COPY candles TO '{path_str}' (FORMAT PARQUET)"),
             [],
@@ -76,7 +88,7 @@ impl CandleStore {
 
     pub fn read_candles(&self, symbol: &str, timeframe: &str) -> duckdb::Result<Vec<Candle>> {
         let path = self.partition_path(symbol, timeframe);
-        let path_str = path.to_string_lossy();
+        let path_str = Self::escape_sql_literal(&path.to_string_lossy());
 
         let conn = Connection::open_in_memory()?;
         let mut stmt = conn.prepare(&format!(
