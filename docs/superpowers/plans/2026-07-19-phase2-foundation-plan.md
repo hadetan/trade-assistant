@@ -61,6 +61,7 @@ rust-core/
         error.rs                           # IngestionError
         model.rs                           # ParsedCandle
         time.rs                            # ist_session_close_epoch()
+        csv_util.rs                        # shared header_index()/col() CSV helpers (Task 5; used by bhavcopy/indices/intraday)
         bhavcopy.rs                        # pure UDiFF equity parser (NSE + BSE)
         indices.rs                         # pure NSE all-indices parser (volume=0 quirk)
         intraday.rs                        # pure community-archive minute parser (+0530 offset-aware)
@@ -220,8 +221,7 @@ git commit -m "chore: scaffold ingestion and backtest crates"
 
 Append to `rust-core/crates/algo-core/tests/registry_test.rs`:
 ```rust
-use algo_core::{registry::run_applicable, Horizon, MarketContext, Timeframe};
-use chrono::{DateTime, Utc};
+use algo_core::registry::run_applicable;
 
 fn ctx_with_closes(n: usize) -> MarketContext {
     let closes = (0..n).map(|i| 100.0 + i as f64).collect();
@@ -258,12 +258,12 @@ fn run_applicable_returns_empty_for_no_history_instead_of_panicking() {
     assert!(outputs.is_empty());
 }
 ```
-(`use algo_core::registry;` is already present from Phase 1's Task 6 test; keep it.)
+(The file's existing top-of-file imports — `use algo_core::{AlgoOutput, Algorithm, Direction, Horizon, MarketContext, Timeframe};` and `use chrono::{DateTime, Utc};` — already bring `Horizon`, `MarketContext`, `Timeframe`, `DateTime`, and `Utc` into scope, so this appended block must import only the one new symbol it actually needs: `run_applicable`. Do NOT re-import anything already imported at the top of the file — re-importing `Horizon`, `MarketContext`, `Timeframe`, `DateTime`, or `Utc` triggers `E0252: defined multiple times`. `use algo_core::registry;` is already present from Phase 1's Task 6 test, bringing `registry::all()` into scope; keep it.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd rust-core && cargo test -p algo-core registry_test`
-Expected: FAIL — `run_applicable` is not defined.
+Expected: FAIL TO COMPILE — `error[E0432]: unresolved import `algo_core::registry::run_applicable`` ("no `run_applicable` in `registry`"), since `run_applicable` does not exist in `registry.rs` yet. This is the correct RED: an unresolved-import compile error, not a runtime assertion failure and not a duplicate-import error.
 
 - [ ] **Step 3: Implement `run_applicable` and document the precondition**
 
@@ -653,13 +653,14 @@ git commit -m "feat(storage): source-tagged append-merge candle partitions"
 - Create: `rust-core/crates/ingestion/src/error.rs`
 - Create: `rust-core/crates/ingestion/src/model.rs`
 - Create: `rust-core/crates/ingestion/src/time.rs`
+- Create: `rust-core/crates/ingestion/src/csv_util.rs`
 - Create: `rust-core/crates/ingestion/src/bhavcopy.rs`
 - Modify: `rust-core/crates/ingestion/src/lib.rs`
 - Create: `rust-core/crates/ingestion/tests/fixtures/nse_bhavcopy_udiff_sample.csv`
 - Test: `rust-core/crates/ingestion/tests/bhavcopy_parse_test.rs`
 
 **Interfaces:**
-- Produces: `ingestion::ParsedCandle { symbol: String, timeframe: String, candle: storage::Candle }`; `ingestion::IngestionError`; `ingestion::time::ist_session_close_epoch(date: chrono::NaiveDate) -> i64`; `ingestion::bhavcopy::parse_udiff_equity_bhavcopy(csv_bytes: &[u8], exchange: &str) -> Result<Vec<ParsedCandle>, IngestionError>`. Tasks 6, 7, 8 reuse `ParsedCandle`, `IngestionError`, and `ist_session_close_epoch`.
+- Produces: `ingestion::ParsedCandle { symbol: String, timeframe: String, candle: storage::Candle }`; `ingestion::IngestionError`; `ingestion::time::ist_session_close_epoch(date: chrono::NaiveDate) -> i64`; `ingestion::csv_util::header_index(headers: &csv::StringRecord) -> HashMap<String, usize>` and `ingestion::csv_util::col(idx: &HashMap<String, usize>, name: &str) -> Result<usize, IngestionError>` — the shared generic CSV header-lookup helpers, defined exactly once here; `ingestion::bhavcopy::parse_udiff_equity_bhavcopy(csv_bytes: &[u8], exchange: &str) -> Result<Vec<ParsedCandle>, IngestionError>`. Tasks 6, 7, 8 reuse `ParsedCandle`, `IngestionError`, and `ist_session_close_epoch`; Tasks 6 and 7 also reuse `csv_util::{header_index, col}` rather than redefining them.
 
 - [ ] **Step 1: Commit the fixture CSV**
 
@@ -780,23 +781,35 @@ pub fn ist_session_close_epoch(date: NaiveDate) -> i64 {
 }
 ```
 
+`rust-core/crates/ingestion/src/csv_util.rs` (the shared generic CSV helpers — defined exactly once; `bhavcopy.rs`, `indices.rs`, and `intraday.rs` all `use` these rather than redefining them):
+```rust
+use crate::error::IngestionError;
+use csv::StringRecord;
+use std::collections::HashMap;
+
+/// Maps each header name to its column index so parsers can look columns up by
+/// name rather than by fragile positional index (source files add/reorder
+/// columns across schema versions).
+pub fn header_index(headers: &StringRecord) -> HashMap<String, usize> {
+    headers.iter().enumerate().map(|(i, h)| (h.to_string(), i)).collect()
+}
+
+/// Look up one column's index by header name, or a descriptive error if this
+/// file's header row is missing that column.
+pub fn col(idx: &HashMap<String, usize>, name: &str) -> Result<usize, IngestionError> {
+    idx.get(name).copied().ok_or_else(|| IngestionError::MissingColumn(name.to_string()))
+}
+```
+
 `rust-core/crates/ingestion/src/bhavcopy.rs`:
 ```rust
+use crate::csv_util::{col, header_index};
 use crate::error::IngestionError;
 use crate::model::ParsedCandle;
 use crate::time::ist_session_close_epoch;
 use chrono::NaiveDate;
 use csv::{ReaderBuilder, StringRecord, Trim};
-use std::collections::HashMap;
 use storage::Candle;
-
-fn header_index(headers: &StringRecord) -> HashMap<String, usize> {
-    headers.iter().enumerate().map(|(i, h)| (h.to_string(), i)).collect()
-}
-
-fn col(idx: &HashMap<String, usize>, name: &str) -> Result<usize, IngestionError> {
-    idx.get(name).copied().ok_or_else(|| IngestionError::MissingColumn(name.to_string()))
-}
 
 fn field<'a>(record: &'a StringRecord, i: usize) -> Result<&'a str, IngestionError> {
     record.get(i).ok_or_else(|| IngestionError::BadField {
@@ -861,6 +874,7 @@ pub fn parse_udiff_equity_bhavcopy(
 `rust-core/crates/ingestion/src/lib.rs`:
 ```rust
 pub mod bhavcopy;
+pub mod csv_util;
 pub mod error;
 pub mod model;
 pub mod time;
@@ -885,7 +899,7 @@ git commit -m "feat(ingestion): ParsedCandle, IST session-close epoch, UDiFF equ
 
 ### Task 6: NSE all-indices daily-close parser (volume=0 quirk)
 
-**Depends on:** Task 5 (reuses `ParsedCandle`, `IngestionError`, `ist_session_close_epoch`). **Parallel-safe: yes** with Task 7 (different source file; both add one `pub mod` line to `lib.rs` — an additive, trivially-mergeable edit).
+**Depends on:** Task 5 (reuses `ParsedCandle`, `IngestionError`, `ist_session_close_epoch`, and the shared `csv_util::{header_index, col}` helpers — no local redefinition). **Parallel-safe: yes** with Task 7 (different source file; both add one `pub mod` line to `lib.rs` — an additive, trivially-mergeable edit; both only READ Task 5's shared helpers, never modify them).
 
 **Design note:** the all-indices file (`ind_close_all_{DDMMYYYY}.csv`, design §10.1) is a different schema and has no meaningful traded volume. Per design §5.1 ("Index instruments always report volume=0"), the parser normalizes every index row to `volume: 0` so index candles match what volume-based algorithms will see from live Kite data — no special-casing needed downstream beyond what those algorithms already do for indices. Index `Index Date` is `DD-MM-YYYY`.
 
@@ -896,6 +910,7 @@ git commit -m "feat(ingestion): ParsedCandle, IST session-close epoch, UDiFF equ
 - Test: `rust-core/crates/ingestion/tests/indices_parse_test.rs`
 
 **Interfaces:**
+- Consumes: `ingestion::csv_util::{header_index, col}` (Task 5) — not redefined here.
 - Produces: `ingestion::indices::parse_nse_indices_close(csv_bytes: &[u8]) -> Result<Vec<ParsedCandle>, IngestionError>` — every returned candle has `volume == 0`, `timeframe == "day"`.
 
 - [ ] **Step 1: Commit the fixture CSV**
@@ -943,21 +958,13 @@ Expected: FAIL — `ingestion::indices` does not exist.
 
 `rust-core/crates/ingestion/src/indices.rs`:
 ```rust
+use crate::csv_util::{col, header_index};
 use crate::error::IngestionError;
 use crate::model::ParsedCandle;
 use crate::time::ist_session_close_epoch;
 use chrono::NaiveDate;
 use csv::{ReaderBuilder, StringRecord, Trim};
-use std::collections::HashMap;
 use storage::Candle;
-
-fn header_index(headers: &StringRecord) -> HashMap<String, usize> {
-    headers.iter().enumerate().map(|(i, h)| (h.to_string(), i)).collect()
-}
-
-fn col(idx: &HashMap<String, usize>, name: &str) -> Result<usize, IngestionError> {
-    idx.get(name).copied().ok_or_else(|| IngestionError::MissingColumn(name.to_string()))
-}
 
 fn get<'a>(r: &'a StringRecord, i: usize) -> Result<&'a str, IngestionError> {
     r.get(i).ok_or_else(|| IngestionError::BadField { column: format!("index {i}"), value: "<missing>".to_string() })
@@ -1024,7 +1031,7 @@ git commit -m "feat(ingestion): NSE all-indices daily-close parser (volume=0)"
 
 ### Task 7: Community intraday minute parser (offset-aware +0530)
 
-**Depends on:** Task 5 (`ParsedCandle`, `IngestionError`). **Parallel-safe: yes** with Task 6.
+**Depends on:** Task 5 (`ParsedCandle`, `IngestionError`, and the shared `csv_util::{header_index, col}` helpers — no local redefinition). **Parallel-safe: yes** with Task 6 (each only READs Task 5's shared helpers, never modifies them).
 
 **Design note:** the Kaggle CC0 dataset (`debashis74017/...`, preferred) and the aeron7 GitHub archive (lower-confidence supplement) share the same `date,open,high,low,close,volume` minute shape (design §10.2). One pure parser serves both; only the `source` tag (`"kaggle"` vs `"github_archive"`) differs, applied by the importer (Task 8), not the parser. Timestamps carry an explicit `+05:30` offset (Kite convention, design §5.2): the parser **must parse offset-aware and never strip to naive** (a documented real bug class). Symbol is passed in by the caller (these files are per-symbol).
 
@@ -1035,6 +1042,7 @@ git commit -m "feat(ingestion): NSE all-indices daily-close parser (volume=0)"
 - Test: `rust-core/crates/ingestion/tests/intraday_parse_test.rs`
 
 **Interfaces:**
+- Consumes: `ingestion::csv_util::{header_index, col}` (Task 5) — not redefined here.
 - Produces: `ingestion::intraday::parse_intraday_ohlcv(csv_bytes: &[u8], symbol: &str) -> Result<Vec<ParsedCandle>, IngestionError>` — `timeframe == "minute"`, timestamps converted offset-aware.
 
 - [ ] **Step 1: Commit the fixture CSV**
@@ -1081,20 +1089,12 @@ Expected: FAIL — `ingestion::intraday` does not exist.
 
 `rust-core/crates/ingestion/src/intraday.rs`:
 ```rust
+use crate::csv_util::{col, header_index};
 use crate::error::IngestionError;
 use crate::model::ParsedCandle;
 use chrono::DateTime;
 use csv::{ReaderBuilder, StringRecord, Trim};
-use std::collections::HashMap;
 use storage::Candle;
-
-fn header_index(headers: &StringRecord) -> HashMap<String, usize> {
-    headers.iter().enumerate().map(|(i, h)| (h.to_string(), i)).collect()
-}
-
-fn col(idx: &HashMap<String, usize>, name: &str) -> Result<usize, IngestionError> {
-    idx.get(name).copied().ok_or_else(|| IngestionError::MissingColumn(name.to_string()))
-}
 
 fn get<'a>(r: &'a StringRecord, i: usize) -> Result<&'a str, IngestionError> {
     r.get(i).ok_or_else(|| IngestionError::BadField { column: format!("index {i}"), value: "<missing>".to_string() })
@@ -1521,7 +1521,7 @@ git commit -m "feat(backtest): frontier windowing with anti-lookahead guarantee"
 
 ### Task 10: Replay engine — per-algorithm hit-rate and expectancy
 
-**Depends on:** Task 9 (`context_at`). **Parallel-safe: no** (Task 11 edits the same `engine.rs`; runs after).
+**Depends on:** Task 9 (`context_at`), Task 2 (`run_applicable`). **Parallel-safe: no** (Task 11 edits the same `engine.rs`; runs after).
 
 **Design note:** `run_replay` reuses Phase 1 unchanged — it takes `algos: &[Box<dyn Algorithm>]` (the CLI passes `registry::all()`; tests pass a deterministic probe) and routes every call through `algo_core::registry::run_applicable` (Task 2's shared gate). Accumulation is **sequential** (not `rayon`) so floating-point expectancy sums are deterministic. Scoring: for each directional output (`Bullish`/`Bearish`; `Neutral` makes no claim and is excluded from both numerator and denominator), `signed_return = dir_sign * (future_close - current_close) / current_close`; a **hit** is `signed_return > 0.0`. `hit_rate = hits / directional_calls`; `expectancy = mean(signed_return)`.
 
