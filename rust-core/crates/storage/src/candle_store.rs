@@ -36,6 +36,16 @@ impl CandleStore {
             .collect()
     }
 
+    /// Escape single quotes for safe embedding in a DuckDB SQL string literal.
+    /// `sanitize_component` cleans the symbol/timeframe filename parts, but the
+    /// lake `root` is the user's own filesystem path and may legitimately
+    /// contain a `'` (e.g. `/Users/o'brien/lake`), which would otherwise break
+    /// the `COPY`/`read_parquet` statements. DuckDB takes the path as a SQL
+    /// literal, not a bindable parameter, so escaping is the correct mechanism.
+    fn escape_sql_literal(input: &str) -> String {
+        input.replace('\'', "''")
+    }
+
     fn partition_path(&self, symbol: &str, timeframe: &str) -> PathBuf {
         let safe_symbol = Self::sanitize_component(symbol);
         let safe_timeframe = Self::sanitize_component(timeframe);
@@ -47,7 +57,7 @@ impl CandleStore {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        let path_str = path.to_string_lossy();
+        let path_str = Self::escape_sql_literal(&path.to_string_lossy());
         let conn = Connection::open_in_memory()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT ts, open, high, low, close, volume FROM read_parquet('{path_str}') ORDER BY ts ASC"
@@ -77,7 +87,7 @@ impl CandleStore {
             ])?;
         }
         appender.flush()?;
-        let path_str = path.to_string_lossy();
+        let path_str = Self::escape_sql_literal(&path.to_string_lossy());
         conn.execute(&format!("COPY candles TO '{path_str}' (FORMAT PARQUET)"), [])?;
         Ok(())
     }

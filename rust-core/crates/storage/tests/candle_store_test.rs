@@ -81,6 +81,25 @@ fn write_and_read_survive_symbol_with_quote_and_path_traversal_characters() {
 }
 
 #[test]
+fn write_and_read_survive_a_lake_root_path_containing_a_single_quote() {
+    // The lake root is the user's own filesystem path, not a sanitized
+    // component -- a legitimate path like /Users/o'brien/lake must not break
+    // the DuckDB COPY/read_parquet SQL string literals.
+    let dir = tempdir().unwrap();
+    let quoted_root = dir.path().join("o'brien");
+    let store = CandleStore::open(&quoted_root).unwrap();
+
+    let candles = vec![
+        Candle { ts: 1_700_000_000, open: 10.0, high: 11.0, low: 9.5, close: 10.5, volume: 42 },
+    ];
+
+    store.write_candles("NSE:INFY", "minute", &candles).unwrap();
+    let read_back = store.read_candles("NSE:INFY", "minute").unwrap();
+
+    assert_eq!(read_back, candles);
+}
+
+#[test]
 fn read_candles_on_never_written_partition_returns_empty_vec() {
     // design §5.1: a from/to window with no data is "empty, not error".
     let dir = tempdir().unwrap();
