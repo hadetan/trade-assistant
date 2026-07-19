@@ -64,3 +64,22 @@ fn implied_vol_recovers_known_volatility_from_round_trip_price() {
     assert!(output.magnitude > 0.0);
     assert!(output.evidence[0].contains("0.2000"));
 }
+
+#[test]
+fn implied_vol_no_ops_with_no_options_context_message() {
+    let algos = registry::all();
+    let algo = algos
+        .iter()
+        .find(|a| a.id() == "implied_vol")
+        .expect("implied_vol must be registered");
+
+    let mut ctx = ctx_with_option(10.0);
+    ctx.options = None;
+    let output = algo.compute(&ctx);
+
+    // implied_vol reads no OHLCV, so the missing-input case is a missing
+    // options chain, not "insufficient OHLCV" (matches greeks/pcr/max_pain).
+    assert_eq!(output.direction, Direction::Neutral);
+    assert_eq!(output.magnitude, 0.0);
+    assert_eq!(output.evidence[0], "no options context");
+}

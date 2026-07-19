@@ -38,7 +38,7 @@ impl Algorithm for ImpliedVolAlgorithm {
                 direction: Direction::Neutral,
                 magnitude: 0.0,
                 confidence: 0.0,
-                evidence: vec!["insufficient OHLCV".into()],
+                evidence: vec!["no options context".into()],
                 computed_at: ctx.as_of,
             };
         };
