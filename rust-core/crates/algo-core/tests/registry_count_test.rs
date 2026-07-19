@@ -70,12 +70,65 @@ fn from_closes_preserves_the_phase_one_shape() {
     assert_eq!(ctx.as_of, as_of);
 }
 
+/// 3 Phase-1 baseline algorithms + the 31 catalog algorithms (Tasks 1-31).
+/// Kept as an explicit sorted literal (not derived) so a registration that
+/// silently drops out of `inventory::submit!` fails this assertion instead
+/// of just shrinking a count.
+#[cfg(not(feature = "kronos"))]
+const EXPECTED_DEFAULT_IDS: &[&str] = &[
+    "accumulation_distribution",
+    "adx",
+    "atr",
+    "bollinger",
+    "bsm_greeks",
+    "cci",
+    "cmf",
+    "cointegration",
+    "confluence_mtf",
+    "donchian",
+    "ema",
+    "garch",
+    "garman_klass",
+    "ichimoku",
+    "implied_vol",
+    "keltner",
+    "macd",
+    "max_pain",
+    "mfi",
+    "obv",
+    "oi_buildup",
+    "ou_half_life",
+    "parkinson",
+    "psar",
+    "put_call_ratio",
+    "roc",
+    "rsi",
+    "sma",
+    "stochastic",
+    "supertrend",
+    "volume_profile",
+    "vwap",
+    "williams_r",
+    "yang_zhang",
+];
+
+#[cfg(not(feature = "kronos"))]
 #[test]
-fn registry_contains_exactly_the_pre_catalog_baseline() {
+fn registry_contains_exactly_the_full_default_catalog() {
     let algos = algo_core::registry::all();
     let mut ids: Vec<&str> = algos.iter().map(|a| a.id()).collect();
     ids.sort();
 
-    assert_eq!(ids, vec!["ema", "rsi", "sma"]);
-    assert_eq!(algos.len(), 3);
+    assert_eq!(algos.len(), 34);
+    assert_eq!(ids, EXPECTED_DEFAULT_IDS);
+}
+
+#[cfg(feature = "kronos")]
+#[test]
+fn registry_contains_kronos_in_addition_to_the_default_catalog() {
+    let algos = algo_core::registry::all();
+    let ids: Vec<&str> = algos.iter().map(|a| a.id()).collect();
+
+    assert_eq!(algos.len(), 35);
+    assert!(ids.contains(&"kronos"));
 }

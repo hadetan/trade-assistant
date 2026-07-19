@@ -26,6 +26,28 @@ impl Algorithm for LastDiffProbe {
     }
 }
 
+/// Always Neutral -- stands in for the catalog's non-directional vol
+/// estimators (atr, parkinson, ...) and Neutral-only overlays (bsm_greeks, ...).
+struct NeutralOnlyProbe;
+impl Algorithm for NeutralOnlyProbe {
+    fn id(&self) -> &'static str { "neutral_only_probe" }
+    fn required_lookback(&self) -> usize { 1 }
+    fn applicable_horizons(&self) -> &'static [Horizon] { &[Horizon::Positional] }
+    fn compute(&self, ctx: &MarketContext) -> AlgoOutput {
+        AlgoOutput {
+            algo_id: self.id(),
+            symbol: ctx.symbol.clone(),
+            timeframe: ctx.timeframe,
+            horizon: ctx.horizon,
+            direction: Direction::Neutral,
+            magnitude: 0.0,
+            confidence: 0.0,
+            evidence: vec![],
+            computed_at: ctx.as_of,
+        }
+    }
+}
+
 fn series(closes: &[f64]) -> Vec<Candle> {
     let base = 1_700_000_000;
     closes
@@ -73,6 +95,25 @@ fn zero_close_bar_is_skipped_and_never_poisons_sum_signed_return_with_nan() {
     assert_eq!(stat.directional_calls, 1, "only the i=1 bar has a nonzero current close");
     assert!(!stat.sum_signed_return.is_nan(), "a zero-close bar must never poison sum_signed_return with NaN");
     assert!(!stat.expectancy().is_nan());
+}
+
+#[test]
+fn an_algorithm_that_never_calls_a_direction_still_gets_a_zero_row() {
+    // Regression guard: run_replay used to only insert a stats entry inside
+    // the Bullish/Bearish match arms, so an always-Neutral algorithm (every
+    // catalog vol estimator / options overlay) never got a row at all --
+    // not even one with directional_calls == 0 -- and silently vanished
+    // from the printed report instead of confirming it ran.
+    let s = series(&[10.0, 11.0, 10.0, 12.0, 13.0, 11.0]);
+    let algos: Vec<Box<dyn Algorithm>> = vec![Box::new(NeutralOnlyProbe)];
+
+    let report = run_replay(&s, &algos, 1, "NSE:TEST", Timeframe::Day);
+    let stat = report.stat("neutral_only_probe").expect("Neutral-only algorithm must still appear in the report");
+
+    assert_eq!(stat.directional_calls, 0);
+    assert_eq!(stat.hits, 0);
+    assert_eq!(stat.hit_rate(), 0.0);
+    assert_eq!(stat.expectancy(), 0.0);
 }
 
 #[test]

@@ -54,14 +54,15 @@ fn algorithm_trait_is_object_safe_and_computable() {
 }
 
 #[test]
-fn registry_contains_all_three_phase_one_algorithms() {
+fn registry_contains_the_phase_one_baseline_algorithms() {
+    // Exact catalog membership (all 34 ids) is registry_count_test.rs's job;
+    // this just guards against the Phase-1 baseline disappearing.
     let algos = registry::all();
     let ids: Vec<&str> = algos.iter().map(|a| a.id()).collect();
 
     assert!(ids.contains(&"sma"));
     assert!(ids.contains(&"ema"));
     assert!(ids.contains(&"rsi"));
-    assert_eq!(ids.len(), 3);
 }
 
 fn ctx_with_closes(n: usize) -> MarketContext {
@@ -70,25 +71,62 @@ fn ctx_with_closes(n: usize) -> MarketContext {
     MarketContext::from_closes("NSE:TEST", Timeframe::Day, Horizon::Positional, closes, as_of)
 }
 
+/// A test double with a fixed `required_lookback`, used instead of the real
+/// catalog so these tests exercise `run_applicable`'s filtering logic without
+/// being coupled to how many algorithms happen to be registered.
+struct NeedsLookback(&'static str, usize);
+
+impl Algorithm for NeedsLookback {
+    fn id(&self) -> &'static str {
+        self.0
+    }
+
+    fn required_lookback(&self) -> usize {
+        self.1
+    }
+
+    fn applicable_horizons(&self) -> &'static [Horizon] {
+        &[Horizon::Intraday, Horizon::Positional]
+    }
+
+    fn compute(&self, ctx: &MarketContext) -> AlgoOutput {
+        AlgoOutput {
+            algo_id: self.id(),
+            symbol: ctx.symbol.clone(),
+            timeframe: ctx.timeframe,
+            horizon: ctx.horizon,
+            direction: Direction::Neutral,
+            magnitude: 0.0,
+            confidence: 0.0,
+            evidence: vec![],
+            computed_at: ctx.as_of,
+        }
+    }
+}
+
+fn short_and_long_lookback_algos() -> Vec<Box<dyn Algorithm>> {
+    vec![Box::new(NeedsLookback("short", 14)), Box::new(NeedsLookback("long", 20))]
+}
+
 #[test]
 fn run_applicable_skips_algorithms_without_enough_lookback() {
-    // 15 closes: rsi(14) needs 15 and runs; sma(20)/ema(20) need 20 and are skipped.
-    let algos = registry::all();
+    // 15 closes: "short" (14) needs 15 and runs; "long" (20) is skipped.
+    let algos = short_and_long_lookback_algos();
     let outputs = run_applicable(&algos, &ctx_with_closes(15));
     let ids: Vec<&str> = outputs.iter().map(|o| o.algo_id).collect();
-    assert_eq!(ids, vec!["rsi"]);
+    assert_eq!(ids, vec!["short"]);
 }
 
 #[test]
 fn run_applicable_runs_all_when_history_is_sufficient() {
-    let algos = registry::all();
+    let algos = short_and_long_lookback_algos();
     let outputs = run_applicable(&algos, &ctx_with_closes(21));
-    assert_eq!(outputs.len(), 3);
+    assert_eq!(outputs.len(), 2);
 }
 
 #[test]
 fn run_applicable_returns_empty_for_no_history_instead_of_panicking() {
-    let algos = registry::all();
+    let algos = short_and_long_lookback_algos();
     let outputs = run_applicable(&algos, &ctx_with_closes(0));
     assert!(outputs.is_empty());
 }

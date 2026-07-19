@@ -71,18 +71,23 @@ pub fn run_replay(
         }
         let future = series[i + horizon_bars].close;
         for output in outputs {
-            let sign = match output.direction {
-                Direction::Bullish => 1.0,
-                Direction::Bearish => -1.0,
-                Direction::Neutral => continue,
-            };
-            let signed_return = sign * (future - current) / current;
+            // Look up (and register) the entry before the direction match so
+            // an algorithm that runs but never calls a direction -- Neutral-
+            // only overlays, non-directional vol estimators -- still gets a
+            // zero-directional_calls row in the report instead of being
+            // absent from it entirely.
             let entry = stats.entry(output.algo_id.to_string()).or_insert_with(|| AlgoStats {
                 algo_id: output.algo_id.to_string(),
                 directional_calls: 0,
                 hits: 0,
                 sum_signed_return: 0.0,
             });
+            let sign = match output.direction {
+                Direction::Bullish => 1.0,
+                Direction::Bearish => -1.0,
+                Direction::Neutral => continue,
+            };
+            let signed_return = sign * (future - current) / current;
             entry.directional_calls += 1;
             if signed_return > 0.0 {
                 entry.hits += 1;

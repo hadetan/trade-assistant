@@ -28,8 +28,9 @@ fn compiled_binary_computes_algorithms_over_stdin_stdout() {
 
     assert_eq!(response["id"], 1);
     let algo_results = response["algo_results"].as_array().unwrap();
-    // sma, ema, rsi -- exactly the three Phase 1 algorithms
-    assert_eq!(algo_results.len(), 3);
+    // Every default-catalog algorithm with required_lookback <= 21 (30 of
+    // the 34, incl. sma/ema/rsi); adx/garch/macd/ichimoku need more history.
+    assert_eq!(algo_results.len(), 30);
     assert!(response["confluence"]["bullish_count"].is_number());
 }
 
@@ -50,8 +51,9 @@ fn a_thin_history_request_between_two_valid_ones_does_not_kill_the_sidecar() {
         .expect("sidecar binary must start");
 
     let valid_request = r#"{"id":1,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0,103.0,104.0,105.0,106.0,107.0,108.0,109.0,110.0,111.0,112.0,113.0,114.0,115.0,116.0,117.0,118.0,119.0,120.0]}"#;
-    // Only 3 closes: shorter than every registered algorithm's
-    // required_lookback (rsi needs 15, sma/ema need 20).
+    // Only 3 closes: shorter than rsi (15) and sma/ema (20)'s
+    // required_lookback, though not every catalog algorithm -- a handful of
+    // OHLCV-derived algorithms declare required_lookback <= 3.
     let too_few_closes_request =
         r#"{"id":2,"symbol":"NSE:NEWLISTING","timeframe":"day","closes":[100.0,101.0,102.0]}"#;
     let valid_request_2 = r#"{"id":3,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0,103.0,104.0,105.0,106.0,107.0,108.0,109.0,110.0,111.0,112.0,113.0,114.0,115.0,116.0,117.0,118.0,119.0,120.0]}"#;
@@ -93,15 +95,22 @@ fn a_thin_history_request_between_two_valid_ones_does_not_kill_the_sidecar() {
     );
 
     assert_eq!(responses[0]["id"], 1);
-    assert_eq!(responses[0]["algo_results"].as_array().unwrap().len(), 3);
+    assert_eq!(responses[0]["algo_results"].as_array().unwrap().len(), 30);
 
     assert_eq!(responses[1]["id"], 2);
-    // No algorithm has enough lookback for 3 closes -- well-formed empty
-    // response, not a panic.
-    assert_eq!(responses[1]["algo_results"].as_array().unwrap().len(), 0);
+    // 18 of the 34 default-catalog algorithms declare required_lookback <= 3
+    // and still run (well-formed response either way, not a panic). Most
+    // need OHLC/volume/peer/chain context this closes-only request doesn't
+    // supply and no-op to Neutral, except ou_half_life: with no peer leg it
+    // falls back to single-instrument mean reversion on closes itself
+    // (see ou_half_life.rs's `spread_series`), and this rising 3-bar series
+    // has a z-score > 1, i.e. Bearish.
+    assert_eq!(responses[1]["algo_results"].as_array().unwrap().len(), 18);
     assert_eq!(responses[1]["confluence"]["bullish_count"], 0);
-    assert_eq!(responses[1]["confluence"]["weighted_vote"], 0.0);
+    assert_eq!(responses[1]["confluence"]["bearish_count"], 1);
+    let weighted_vote = responses[1]["confluence"]["weighted_vote"].as_f64().unwrap();
+    assert!((weighted_vote - (-1.0 / 18.0)).abs() < 1e-9);
 
     assert_eq!(responses[2]["id"], 3);
-    assert_eq!(responses[2]["algo_results"].as_array().unwrap().len(), 3);
+    assert_eq!(responses[2]["algo_results"].as_array().unwrap().len(), 30);
 }
