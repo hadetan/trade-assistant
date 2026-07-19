@@ -30,9 +30,12 @@ impl ReplayReport {
         self.per_algo.iter().find(|s| s.algo_id == algo_id)
     }
 
-    /// Per-algorithm hit-rate as the weight map `compute_confluence` accepts. In
-    /// the catalog phase these replace the sidecar handler's equal-weight
-    /// placeholder (design §6.3); here they prove the type-level bridge.
+    /// Per-algorithm hit-rate, returned as an owned `HashMap<String, f64>` since
+    /// `AlgoStats` stores `algo_id` as an owned `String`; callers remap each
+    /// entry (e.g. via `.as_str()`) into the `HashMap<&str, f64>` that
+    /// `compute_confluence` expects. In the catalog phase these replace the
+    /// sidecar handler's equal-weight placeholder (design §6.3); here they
+    /// prove the type-level bridge.
     pub fn hit_rate_weights(&self) -> HashMap<String, f64> {
         self.per_algo.iter().map(|s| (s.algo_id.clone(), s.hit_rate())).collect()
     }
