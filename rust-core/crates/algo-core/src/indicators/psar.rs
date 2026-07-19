@@ -1,4 +1,7 @@
-use crate::{classify_by_distance, AlgoOutput, Algorithm, Direction, Horizon, MarketContext};
+use crate::{
+    classify_by_distance, relative_magnitude, AlgoOutput, Algorithm, Direction, Horizon,
+    MarketContext,
+};
 use rust_ti::trend_indicators::single::{
     long_parabolic_time_price_system, short_parabolic_time_price_system,
 };
@@ -50,6 +53,7 @@ impl Algorithm for PsarAlgorithm {
         let latest_close = *ctx.closes.last().unwrap();
 
         let (direction, confidence) = classify_by_distance(latest_close, current_sar);
+        let magnitude = relative_magnitude(latest_close, current_sar);
 
         AlgoOutput {
             algo_id: self.id(),
@@ -57,7 +61,7 @@ impl Algorithm for PsarAlgorithm {
             timeframe: ctx.timeframe,
             horizon: ctx.horizon,
             direction,
-            magnitude: current_sar,
+            magnitude,
             confidence,
             evidence: vec![format!(
                 "SAR {:.4} vs close {:.4}",
@@ -163,7 +167,36 @@ mod tests {
         let output = algo.compute(&ctx);
 
         assert_eq!(output.direction, Direction::Bullish);
-        assert!(output.magnitude < *ctx.closes.last().unwrap());
+        let sar = psar_series(&ctx.highs, &ctx.lows);
+        let expected_magnitude = relative_magnitude(*ctx.closes.last().unwrap(), *sar.last().unwrap());
+        assert!((output.magnitude - expected_magnitude).abs() < 1e-9);
+    }
+
+    #[test]
+    fn short_history_is_a_neutral_no_op() {
+        let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let ctx = MarketContext {
+            symbol: "TEST".into(),
+            timeframe: Timeframe::Day,
+            horizon: Horizon::Positional,
+            closes: vec![10.5, 11.5],
+            opens: Vec::new(),
+            highs: vec![11.0, 12.0],
+            lows: vec![10.0, 11.0],
+            volumes: Vec::new(),
+            timestamps: Vec::new(),
+            options: None,
+            chain: None,
+            peer: None,
+            higher_tf: None,
+            as_of,
+        };
+
+        let algo = PsarAlgorithm::new(5);
+        let output = algo.compute(&ctx);
+
+        assert_eq!(output.direction, Direction::Neutral);
+        assert_eq!(output.magnitude, 0.0);
     }
 }
 

@@ -1,5 +1,5 @@
 use algo_core::registry;
-use algo_core::{Direction, Horizon, MarketContext, Timeframe};
+use algo_core::{relative_magnitude, Direction, Horizon, MarketContext, Timeframe};
 use chrono::{DateTime, Utc};
 
 /// Independent re-derivation of Wilder's long-side recursion for the ramp
@@ -72,10 +72,46 @@ fn psar_matches_wilder_init_anchor_and_stays_bullish() {
     let output = psar.compute(&ctx);
 
     let final_expected = *expected.last().unwrap();
-    assert!((output.magnitude - final_expected).abs() < 1e-9);
+    let latest_close = *closes.last().unwrap();
+    let expected_magnitude = relative_magnitude(latest_close, final_expected);
+    assert!((output.magnitude - expected_magnitude).abs() < 1e-9);
     assert_eq!(output.direction, Direction::Bullish);
 
-    // secondary: sar < last close
-    assert!(output.magnitude < *closes.last().unwrap());
+    assert!(final_expected < latest_close);
+    assert_eq!(output.computed_at, as_of);
+}
+
+#[test]
+fn short_history_is_a_neutral_no_op() {
+    let algos = registry::all();
+    let psar = algos
+        .iter()
+        .find(|a| a.id() == "psar")
+        .expect("psar must be registered");
+
+    assert_eq!(psar.required_lookback(), 5);
+
+    let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let ctx = MarketContext {
+        symbol: "NSE:TEST".to_string(),
+        timeframe: Timeframe::Day,
+        horizon: Horizon::Positional,
+        closes: vec![10.5, 11.5],
+        opens: Vec::new(),
+        highs: vec![11.0, 12.0],
+        lows: vec![10.0, 11.0],
+        volumes: Vec::new(),
+        timestamps: Vec::new(),
+        options: None,
+        chain: None,
+        peer: None,
+        higher_tf: None,
+        as_of,
+    };
+
+    let output = psar.compute(&ctx);
+
+    assert_eq!(output.direction, Direction::Neutral);
+    assert_eq!(output.magnitude, 0.0);
     assert_eq!(output.computed_at, as_of);
 }
