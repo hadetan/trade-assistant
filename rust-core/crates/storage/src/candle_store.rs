@@ -1,5 +1,6 @@
 use crate::error::{Result, StorageError};
 use duckdb::{params, Connection};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +88,37 @@ impl CandleStore {
 
     pub fn read_candles(&self, symbol: &str, timeframe: &str) -> Result<Vec<Candle>> {
         self.read_partition(&self.partition_path(symbol, timeframe))
+    }
+
+    fn sourced_partition_path(&self, symbol: &str, timeframe: &str, source: &str) -> PathBuf {
+        let s = Self::sanitize_component(symbol);
+        let t = Self::sanitize_component(timeframe);
+        let src = Self::sanitize_component(source);
+        self.root.join(format!("{s}_{t}_{src}.parquet"))
+    }
+
+    pub fn write_sourced_candles(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        source: &str,
+        candles: &[Candle],
+    ) -> Result<()> {
+        let path = self.sourced_partition_path(symbol, timeframe, source);
+        // Read-merge-write keyed on ts: existing partition + incoming, incoming
+        // wins on duplicate ts, output sorted ascending. Makes re-ingesting the
+        // same day idempotent and lets day-by-day bhavcopy pulls accumulate.
+        let mut merged: BTreeMap<i64, Candle> =
+            self.read_partition(&path)?.into_iter().map(|c| (c.ts, c)).collect();
+        for candle in candles {
+            merged.insert(candle.ts, candle.clone());
+        }
+        let ordered: Vec<Candle> = merged.into_values().collect();
+        self.write_partition(&path, &ordered)
+    }
+
+    pub fn read_sourced_candles(&self, symbol: &str, timeframe: &str, source: &str) -> Result<Vec<Candle>> {
+        self.read_partition(&self.sourced_partition_path(symbol, timeframe, source))
     }
 }
 

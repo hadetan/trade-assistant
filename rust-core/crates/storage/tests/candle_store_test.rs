@@ -103,3 +103,50 @@ fn open_on_uncreatable_root_returns_err_not_panic() {
 
     assert!(result.is_err());
 }
+
+#[test]
+fn write_sourced_candles_appends_merges_dedups_and_sorts() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+
+    store
+        .write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[
+            Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 10 },
+            Candle { ts: 200, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 20 },
+        ])
+        .unwrap();
+    // Second batch overlaps ts=200 (new value wins) and adds ts=300; ts arrives
+    // out of order to prove the merge sorts.
+    store
+        .write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[
+            Candle { ts: 300, open: 3.0, high: 3.0, low: 3.0, close: 3.0, volume: 30 },
+            Candle { ts: 200, open: 2.5, high: 2.5, low: 2.5, close: 2.5, volume: 25 },
+        ])
+        .unwrap();
+
+    let got = store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap();
+
+    assert_eq!(got.len(), 3);
+    assert_eq!(got.iter().map(|c| c.ts).collect::<Vec<_>>(), vec![100, 200, 300]);
+    assert_eq!(got[1].close, 2.5, "incoming candle must win on duplicate ts");
+}
+
+#[test]
+fn read_sourced_candles_on_missing_source_is_empty() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    assert!(store.read_sourced_candles("NSE:INFY", "day", "kaggle").unwrap().is_empty());
+}
+
+#[test]
+fn sources_are_partitioned_separately_for_the_same_symbol() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    store.write_sourced_candles("NSE:INFY", "day", "bhavcopy",
+        &[Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 10 }]).unwrap();
+    store.write_sourced_candles("NSE:INFY", "day", "kaggle",
+        &[Candle { ts: 100, open: 9.0, high: 9.0, low: 9.0, close: 9.0, volume: 90 }]).unwrap();
+
+    assert_eq!(store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap()[0].close, 1.0);
+    assert_eq!(store.read_sourced_candles("NSE:INFY", "day", "kaggle").unwrap()[0].close, 9.0);
+}
