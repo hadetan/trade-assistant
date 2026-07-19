@@ -49,7 +49,26 @@ impl Algorithm for VwapAlgorithm {
             };
         }
 
-        let vwap = session_vwap(&ctx.highs, &ctx.lows, &ctx.closes, &ctx.volumes, &ctx.timestamps);
+        let vwap = match session_vwap(&ctx.highs, &ctx.lows, &ctx.closes, &ctx.volumes, &ctx.timestamps) {
+            Some(vwap) => vwap,
+            // Illiquid strike / halted symbol / synthetic pre-market bar: v_sum==0
+            // would make pv_sum/v_sum a NaN that classify_by_distance's zero-baseline
+            // guard can't catch (NaN.abs() < 1e-12 is false), fabricating a
+            // maximally-confident Bearish signal into the confluence engine.
+            None => {
+                return crate::AlgoOutput {
+                    algo_id: self.id(),
+                    symbol: ctx.symbol.clone(),
+                    timeframe: ctx.timeframe,
+                    horizon: ctx.horizon,
+                    direction: Direction::Neutral,
+                    magnitude: 0.0,
+                    confidence: 0.0,
+                    evidence: vec!["zero session volume".into()],
+                    computed_at: ctx.as_of,
+                };
+            }
+        };
         let latest_close = *ctx.closes.last().unwrap();
 
         let (direction, confidence) = classify_by_distance(latest_close, vwap);
@@ -80,7 +99,13 @@ fn ist_session_date(ts: i64) -> NaiveDate {
     ist.timestamp_opt(ts, 0).unwrap().date_naive()
 }
 
-fn session_vwap(highs: &[f64], lows: &[f64], closes: &[f64], volumes: &[f64], timestamps: &[i64]) -> f64 {
+fn session_vwap(
+    highs: &[f64],
+    lows: &[f64],
+    closes: &[f64],
+    volumes: &[f64],
+    timestamps: &[i64],
+) -> Option<f64> {
     let n = closes.len();
     let current_session = ist_session_date(timestamps[n - 1]);
 
@@ -98,7 +123,10 @@ fn session_vwap(highs: &[f64], lows: &[f64], closes: &[f64], volumes: &[f64], ti
         v_sum += volumes[i];
     }
 
-    pv_sum / v_sum
+    if v_sum <= 0.0 {
+        return None;
+    }
+    Some(pv_sum / v_sum)
 }
 
 inventory::submit! {
