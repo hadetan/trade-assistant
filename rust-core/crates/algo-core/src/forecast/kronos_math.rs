@@ -1,5 +1,3 @@
-#![cfg(feature = "kronos")]
-
 use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 
 use crate::Timeframe;

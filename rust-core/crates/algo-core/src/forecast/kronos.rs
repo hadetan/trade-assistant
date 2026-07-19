@@ -55,7 +55,7 @@
 //! convention) so the test asserts against what this Algorithm actually
 //! computes.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use chrono::DateTime;
 use ort::session::Session;
@@ -93,19 +93,19 @@ pub struct KronosForecast {
     pub latest_close: f64,
 }
 
-pub struct KronosAlgorithm {
+struct KronosSessions {
     tokenizer_encode: Mutex<Session>,
     tokenizer_decode: Mutex<Session>,
     decode_s1: Mutex<Session>,
     decode_s2: Mutex<Session>,
 }
 
-impl KronosAlgorithm {
-    /// Loads all four bundled ONNX graphs once. Panics on failure: a missing
-    /// or corrupt asset is a packaging bug (the four files are compiled into
+impl KronosSessions {
+    /// Loads all four bundled ONNX graphs. Panics on failure: a missing or
+    /// corrupt asset is a packaging bug (the four files are compiled into
     /// the binary via `include_bytes!`), not a runtime condition any caller
     /// could recover from.
-    pub fn new() -> Self {
+    fn load() -> Self {
         let load = |bytes: &[u8], name: &str| {
             Session::builder()
                 .and_then(|mut b| b.commit_from_memory(bytes))
@@ -117,6 +117,29 @@ impl KronosAlgorithm {
             decode_s1: Mutex::new(load(DECODE_S1_ONNX, "decode_s1.onnx")),
             decode_s2: Mutex::new(load(DECODE_S2_ONNX, "decode_s2.onnx")),
         }
+    }
+}
+
+// `registry::all()` re-invokes every `AlgorithmFactory` closure -- including
+// `KronosAlgorithm::new` -- on every call, but the ~114MB across these four
+// sessions must be parsed AT MOST ONCE per process. `ort::Session` isn't
+// `Clone`, so the loaded bundle is parked behind a process-wide singleton and
+// shared via `Arc` rather than reloaded or cloned.
+static SESSIONS: OnceLock<Arc<KronosSessions>> = OnceLock::new();
+
+fn shared_sessions() -> Arc<KronosSessions> {
+    SESSIONS.get_or_init(|| Arc::new(KronosSessions::load())).clone()
+}
+
+pub struct KronosAlgorithm {
+    sessions: Arc<KronosSessions>,
+}
+
+impl KronosAlgorithm {
+    /// Cheap: an `Arc` clone of the process-wide singleton, loading the four
+    /// bundled ONNX graphs only on the very first call across the process.
+    pub fn new() -> Self {
+        Self { sessions: shared_sessions() }
     }
 
     fn no_op(&self, ctx: &MarketContext) -> AlgoOutput {
@@ -172,7 +195,7 @@ impl KronosAlgorithm {
             let x_tensor =
                 TensorRef::from_array_view(([1i64, CTX_LEN as i64, FEATURES as i64], x_flat.as_slice()))
                     .expect("kronos: building tokenizer_encode input");
-            let mut guard = self.tokenizer_encode.lock().unwrap();
+            let mut guard = self.sessions.tokenizer_encode.lock().unwrap();
             let outputs = guard
                 .run(ort::inputs!["x" => x_tensor])
                 .expect("kronos: tokenizer_encode inference failed");
@@ -228,7 +251,7 @@ impl KronosAlgorithm {
                 let mask_tensor = TensorRef::from_array_view(([1i64, MAX_CONTEXT as i64], mask.as_slice()))
                     .expect("kronos: building decode_s1 padding_mask");
 
-                let mut guard = self.decode_s1.lock().unwrap();
+                let mut guard = self.sessions.decode_s1.lock().unwrap();
                 let outputs = guard
                     .run(ort::inputs![
                         "s1_ids" => pre_tensor,
@@ -259,7 +282,7 @@ impl KronosAlgorithm {
                 let mask_tensor = TensorRef::from_array_view(([1i64, MAX_CONTEXT as i64], mask.as_slice()))
                     .expect("kronos: building decode_s2 padding_mask");
 
-                let mut guard = self.decode_s2.lock().unwrap();
+                let mut guard = self.sessions.decode_s2.lock().unwrap();
                 let outputs = guard
                     .run(ort::inputs![
                         "context" => context_tensor,
@@ -285,7 +308,7 @@ impl KronosAlgorithm {
                 .expect("kronos: building tokenizer_decode s1_ids");
             let full_post_tensor = TensorRef::from_array_view(([1i64, total_len as i64], s2_ids.as_slice()))
                 .expect("kronos: building tokenizer_decode s2_ids");
-            let mut guard = self.tokenizer_decode.lock().unwrap();
+            let mut guard = self.sessions.tokenizer_decode.lock().unwrap();
             let outputs = guard
                 .run(ort::inputs!["s1_ids" => full_pre_tensor, "s2_ids" => full_post_tensor])
                 .expect("kronos: tokenizer_decode inference failed");
