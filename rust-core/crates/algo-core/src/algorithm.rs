@@ -53,6 +53,10 @@ pub trait Algorithm: Send + Sync {
     fn id(&self) -> &'static str;
     fn required_lookback(&self) -> usize;
     fn applicable_horizons(&self) -> &'static [Horizon];
+    /// Precondition: `ctx.closes.len() >= self.required_lookback()`. Implementations
+    /// may panic (slice underflow) if called with less history. Callers MUST NOT
+    /// call this directly — route through `registry::run_applicable`, which gates
+    /// every algorithm on this precondition in one place.
     fn compute(&self, ctx: &MarketContext) -> AlgoOutput;
 }
 
