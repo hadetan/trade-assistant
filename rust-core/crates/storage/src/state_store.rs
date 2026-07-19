@@ -1,4 +1,5 @@
-use rusqlite::{Connection, Result};
+use crate::error::Result;
+use rusqlite::Connection;
 use std::path::Path;
 
 pub struct StateStore {
@@ -32,6 +33,9 @@ impl StateStore {
             .conn
             .prepare("SELECT symbol FROM watchlist ORDER BY id ASC")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
-        rows.collect()
+        // Collect into rusqlite's own Result first (the iterator's item error
+        // type), then `?` converts any rusqlite::Error into StorageError.
+        let symbols = rows.collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(symbols)
     }
 }
