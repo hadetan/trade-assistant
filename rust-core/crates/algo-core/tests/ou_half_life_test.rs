@@ -1,5 +1,5 @@
 use algo_core::registry;
-use algo_core::{Direction, Horizon, MarketContext, Timeframe};
+use algo_core::{Direction, Horizon, MarketContext, PeerSeries, Timeframe};
 use chrono::{DateTime, Utc};
 
 fn parse_half_life(evidence: &str) -> f64 {
@@ -107,4 +107,37 @@ fn ou_half_life_classifies_bearish_when_z_score_rises_above_positive_one() {
 
     assert_eq!(output.direction, Direction::Bearish);
     assert!(output.magnitude > 1.0);
+}
+
+#[test]
+fn ou_half_life_does_not_panic_when_peer_overlap_is_empty() {
+    // A recently-listed peer can have zero overlapping history; compute()
+    // must degrade to a neutral no-op instead of underflowing the
+    // series[..len-1] slice fit_ar1 needs at least one pair from.
+    let algos = registry::all();
+    let algo = algos
+        .iter()
+        .find(|a| a.id() == "ou_half_life")
+        .expect("ou_half_life should be registered");
+
+    let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let mut ctx = MarketContext::from_closes(
+        "NSE:TEST",
+        Timeframe::Day,
+        Horizon::Positional,
+        vec![1.0, 2.0, 3.0, 4.0, 5.0],
+        as_of,
+    );
+    ctx.peer = Some(PeerSeries {
+        symbol: "X".into(),
+        closes: vec![],
+    });
+
+    let output = algo.compute(&ctx);
+
+    assert_eq!(output.direction, Direction::Neutral);
+    assert_eq!(output.magnitude, 0.0);
+    assert_eq!(output.confidence, 0.0);
+    assert_eq!(output.evidence, vec!["insufficient peer overlap".to_string()]);
+    assert_eq!(output.computed_at, as_of);
 }

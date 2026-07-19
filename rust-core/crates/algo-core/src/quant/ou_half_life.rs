@@ -24,6 +24,18 @@ impl Algorithm for OuHalfLifeAlgorithm {
     }
 
     fn compute(&self, ctx: &MarketContext) -> crate::AlgoOutput {
+        // The registry gate only checks ctx.closes.len() against
+        // required_lookback() -- it knows nothing about ctx.peer, so a
+        // recently-listed or short-history peer leg can reach here with an
+        // overlap too small (even zero) for fit_ar1's series[..len-1] slice,
+        // which underflows on an empty series.
+        if let Some(peer) = &ctx.peer {
+            let overlap = ctx.closes.len().min(peer.closes.len());
+            if overlap < self.required_lookback().max(2) {
+                return no_op(ctx);
+            }
+        }
+
         let series = spread_series(ctx);
         let (_a, b) = fit_ar1(&series);
         let half_life = half_life_from_b(b);
@@ -58,6 +70,20 @@ impl Algorithm for OuHalfLifeAlgorithm {
             )],
             computed_at: ctx.as_of,
         }
+    }
+}
+
+fn no_op(ctx: &MarketContext) -> crate::AlgoOutput {
+    crate::AlgoOutput {
+        algo_id: "ou_half_life",
+        symbol: ctx.symbol.clone(),
+        timeframe: ctx.timeframe,
+        horizon: ctx.horizon,
+        direction: Direction::Neutral,
+        magnitude: 0.0,
+        confidence: 0.0,
+        evidence: vec!["insufficient peer overlap".into()],
+        computed_at: ctx.as_of,
     }
 }
 
@@ -123,7 +149,7 @@ fn population_mean_std(series: &[f64]) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Timeframe;
+    use crate::{PeerSeries, Timeframe};
     use chrono::{DateTime, Utc};
 
     #[test]
@@ -157,6 +183,31 @@ mod tests {
         let output = algo.compute(&ctx);
 
         assert!(output.evidence[0].contains("half-life=1.000000"));
+        assert_eq!(output.computed_at, as_of);
+    }
+
+    #[test]
+    fn compute_does_not_panic_on_empty_peer_overlap() {
+        let algo = OuHalfLifeAlgorithm::new(3);
+        let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let mut ctx = MarketContext::from_closes(
+            "TEST",
+            Timeframe::Day,
+            Horizon::Positional,
+            vec![1.0, 2.0, 3.0, 4.0, 5.0],
+            as_of,
+        );
+        ctx.peer = Some(PeerSeries {
+            symbol: "X".into(),
+            closes: vec![],
+        });
+
+        let output = algo.compute(&ctx);
+
+        assert_eq!(output.direction, Direction::Neutral);
+        assert_eq!(output.magnitude, 0.0);
+        assert_eq!(output.confidence, 0.0);
+        assert_eq!(output.evidence, vec!["insufficient peer overlap".to_string()]);
         assert_eq!(output.computed_at, as_of);
     }
 
