@@ -1,5 +1,5 @@
 use sidecar::handlers::handle_request;
-use sidecar::protocol::{encode_response, parse_request};
+use sidecar::protocol::{empty_response, encode_response, parse_request};
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
 
@@ -28,13 +28,16 @@ fn main() {
         let request_id = request.id;
         let result = panic::catch_unwind(AssertUnwindSafe(|| handle_request(request)));
 
+        // A caught panic must still produce exactly one response line for this
+        // id: a stdio request/response client blocks waiting for it otherwise.
+        // Emit a well-formed empty response instead of dropping the reply.
         let response = match result {
             Ok(response) => response,
             Err(_) => {
                 eprintln!(
-                    "sidecar: request {request_id} panicked during compute; skipping it and continuing"
+                    "sidecar: request {request_id} panicked during compute; returning an empty response"
                 );
-                continue;
+                empty_response(request_id)
             }
         };
 
