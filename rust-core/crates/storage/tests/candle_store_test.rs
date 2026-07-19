@@ -79,3 +79,27 @@ fn write_and_read_survive_symbol_with_quote_and_path_traversal_characters() {
     assert_eq!(entries.len(), 1, "expected exactly one partition file directly inside root");
     assert!(entries[0].path().is_file());
 }
+
+#[test]
+fn read_candles_on_never_written_partition_returns_empty_vec() {
+    // design §5.1: a from/to window with no data is "empty, not error".
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+
+    let got = store.read_candles("NSE:NEVERWRITTEN", "day").unwrap();
+
+    assert!(got.is_empty());
+}
+
+#[test]
+fn open_on_uncreatable_root_returns_err_not_panic() {
+    // create_dir_all fails when an ancestor of the requested root is a file.
+    let dir = tempdir().unwrap();
+    let file_path = dir.path().join("iamafile");
+    std::fs::write(&file_path, b"x").unwrap();
+    let bogus_root = file_path.join("subdir");
+
+    let result = CandleStore::open(&bogus_root);
+
+    assert!(result.is_err());
+}
