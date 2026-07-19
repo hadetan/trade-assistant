@@ -79,7 +79,10 @@ fn rsi_value(closes: &[f64], period: usize) -> f64 {
     }
 
     if avg_loss == 0.0 {
-        return 100.0;
+        // avg_gain == 0 too means a perfectly flat series: no information
+        // about direction, so neutral (50), not overbought (100). Only a
+        // pure uptrend (avg_gain > 0, avg_loss == 0) is genuinely 100.
+        return if avg_gain == 0.0 { 50.0 } else { 100.0 };
     }
     let rs = avg_gain / avg_loss;
     100.0 - 100.0 / (1.0 + rs)
@@ -123,6 +126,30 @@ mod tests {
         assert_eq!(classify_rsi(75.0), Direction::Bearish);
         assert_eq!(classify_rsi(20.0), Direction::Bullish);
         assert_eq!(classify_rsi(50.0), Direction::Neutral);
+    }
+
+    #[test]
+    fn rsi_flat_series_is_neutral_fifty_not_bearish_overbought() {
+        // A perfectly flat series has avg_gain == 0 AND avg_loss == 0 -- zero
+        // information about direction. The old `if avg_loss == 0.0 { 100.0 }`
+        // conflated this with a pure-uptrend (avg_gain > 0, avg_loss == 0),
+        // returning 100 (overbought) and classifying it Bearish: a biased
+        // signal manufactured from no information at all. It must be 50
+        // (neutral) instead.
+        let algo = RsiAlgorithm::new(2);
+        let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let ctx = MarketContext {
+            symbol: "TEST".to_string(),
+            timeframe: Timeframe::Day,
+            horizon: Horizon::Positional,
+            closes: vec![100.0, 100.0, 100.0, 100.0, 100.0],
+            as_of,
+        };
+
+        let output = algo.compute(&ctx);
+
+        assert!(output.evidence[0].contains("50.00"));
+        assert_eq!(output.direction, Direction::Neutral);
     }
 }
 

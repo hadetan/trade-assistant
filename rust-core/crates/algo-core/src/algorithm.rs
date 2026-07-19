@@ -64,6 +64,12 @@ pub trait Algorithm: Send + Sync {
 /// (e.g. a moving average). Shared by price-vs-MA indicators; RSI and other
 /// non-baseline indicators classify differently and do not use this.
 pub fn classify_by_distance(latest_close: f64, baseline: f64) -> (Direction, f64) {
+    if baseline.abs() < 1e-12 {
+        // A zero/near-zero baseline would divide into inf/NaN below,
+        // producing a spurious direction and a confidence that pollutes
+        // downstream confluence weights. No baseline means no opinion.
+        return (Direction::Neutral, 0.0);
+    }
     let distance = (latest_close - baseline) / baseline;
     let direction = if distance.abs() < 1e-6 {
         Direction::Neutral
@@ -73,4 +79,41 @@ pub fn classify_by_distance(latest_close: f64, baseline: f64) -> (Direction, f64
         Direction::Bearish
     };
     (direction, distance.abs().min(1.0))
+}
+
+/// `|latest_close - baseline| / baseline`, guarded against a zero/near-zero
+/// baseline the same way `classify_by_distance` guards its own division.
+/// SMA/EMA compute their `magnitude` field independently of
+/// `classify_by_distance`'s confidence, via the same division, so they share
+/// this helper rather than each re-deriving the guard.
+pub fn relative_magnitude(latest_close: f64, baseline: f64) -> f64 {
+    if baseline.abs() < 1e-12 {
+        return 0.0;
+    }
+    ((latest_close - baseline) / baseline).abs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_by_distance_guards_against_zero_baseline() {
+        // A zero baseline would otherwise divide (latest_close - 0.0) / 0.0
+        // into inf/NaN, producing a spurious Bearish direction and a NaN
+        // confidence that pollutes downstream confluence weights.
+        let (direction, confidence) = classify_by_distance(5.0, 0.0);
+
+        assert_eq!(direction, Direction::Neutral);
+        assert_eq!(confidence, 0.0);
+        assert!(!confidence.is_nan());
+    }
+
+    #[test]
+    fn relative_magnitude_guards_against_zero_baseline() {
+        let magnitude = relative_magnitude(5.0, 0.0);
+
+        assert_eq!(magnitude, 0.0);
+        assert!(!magnitude.is_nan());
+    }
 }

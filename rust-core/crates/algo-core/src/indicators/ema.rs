@@ -1,4 +1,4 @@
-use crate::{classify_by_distance, Algorithm, Horizon, MarketContext};
+use crate::{classify_by_distance, relative_magnitude, Algorithm, Horizon, MarketContext};
 
 pub struct EmaAlgorithm {
     period: usize,
@@ -28,7 +28,7 @@ impl Algorithm for EmaAlgorithm {
         let latest_close = *ctx.closes.last().unwrap();
 
         let (direction, confidence) = classify_by_distance(latest_close, ema);
-        let magnitude = ((latest_close - ema) / ema).abs();
+        let magnitude = relative_magnitude(latest_close, ema);
 
         crate::AlgoOutput {
             algo_id: self.id(),

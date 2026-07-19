@@ -1,4 +1,7 @@
-use sidecar::protocol::{encode_response, parse_request, AlgoResultWire, ComputeResponse, ConfluenceWire};
+use sidecar::protocol::{
+    empty_response, encode_response, parse_request, AlgoResultWire, ComputeResponse,
+    ConfluenceWire,
+};
 
 #[test]
 fn request_round_trips_from_json_line() {
@@ -34,4 +37,19 @@ fn response_encodes_to_a_single_json_line() {
     assert!(!line.contains('\n'));
     assert!(line.contains("\"id\":1"));
     assert!(line.contains("\"algo_id\":\"sma\""));
+}
+
+#[test]
+fn empty_response_answers_the_given_id_with_zeroed_everything() {
+    // Used both when no algorithm has enough lookback and (after this fix)
+    // when a request panics mid-compute -- either way the client is still
+    // owed exactly one well-formed response line for its `id`.
+    let response = empty_response(99);
+
+    assert_eq!(response.id, 99);
+    assert!(response.algo_results.is_empty());
+    assert_eq!(response.confluence.bullish_count, 0);
+    assert_eq!(response.confluence.bearish_count, 0);
+    assert_eq!(response.confluence.neutral_count, 0);
+    assert_eq!(response.confluence.weighted_vote, 0.0);
 }

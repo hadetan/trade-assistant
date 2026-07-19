@@ -31,20 +31,13 @@ pub struct ComputeResponse {
     pub confluence: ConfluenceWire,
 }
 
-pub fn parse_request(line: &str) -> serde_json::Result<ComputeRequest> {
-    serde_json::from_str(line)
-}
-
-pub fn encode_response(response: &ComputeResponse) -> String {
-    serde_json::to_string(response).expect("ComputeResponse always serializes")
-}
-
-/// A well-formed "nothing ran" response for a given request id: no algorithm
-/// results and a zeroed confluence scorecard. Used when a request cannot be
-/// answered normally (e.g. a caught panic) so the stdio protocol still emits
-/// exactly one response line per parsed request and the client never blocks
-/// waiting for a missing id. Matches the shape `handle_request` produces when
-/// no algorithm has enough data to run.
+/// The "nothing ran" response for `id`: no algorithm results and entirely
+/// zeroed confluence. This is owed to the client whenever no compute result
+/// exists for a request that nonetheless needs exactly one answered response
+/// line -- e.g. a request whose history was too short for every registered
+/// algorithm, or (see `main`'s per-request `catch_unwind`) a request that
+/// panicked mid-compute. The client blocks on `id`, so skipping the response
+/// line entirely would hang it forever.
 pub fn empty_response(id: u64) -> ComputeResponse {
     ComputeResponse {
         id,
@@ -56,6 +49,14 @@ pub fn empty_response(id: u64) -> ComputeResponse {
             weighted_vote: 0.0,
         },
     }
+}
+
+pub fn parse_request(line: &str) -> serde_json::Result<ComputeRequest> {
+    serde_json::from_str(line)
+}
+
+pub fn encode_response(response: &ComputeResponse) -> String {
+    serde_json::to_string(response).expect("ComputeResponse always serializes")
 }
 
 #[cfg(test)]
