@@ -74,13 +74,13 @@ mod tests {
         // EMA at close=14: (14 - 12.0) * 0.5 + 12.0 = 13.0  <- final expected value
         let algo = EmaAlgorithm::new(3);
         let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let ctx = MarketContext {
-            symbol: "TEST".to_string(),
-            timeframe: Timeframe::Day,
-            horizon: Horizon::Positional,
-            closes: vec![10.0, 11.0, 12.0, 13.0, 14.0],
+        let ctx = MarketContext::from_closes(
+            "TEST",
+            Timeframe::Day,
+            Horizon::Positional,
+            vec![10.0, 11.0, 12.0, 13.0, 14.0],
             as_of,
-        };
+        );
 
         let output = algo.compute(&ctx);
 

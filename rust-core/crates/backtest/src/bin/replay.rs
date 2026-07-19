@@ -3,6 +3,7 @@ use backtest::engine::run_replay;
 use ingestion::importer::import_bhavcopy_files;
 use std::collections::HashMap;
 use std::error::Error;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use storage::CandleStore;
 
@@ -61,13 +62,14 @@ fn run() -> Result<(), Box<dyn Error>> {
         for entry in entries {
             let entry = entry.map_err(|e| format!("cannot read entry in --ingest-dir '{ingest_dir}': {e}"))?;
             let path = entry.path();
-            if path.is_file() {
+            if path.is_file() && path.extension() == Some(OsStr::new("csv")) {
                 let bytes = std::fs::read(&path)
                     .map_err(|e| format!("cannot read bhavcopy file '{}': {e}", path.display()))?;
                 files.push(bytes);
             }
         }
-        let n = import_bhavcopy_files(&store, "NSE", &files)
+        let exchange = symbol.split(':').next().expect("str::split always yields at least one segment");
+        let n = import_bhavcopy_files(&store, exchange, &files)
             .map_err(|e| format!("failed to import bhavcopy files from '{ingest_dir}': {e}"))?;
         eprintln!("ingested {n} candles from {ingest_dir}");
     }

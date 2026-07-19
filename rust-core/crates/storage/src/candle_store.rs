@@ -87,8 +87,14 @@ impl CandleStore {
             ])?;
         }
         appender.flush()?;
-        let path_str = Self::escape_sql_literal(&path.to_string_lossy());
-        conn.execute(&format!("COPY candles TO '{path_str}' (FORMAT PARQUET)"), [])?;
+
+        let tmp_path = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
+        let tmp_path_str = Self::escape_sql_literal(&tmp_path.to_string_lossy());
+        conn.execute(&format!("COPY candles TO '{tmp_path_str}' (FORMAT PARQUET)"), [])?;
+        // Rename is atomic on the same filesystem, so a crash mid-COPY (or mid
+        // re-ingest merge) leaves the previous partition intact instead of a
+        // half-written file at `path`.
+        std::fs::rename(&tmp_path, path)?;
         Ok(())
     }
 
@@ -141,6 +147,53 @@ mod tests {
     /// path-traversal sequence (directory escape) must produce a partition
     /// filename that stays a single component directly under `root`, with no
     /// quote characters, no path separators, and no `..` sequence.
+    #[test]
+    fn write_partition_replaces_prior_contents_fully() {
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        let first = vec![Candle { ts: 1, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }];
+        store.write_candles("NSE:INFY", "day", &first).unwrap();
+
+        let second = vec![Candle { ts: 2, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 2 }];
+        store.write_candles("NSE:INFY", "day", &second).unwrap();
+
+        let read_back = store.read_candles("NSE:INFY", "day").unwrap();
+        assert_eq!(read_back, second, "second write must fully replace the first, not merge/append");
+
+        let path = store.partition_path("NSE:INFY", "day");
+        let tmp_path = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
+        assert!(!tmp_path.exists(), "temp file must be cleaned up (renamed away) after a successful write");
+    }
+
+    #[test]
+    fn a_write_failure_at_the_tmp_stage_never_touches_the_real_partition() {
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        let original = vec![Candle { ts: 1, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }];
+        store.write_candles("NSE:INFY", "day", &original).unwrap();
+
+        // Occupy the sibling temp path with a directory so the COPY-to-temp step
+        // fails before the atomic rename ever runs. This proves write_partition
+        // targets `{path}.tmp` first rather than writing `path` in place: a
+        // pre-rename write path lets a crash mid-COPY corrupt only a throwaway
+        // temp file, never the previously-committed partition.
+        let path = store.partition_path("NSE:INFY", "day");
+        let tmp_path = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
+        std::fs::create_dir(&tmp_path).unwrap();
+
+        let result = store.write_candles(
+            "NSE:INFY",
+            "day",
+            &[Candle { ts: 2, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 2 }],
+        );
+
+        assert!(result.is_err(), "a blocked temp-file stage must surface as an error, not silently succeed");
+        let read_back = store.read_candles("NSE:INFY", "day").unwrap();
+        assert_eq!(read_back, original, "a failed write must never disturb the previously-committed partition");
+    }
+
     #[test]
     fn partition_path_sanitizes_quotes_and_traversal_sequences() {
         let dir = tempdir().unwrap();

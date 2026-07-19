@@ -1,6 +1,25 @@
+mod accumulation_distribution;
+mod adx;
+mod atr;
+mod bollinger;
+mod cci;
+mod cmf;
+mod donchian;
 mod ema;
+mod ichimoku;
+mod keltner;
+mod macd;
+mod mfi;
+mod obv;
+mod psar;
+mod roc;
 mod rsi;
 mod sma;
+mod stochastic;
+mod supertrend;
+mod volume_profile;
+mod vwap;
+mod williams_r;
 
 pub use ema::EmaAlgorithm;
 pub use rsi::RsiAlgorithm;

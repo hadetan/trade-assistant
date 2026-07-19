@@ -105,13 +105,13 @@ mod tests {
         //     = 52.6316 (final expected RSI)
         let algo = RsiAlgorithm::new(2);
         let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let ctx = MarketContext {
-            symbol: "TEST".to_string(),
-            timeframe: Timeframe::Day,
-            horizon: Horizon::Positional,
-            closes: vec![100.0, 102.0, 101.0, 105.0, 103.0],
+        let ctx = MarketContext::from_closes(
+            "TEST",
+            Timeframe::Day,
+            Horizon::Positional,
+            vec![100.0, 102.0, 101.0, 105.0, 103.0],
             as_of,
-        };
+        );
 
         let output = algo.compute(&ctx);
 
@@ -138,13 +138,13 @@ mod tests {
         // (neutral) instead.
         let algo = RsiAlgorithm::new(2);
         let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let ctx = MarketContext {
-            symbol: "TEST".to_string(),
-            timeframe: Timeframe::Day,
-            horizon: Horizon::Positional,
-            closes: vec![100.0, 100.0, 100.0, 100.0, 100.0],
+        let ctx = MarketContext::from_closes(
+            "TEST",
+            Timeframe::Day,
+            Horizon::Positional,
+            vec![100.0, 100.0, 100.0, 100.0, 100.0],
             as_of,
-        };
+        );
 
         let output = algo.compute(&ctx);
 

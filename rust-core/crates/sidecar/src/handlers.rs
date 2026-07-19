@@ -11,13 +11,9 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
         _ => Timeframe::Day,
     };
 
-    let ctx = MarketContext {
-        symbol: request.symbol.clone(),
-        timeframe,
-        horizon: Horizon::Positional,
-        closes: request.closes,
-        as_of: Utc::now(),
-    };
+    // Backtest-only per design Q2: the live sidecar path has no OHLCV/options
+    // feed yet, so every extra field stays empty/None via from_closes.
+    let ctx = MarketContext::from_closes(request.symbol.clone(), timeframe, Horizon::Positional, request.closes, Utc::now());
 
     // Route every compute() call through the one shared lookback gate
     // (algo_core::registry::run_applicable) so the sidecar and the backtest

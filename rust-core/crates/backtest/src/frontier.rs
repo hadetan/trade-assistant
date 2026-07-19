@@ -12,8 +12,29 @@ pub fn context_at(
     timeframe: Timeframe,
     horizon: Horizon,
 ) -> MarketContext {
-    let closes = series[..=frontier_index].iter().map(|c| c.close).collect();
+    let window = &series[..=frontier_index];
+    let closes = window.iter().map(|c| c.close).collect();
+    let opens = window.iter().map(|c| c.open).collect();
+    let highs = window.iter().map(|c| c.high).collect();
+    let lows = window.iter().map(|c| c.low).collect();
+    let volumes = window.iter().map(|c| c.volume as f64).collect();
+    let timestamps = window.iter().map(|c| c.ts).collect();
     let as_of = DateTime::from_timestamp(series[frontier_index].ts, 0)
         .expect("candle ts is a valid Unix epoch");
-    MarketContext { symbol: symbol.to_string(), timeframe, horizon, closes, as_of }
+    MarketContext {
+        symbol: symbol.to_string(),
+        timeframe,
+        horizon,
+        closes,
+        opens,
+        highs,
+        lows,
+        volumes,
+        timestamps,
+        options: None,
+        chain: None,
+        peer: None,
+        higher_tf: None,
+        as_of,
+    }
 }

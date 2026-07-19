@@ -37,13 +37,13 @@ impl Algorithm for AlwaysBullish {
 fn algorithm_trait_is_object_safe_and_computable() {
     let algo = AlwaysBullish;
     let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-    let ctx = MarketContext {
-        symbol: "NSE:INFY".to_string(),
-        timeframe: Timeframe::Day,
-        horizon: Horizon::Positional,
-        closes: vec![100.0, 101.0, 102.0],
+    let ctx = MarketContext::from_closes(
+        "NSE:INFY",
+        Timeframe::Day,
+        Horizon::Positional,
+        vec![100.0, 101.0, 102.0],
         as_of,
-    };
+    );
 
     let output = algo.compute(&ctx);
 
@@ -67,13 +67,7 @@ fn registry_contains_all_three_phase_one_algorithms() {
 fn ctx_with_closes(n: usize) -> MarketContext {
     let closes = (0..n).map(|i| 100.0 + i as f64).collect();
     let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-    MarketContext {
-        symbol: "NSE:TEST".to_string(),
-        timeframe: Timeframe::Day,
-        horizon: Horizon::Positional,
-        closes,
-        as_of,
-    }
+    MarketContext::from_closes("NSE:TEST", Timeframe::Day, Horizon::Positional, closes, as_of)
 }
 
 #[test]

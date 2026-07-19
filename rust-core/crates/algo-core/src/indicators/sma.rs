@@ -60,13 +60,13 @@ mod tests {
         // SMA of the last 3 closes (14, 16, 18) = (14+16+18)/3 = 16.0
         let algo = SmaAlgorithm::new(3);
         let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
-        let ctx = MarketContext {
-            symbol: "TEST".to_string(),
-            timeframe: Timeframe::Day,
-            horizon: Horizon::Positional,
-            closes: vec![10.0, 12.0, 14.0, 16.0, 18.0],
+        let ctx = MarketContext::from_closes(
+            "TEST",
+            Timeframe::Day,
+            Horizon::Positional,
+            vec![10.0, 12.0, 14.0, 16.0, 18.0],
             as_of,
-        };
+        );
 
         let output = algo.compute(&ctx);
 

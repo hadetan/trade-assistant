@@ -49,6 +49,10 @@ pub fn run_replay(
     symbol: &str,
     timeframe: Timeframe,
 ) -> ReplayReport {
+    debug_assert!(
+        series.windows(2).all(|w| w[0].ts <= w[1].ts),
+        "run_replay requires ascending-by-ts series"
+    );
     let mut stats: BTreeMap<String, AlgoStats> = BTreeMap::new();
 
     for i in 0..series.len() {
@@ -59,6 +63,12 @@ pub fn run_replay(
         let outputs = run_applicable(algos, &ctx);
 
         let current = series[i].close;
+        if current <= 0.0 {
+            // A zero/negative-close bar (data glitch) would otherwise divide
+            // signed_return by zero/negative below, NaN- or sign-poisoning the
+            // hit-rate weight this feeds into confluence.
+            continue;
+        }
         let future = series[i + horizon_bars].close;
         for output in outputs {
             let sign = match output.direction {
