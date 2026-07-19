@@ -15,7 +15,7 @@ This phase hand-implements three indicators (SMA, EMA, RSI) directly rather than
 - **The app never implements, wires up, or calls any Kite order-placement/modification/cancellation/GTT-write tool** (`place_order`, `modify_order`, `cancel_order`, `place_gtt_order`, `modify_gtt_order`, `delete_gtt_order`) — permanent, applies to every phase, not just this one (design doc §2, §4).
 - Rust workspace lives at `rust-core/` inside this repo; stable toolchain, 2021 edition.
 - No dynamic plugin loading for algorithms — compile-time registration only, via `inventory` (design doc §6.1).
-- Every `Algorithm::compute()` implementation is pure and deterministic: no wall-clock reads, no randomness, no I/O inside `compute()` itself.
+- Every `Algorithm::compute()` implementation is pure and deterministic: no wall-clock reads, no randomness, no I/O inside `compute()` itself. The evaluation timestamp (`AlgoOutput::computed_at`) always comes from `MarketContext::as_of`, which the caller supplies — the live wall-clock at the I/O boundary in production, or the replay frontier's simulated time during backtest — so `compute()` itself never touches the clock.
 - Comment and naming conventions follow `CLAUDE.md` (created in Task 1) — no restating-the-obvious comments, no numbered "1. do X" comment blocks, snake_case for Rust identifiers.
 - Once networking is introduced in a later phase, networking crates use `rustls`, never `native-tls`/`openssl` (design doc §11) — noted here since it constrains a `Cargo.toml` dependency choice this phase's tasks don't make, but a later phase's tasks will.
 
@@ -207,14 +207,14 @@ git commit -m "chore: scaffold Rust workspace and coding-standards doc"
 - Test: `rust-core/crates/algo-core/tests/registry_test.rs` (a minimal compile/shape test lives here for now; the real registry test arrives in Task 6)
 
 **Interfaces:**
-- Produces: `Algorithm` trait, `AlgoOutput` struct, `Direction`/`Horizon`/`Timeframe` enums, `MarketContext` struct — every later indicator (Tasks 3-5) and the registry/confluence code (Tasks 6-7) depend on these exact names and fields.
+- Produces: `Algorithm` trait, `AlgoOutput` struct, `Direction`/`Horizon`/`Timeframe` enums, `MarketContext` struct (including its `as_of` field), `classify_by_distance()` helper — every later indicator (Tasks 3-5) and the registry/confluence code (Tasks 6-7) depend on these exact names and fields.
 
 - [ ] **Step 1: Write the failing test**
 
 `rust-core/crates/algo-core/tests/registry_test.rs`:
 ```rust
 use algo_core::{Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 struct AlwaysBullish;
 
@@ -241,7 +241,7 @@ impl Algorithm for AlwaysBullish {
             magnitude: 1.0,
             confidence: 1.0,
             evidence: vec!["always bullish, by construction".to_string()],
-            computed_at: Utc::now(),
+            computed_at: ctx.as_of,
         }
     }
 }
@@ -249,11 +249,13 @@ impl Algorithm for AlwaysBullish {
 #[test]
 fn algorithm_trait_is_object_safe_and_computable() {
     let algo = AlwaysBullish;
+    let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
     let ctx = MarketContext {
         symbol: "NSE:INFY".to_string(),
         timeframe: Timeframe::Day,
         horizon: Horizon::Positional,
         closes: vec![100.0, 101.0, 102.0],
+        as_of,
     };
 
     let output = algo.compute(&ctx);
@@ -261,6 +263,7 @@ fn algorithm_trait_is_object_safe_and_computable() {
     assert_eq!(output.algo_id, "always_bullish");
     assert_eq!(output.symbol, "NSE:INFY");
     assert_eq!(output.direction, Direction::Bullish);
+    assert_eq!(output.computed_at, as_of);
 }
 ```
 
@@ -304,6 +307,11 @@ pub struct MarketContext {
     pub timeframe: Timeframe,
     pub horizon: Horizon,
     pub closes: Vec<f64>,
+    /// The evaluation instant: the live wall-clock at the I/O boundary in
+    /// production, or the replay frontier's simulated time during backtest.
+    /// Supplied by the caller so `compute()` stays pure and replayed
+    /// decisions carry their historical timestamp, not today's.
+    pub as_of: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -325,13 +333,28 @@ pub trait Algorithm: Send + Sync {
     fn applicable_horizons(&self) -> &'static [Horizon];
     fn compute(&self, ctx: &MarketContext) -> AlgoOutput;
 }
+
+/// Direction + confidence from how far the latest close sits from a baseline
+/// (e.g. a moving average). Shared by price-vs-MA indicators; RSI and other
+/// non-baseline indicators classify differently and do not use this.
+pub fn classify_by_distance(latest_close: f64, baseline: f64) -> (Direction, f64) {
+    let distance = (latest_close - baseline) / baseline;
+    let direction = if distance.abs() < 1e-6 {
+        Direction::Neutral
+    } else if distance > 0.0 {
+        Direction::Bullish
+    } else {
+        Direction::Bearish
+    };
+    (direction, distance.abs().min(1.0))
+}
 ```
 
 `rust-core/crates/algo-core/src/lib.rs`:
 ```rust
 mod algorithm;
 
-pub use algorithm::{Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
+pub use algorithm::{classify_by_distance, Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -363,7 +386,7 @@ git commit -m "feat(algo-core): add Algorithm trait and core types"
 
 `rust-core/crates/algo-core/src/indicators/sma.rs` (test module at the bottom of the same file — standard Rust convention, keeps the test next to the code it exercises):
 ```rust
-use crate::{Algorithm, Direction, Horizon, MarketContext, Timeframe};
+use crate::{classify_by_distance, Algorithm, Direction, Horizon, MarketContext, Timeframe};
 
 pub struct SmaAlgorithm {
     period: usize,
@@ -378,17 +401,20 @@ impl SmaAlgorithm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
 
     #[test]
     fn sma_matches_hand_computed_average() {
         // closes = [10, 12, 14, 16, 18], period = 3
         // SMA of the last 3 closes (14, 16, 18) = (14+16+18)/3 = 16.0
         let algo = SmaAlgorithm::new(3);
+        let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         let ctx = MarketContext {
             symbol: "TEST".to_string(),
             timeframe: Timeframe::Day,
             horizon: Horizon::Positional,
             closes: vec![10.0, 12.0, 14.0, 16.0, 18.0],
+            as_of,
         };
 
         let output = algo.compute(&ctx);
@@ -396,6 +422,7 @@ mod tests {
         assert!((sma_value(&ctx.closes, 3) - 16.0).abs() < 1e-9);
         // latest close (18.0) is above the SMA (16.0) -> Bullish
         assert_eq!(output.direction, Direction::Bullish);
+        assert_eq!(output.computed_at, as_of);
     }
 
     fn sma_value(closes: &[f64], period: usize) -> f64 {
@@ -432,14 +459,8 @@ impl Algorithm for SmaAlgorithm {
         let sma = window.iter().sum::<f64>() / self.period as f64;
         let latest_close = *ctx.closes.last().unwrap();
 
-        let distance = (latest_close - sma) / sma;
-        let direction = if distance.abs() < 1e-6 {
-            Direction::Neutral
-        } else if distance > 0.0 {
-            Direction::Bullish
-        } else {
-            Direction::Bearish
-        };
+        let (direction, confidence) = classify_by_distance(latest_close, sma);
+        let magnitude = ((latest_close - sma) / sma).abs();
 
         crate::AlgoOutput {
             algo_id: self.id(),
@@ -447,13 +468,13 @@ impl Algorithm for SmaAlgorithm {
             timeframe: ctx.timeframe,
             horizon: ctx.horizon,
             direction,
-            magnitude: distance.abs(),
-            confidence: distance.abs().min(1.0),
+            magnitude,
+            confidence,
             evidence: vec![format!(
                 "close {:.2} vs SMA({}) {:.2}",
                 latest_close, self.period, sma
             )],
-            computed_at: chrono::Utc::now(),
+            computed_at: ctx.as_of,
         }
     }
 }
@@ -471,7 +492,7 @@ Update `rust-core/crates/algo-core/src/lib.rs`:
 mod algorithm;
 mod indicators;
 
-pub use algorithm::{Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
+pub use algorithm::{classify_by_distance, Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
 pub use indicators::SmaAlgorithm;
 ```
 
@@ -503,7 +524,7 @@ git commit -m "feat(algo-core): add SMA algorithm"
 
 `rust-core/crates/algo-core/src/indicators/ema.rs`:
 ```rust
-use crate::{Algorithm, Direction, Horizon, MarketContext, Timeframe};
+use crate::{classify_by_distance, Algorithm, Direction, Horizon, MarketContext, Timeframe};
 
 pub struct EmaAlgorithm {
     period: usize,
@@ -518,6 +539,7 @@ impl EmaAlgorithm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
 
     #[test]
     fn ema_matches_hand_computed_series() {
@@ -526,11 +548,13 @@ mod tests {
         // EMA at close=13: (13 - 11.0) * 0.5 + 11.0 = 12.0
         // EMA at close=14: (14 - 12.0) * 0.5 + 12.0 = 13.0  <- final expected value
         let algo = EmaAlgorithm::new(3);
+        let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         let ctx = MarketContext {
             symbol: "TEST".to_string(),
             timeframe: Timeframe::Day,
             horizon: Horizon::Positional,
             closes: vec![10.0, 11.0, 12.0, 13.0, 14.0],
+            as_of,
         };
 
         let output = algo.compute(&ctx);
@@ -538,6 +562,7 @@ mod tests {
         // latest close (14.0) is above the EMA (13.0) -> Bullish
         assert_eq!(output.direction, Direction::Bullish);
         assert!(output.evidence[0].contains("13.00"));
+        assert_eq!(output.computed_at, as_of);
     }
 }
 ```
@@ -568,14 +593,8 @@ impl Algorithm for EmaAlgorithm {
         let ema = ema_series(&ctx.closes, self.period);
         let latest_close = *ctx.closes.last().unwrap();
 
-        let distance = (latest_close - ema) / ema;
-        let direction = if distance.abs() < 1e-6 {
-            Direction::Neutral
-        } else if distance > 0.0 {
-            Direction::Bullish
-        } else {
-            Direction::Bearish
-        };
+        let (direction, confidence) = classify_by_distance(latest_close, ema);
+        let magnitude = ((latest_close - ema) / ema).abs();
 
         crate::AlgoOutput {
             algo_id: self.id(),
@@ -583,13 +602,13 @@ impl Algorithm for EmaAlgorithm {
             timeframe: ctx.timeframe,
             horizon: ctx.horizon,
             direction,
-            magnitude: distance.abs(),
-            confidence: distance.abs().min(1.0),
+            magnitude,
+            confidence,
             evidence: vec![format!(
                 "close {:.2} vs EMA({}) {:.2}",
                 latest_close, self.period, ema
             )],
-            computed_at: chrono::Utc::now(),
+            computed_at: ctx.as_of,
         }
     }
 }
@@ -660,6 +679,7 @@ impl RsiAlgorithm {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
 
     #[test]
     fn rsi_matches_hand_computed_wilder_smoothing() {
@@ -671,11 +691,13 @@ mod tests {
         // RS3 = 1.25 / 1.125 = 10/9; RSI3 = 100 - 100/(1 + 10/9) = 100 - 900/19
         //     = 52.6316 (final expected RSI)
         let algo = RsiAlgorithm::new(2);
+        let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         let ctx = MarketContext {
             symbol: "TEST".to_string(),
             timeframe: Timeframe::Day,
             horizon: Horizon::Positional,
             closes: vec![100.0, 102.0, 101.0, 105.0, 103.0],
+            as_of,
         };
 
         let output = algo.compute(&ctx);
@@ -683,6 +705,7 @@ mod tests {
         assert!(output.evidence[0].contains("52.63"));
         // RSI 52.63 sits inside the neutral 30-70 band -> Neutral
         assert_eq!(output.direction, Direction::Neutral);
+        assert_eq!(output.computed_at, as_of);
     }
 
     #[test]
@@ -732,7 +755,7 @@ impl Algorithm for RsiAlgorithm {
             magnitude: (rsi - 50.0).abs(),
             confidence,
             evidence: vec![format!("RSI({}) = {:.2}", self.period, rsi)],
-            computed_at: chrono::Utc::now(),
+            computed_at: ctx.as_of,
         }
     }
 }
@@ -891,7 +914,7 @@ mod algorithm;
 mod indicators;
 pub mod registry;
 
-pub use algorithm::{Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
+pub use algorithm::{classify_by_distance, Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
 pub use indicators::{EmaAlgorithm, RsiAlgorithm, SmaAlgorithm};
 ```
 
@@ -1040,7 +1063,7 @@ pub mod confluence;
 mod indicators;
 pub mod registry;
 
-pub use algorithm::{Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
+pub use algorithm::{classify_by_distance, Algorithm, AlgoOutput, Direction, Horizon, MarketContext, Timeframe};
 pub use indicators::{EmaAlgorithm, RsiAlgorithm, SmaAlgorithm};
 ```
 
@@ -1476,13 +1499,14 @@ git commit -m "feat(sidecar): line-delimited JSON request/response protocol type
 
 **Files:**
 - Create: `rust-core/crates/sidecar/src/handlers.rs`
+- Modify: `rust-core/crates/sidecar/Cargo.toml` (add `chrono` — `handle_request` reads the wall clock once at the I/O boundary)
 - Modify: `rust-core/crates/sidecar/src/main.rs`
 - Modify: `rust-core/crates/sidecar/src/lib.rs`
 - Test: `rust-core/crates/sidecar/tests/end_to_end_test.rs`
 
 **Interfaces:**
 - Consumes: `algo_core::registry::all()`, `algo_core::confluence::compute_confluence()` (Tasks 6-7), `sidecar::protocol::*` (Task 10).
-- Produces: `handle_request(request: ComputeRequest) -> ComputeResponse` — this is the function a later phase's proactive-scan-gate logic and Benchmark-UI harness both call indirectly via the stdio loop; the binary itself reads one JSON line from stdin, calls this, writes one JSON line to stdout, per request.
+- Produces: `handle_request(request: ComputeRequest) -> ComputeResponse` — this is the function a later phase's proactive-scan-gate logic and Benchmark-UI harness both call indirectly via the stdio loop; the binary itself reads one JSON line from stdin, calls this, writes one JSON line to stdout, per request. `handle_request` is also the sidecar's I/O boundary: it reads the wall clock once per request via `chrono::Utc::now()` and threads it through `MarketContext::as_of`, so the `Algorithm::compute()` implementations (Tasks 2-5) never read the clock themselves (Global Constraints).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1532,10 +1556,17 @@ Expected: FAIL — the binary currently only prints `"sidecar placeholder"` and 
 
 - [ ] **Step 3: Implement the handler and main loop**
 
+Add to `rust-core/crates/sidecar/Cargo.toml`, under `[dependencies]`:
+```toml
+chrono = "0.4"
+```
+This is the sidecar's I/O boundary reading the live wall clock so `Algorithm::compute()` never has to.
+
 `rust-core/crates/sidecar/src/handlers.rs`:
 ```rust
 use crate::protocol::{AlgoResultWire, ComputeRequest, ComputeResponse, ConfluenceWire};
 use algo_core::{confluence::compute_confluence, registry, Horizon, MarketContext, Timeframe};
+use chrono::Utc;
 use std::collections::HashMap;
 
 pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
@@ -1551,6 +1582,7 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
         timeframe,
         horizon: Horizon::Positional,
         closes: request.closes,
+        as_of: Utc::now(),
     };
 
     let outputs: Vec<_> = registry::all().iter().map(|algo| algo.compute(&ctx)).collect();

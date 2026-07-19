@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/algo-core",
+    "crates/storage",
+    "crates/sidecar",
+]
+
+[workspace.package]
+edition = "2021"

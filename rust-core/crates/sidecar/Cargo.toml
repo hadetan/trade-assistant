@@ -1,0 +1,18 @@
+[package]
+name = "sidecar"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+name = "sidecar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sidecar"
+path = "src/main.rs"
+
+[dependencies]
+algo-core = { path = "../algo-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
