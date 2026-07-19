@@ -62,7 +62,6 @@ dependencies = [
  "implied-vol",
  "inventory",
  "nalgebra 0.35.0",
- "ndarray",
  "ort",
  "rust_ti",
  "statrs 0.18.0",

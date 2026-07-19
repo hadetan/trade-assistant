@@ -13,7 +13,6 @@ implied-vol = "2.0.0"
 nalgebra = "0.35"
 statrs = "0.18"
 ort = { version = "2.0.0-rc.12", features = ["download-binaries"], optional = true }
-ndarray = { version = "0.17", optional = true }
 
 [features]
-kronos = ["dep:ort", "dep:ndarray"]
+kronos = ["dep:ort"]

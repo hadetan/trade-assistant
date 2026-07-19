@@ -12,3 +12,5 @@ pub use algorithm::{
 };
 pub use indicators::{EmaAlgorithm, RsiAlgorithm, SmaAlgorithm};
 pub use options::context::{HigherTfSeries, OptionChainSnapshot, OptionsContext, PeerSeries, StrikeRow};
+#[cfg(feature = "kronos")]
+pub use forecast::kronos::{KronosAlgorithm, KronosForecast};
