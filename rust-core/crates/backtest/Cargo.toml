@@ -1,0 +1,20 @@
+[package]
+name = "backtest"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+name = "backtest"
+path = "src/lib.rs"
+
+[[bin]]
+name = "replay"
+path = "src/bin/replay.rs"
+
+[dependencies]
+algo-core = { path = "../algo-core" }
+storage = { path = "../storage" }
+chrono = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

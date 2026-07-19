@@ -1,0 +1,12 @@
+[package]
+name = "ingestion"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+storage = { path = "../storage" }
+chrono = "0.4"
+csv = "1"
+
+[dev-dependencies]
+tempfile = "3"
