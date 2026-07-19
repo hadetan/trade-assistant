@@ -14,6 +14,7 @@ path = "src/bin/replay.rs"
 [dependencies]
 algo-core = { path = "../algo-core" }
 storage = { path = "../storage" }
+ingestion = { path = "../ingestion" }
 chrono = "0.4"
 
 [dev-dependencies]
