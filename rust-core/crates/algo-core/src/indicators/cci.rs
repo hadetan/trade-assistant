@@ -114,15 +114,6 @@ mod tests {
     }
 }
 
-// A 3-bar window mathematically caps |CCI| at exactly 100 -- for any three
-// values the deviations from their own mean sum to zero, so the two
-// non-last deviations' absolute sum is always >= the last one's, forcing
-// mean-dev >= (2/3)|last - mean| and |CCI| <= 100. That would make the
-// >100/<-100 classification branches dead code. 21 -- the smallest
-// multiple of 3 at or above the brief's stated 20 -- keeps a wide practical
-// range while exactly reproducing the brief's reference value: 7 clean
-// repeats of its 3-bar cycle preserve the cycle's mean and mean-deviation
-// exactly (see tests/cci_test.rs).
 inventory::submit! {
-    crate::registry::AlgorithmFactory(|| Box::new(CciAlgorithm::new(21)))
+    crate::registry::AlgorithmFactory(|| Box::new(CciAlgorithm::new(20)))
 }

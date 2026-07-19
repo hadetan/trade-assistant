@@ -42,20 +42,16 @@ fn cci_id_is_registered() {
 
 #[test]
 fn cci_matches_hand_computed_reference_value() {
-    // Brief's exact 3-bar cycle: TP = [23, 24, 25] from
-    // high=[24,25,26], low=[22,23,24], close=[23,24,25]
-    // ⇒ SMA=24, MeanDev=(1+0+1)/3=2/3 ⇒ CCI=(25-24)/(0.015*2/3)=100.0 exactly.
-    // The registered algo's window is 21 bars (see cci.rs), so this repeats
-    // that exact cycle 7 times -- repetition preserves the cycle's mean and
-    // mean-deviation exactly, and the window still ends on the same last
-    // bar (high=26, low=24, close=25, TP=25), so the reference value carries
-    // over unchanged. This sits exactly on the classifier's +100 boundary,
-    // where an f64 pipeline's ~1e-14 rounding can legitimately land on
-    // either side, so direction isn't asserted here -- see the unambiguous
-    // overbought/oversold cases below for that.
-    let highs: Vec<f64> = [24.0, 25.0, 26.0].iter().cycle().take(21).copied().collect();
-    let lows: Vec<f64> = [22.0, 23.0, 24.0].iter().cycle().take(21).copied().collect();
-    let closes: Vec<f64> = [23.0, 24.0, 25.0].iter().cycle().take(21).copied().collect();
+    // 20-bar window (registered period, see cci.rs), TP rising by 1 each
+    // bar: high=24..43, low=22..41, close=23..42 ⇒ TP=23..42.
+    // mean(TP) = (23+42)/2 = 32.5
+    // mean-dev = mean(|TP_i - 32.5|) = 5.0 (symmetric ramp around the mean)
+    // CCI = (TP_last - mean) / (0.015 * mean-dev) = (42 - 32.5) / (0.015*5.0)
+    //     = 9.5 / 0.075 = 126.66666666666667 (verified against rust_ti's
+    //     pipeline in Python: sum/deviation computed independently).
+    let highs: Vec<f64> = (0..20).map(|i| 24.0 + i as f64).collect();
+    let lows: Vec<f64> = (0..20).map(|i| 22.0 + i as f64).collect();
+    let closes: Vec<f64> = (0..20).map(|i| 23.0 + i as f64).collect();
     let ctx = ctx_from_ohlc(highs, lows, closes);
 
     let algos = registry::all();
@@ -63,7 +59,8 @@ fn cci_matches_hand_computed_reference_value() {
 
     let output = algo.compute(&ctx);
 
-    assert!((output.magnitude - 100.0).abs() < 1e-9);
+    assert!((output.magnitude - 126.66666666666667).abs() < 1e-6);
+    assert_eq!(output.direction, Direction::Bullish);
     assert_eq!(output.computed_at, as_of());
 }
 
