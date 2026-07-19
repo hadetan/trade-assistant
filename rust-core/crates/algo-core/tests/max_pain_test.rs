@@ -76,4 +76,5 @@ fn max_pain_no_ops_without_chain() {
 
     assert_eq!(output.direction, Direction::Neutral);
     assert_eq!(output.magnitude, 0.0);
+    assert_eq!(output.evidence[0], "no options context");
 }
