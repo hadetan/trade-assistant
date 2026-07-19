@@ -1,13 +1,10 @@
 use crate::{Algorithm, AlgoOutput, Direction, Horizon, MarketContext};
 use nalgebra::{DMatrix, DVector};
-use statrs::distribution::{ContinuousCDF, Normal};
 
-/// Engle-Granger is the tested path here (OLS hedge ratio + ADF on the
-/// residual spread). Johansen (a generalized-eigenvalue test that handles
-/// three or more legs) is deliberately NOT implemented: it would ship
-/// untested, and the catalog plan flags it (R3) as a
-/// documented-but-not-yet-validated approximation, so guessing at it here
-/// would risk a silently wrong formula rather than a missing feature.
+/// Engle-Granger (OLS hedge ratio + ADF on the residual spread) is the
+/// tested path here. Johansen is provided separately below as a documented,
+/// not-yet-validated approximation (R3 in the catalog plan) — see
+/// `johansen_eigenvalues_approx`.
 pub struct CointegrationAlgorithm {
     min_lookback: usize,
 }
@@ -54,7 +51,11 @@ impl Algorithm for CointegrationAlgorithm {
         let residual_variance = residuals.iter().map(|r| r * r).sum::<f64>() / df;
 
         let adf_stat = adf_test_statistic(&residuals);
-        let critical_value = Normal::new(0.0, 1.0).unwrap().inverse_cdf(0.05);
+        // MacKinnon Engle-Granger 2-var 5% critical value -- the EG residual
+        // ADF null is not a standard Normal/Dickey-Fuller distribution, it's
+        // shifted well more negative because the cointegrating regression's
+        // own residuals are being tested (Phillips & Ouliaris 1990).
+        let critical_value = -3.34;
         let cointegrated = adf_stat < critical_value;
 
         AlgoOutput {
@@ -149,6 +150,56 @@ fn adf_test_statistic(residuals: &[f64]) -> f64 {
     rho / se_rho
 }
 
+/// Johansen cointegration rank test, for a two-variable system, as a
+/// generalized-eigenvalue approximation.
+///
+/// R3 (docs/superpowers/plans/2026-07-19-algorithm-catalog-plan.md): this is
+/// a documented approximation, **not yet validated** against a reference
+/// implementation (e.g. R's `urca`), and is NOT wired into
+/// `CointegrationAlgorithm::compute` -- Engle-Granger above is the tested
+/// path. Do not route production decisions through this function without
+/// first validating it.
+///
+/// Simplification vs. textbook Johansen: this skips the lagged-difference
+/// pre-whitening step (i.e. treats the system as VAR(1)), so `S00`/`S11`/`S01`
+/// are the raw moment matrices of `ΔY_t` and `Y_(t-1)` rather than residuals
+/// from an auxiliary regression. The eigenvalues of interest solve the
+/// generalized problem `det(λ·S11 - S10·S00⁻¹·S01) = 0`; since `nalgebra`
+/// (without the `nalgebra-lapack` LAPACK bindings) has no dedicated
+/// generalized eigensolver, this reduces it to the standard eigenvalue
+/// problem for `S11⁻¹·S10·S00⁻¹·S01` (valid whenever `S11` is invertible)
+/// and reads off eigenvalues via `nalgebra`'s Schur-decomposition-backed
+/// `complex_eigenvalues`.
+///
+/// Deliberately unreachable outside `#[cfg(test)]` for now (see above) --
+/// `#[allow(dead_code)]` rather than deleting it, since the brief requires
+/// this approximation to exist as reviewable, not-yet-wired code.
+#[allow(dead_code)]
+pub fn johansen_eigenvalues_approx(xs: &[f64], ys: &[f64]) -> Option<Vec<f64>> {
+    let n = xs.len().min(ys.len());
+    if n < 4 {
+        return None;
+    }
+
+    let levels = DMatrix::from_fn(n, 2, |row, col| if col == 0 { xs[row] } else { ys[row] });
+    let t = n - 1;
+    let delta = DMatrix::from_fn(t, 2, |row, col| levels[(row + 1, col)] - levels[(row, col)]);
+    let lagged = levels.rows(0, t).into_owned();
+
+    let t_f = t as f64;
+    let s00 = delta.transpose() * &delta / t_f;
+    let s11 = lagged.transpose() * &lagged / t_f;
+    let s01 = delta.transpose() * &lagged / t_f;
+    let s10 = s01.transpose();
+
+    let s00_inv = s00.try_inverse()?;
+    let s11_inv = s11.try_inverse()?;
+
+    let m = s11_inv * s10 * s00_inv * s01;
+    let eigenvalues = m.complex_eigenvalues();
+    Some(eigenvalues.iter().map(|c| c.re).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +225,53 @@ mod tests {
 
         assert!((output.magnitude - 2.0).abs() < 1e-6);
         assert_eq!(output.direction, Direction::Neutral);
+    }
+
+    #[test]
+    fn independent_non_cointegrated_walks_are_not_flagged_cointegrated() {
+        // Two integer walks built from the digits of pi and e (deterministic,
+        // not rng): their spread's ADF stat lands around -2.3, which is
+        // classic spurious-regression territory -- more negative than the
+        // Normal(0,1) 5% quantile (~-1.6449) but well short of the true
+        // MacKinnon EG 2-var 5% critical value (-3.34). This is exactly the
+        // gap the wrong-critical-value bug lived in: it must assert false.
+        let algo = CointegrationAlgorithm::new(3);
+        let xs = vec![
+            1.0, 0.0, 1.0, 2.0, 3.0, 2.0, 1.0, 2.0, 3.0, 4.0, 3.0, 4.0, 5.0, 6.0, 7.0, 6.0, 7.0,
+            6.0, 5.0, 4.0, 3.0, 2.0, 1.0, 2.0, 3.0, 2.0, 3.0, 2.0, 3.0, 4.0, 5.0, 4.0, 3.0, 2.0,
+            1.0, 0.0, 1.0, 2.0, 3.0, 4.0,
+        ];
+        let ys = vec![
+            1.0, 2.0, 1.0, 0.0, -1.0, 0.0, -1.0, -2.0, -3.0, -4.0, -3.0, -2.0, -3.0, -4.0, -3.0,
+            -4.0, -3.0, -2.0, -1.0, -2.0, -3.0, -4.0, -5.0, -4.0, -5.0, -4.0, -3.0, -2.0, -1.0,
+            -2.0, -3.0, -4.0, -5.0, -6.0, -5.0, -4.0, -3.0, -2.0, -1.0, -2.0,
+        ];
+        let ctx = ctx_with_peer(xs, ys);
+
+        let output = algo.compute(&ctx);
+
+        assert!(
+            output.evidence.iter().any(|line| line == "cointegrated=false"),
+            "evidence was {:?}",
+            output.evidence
+        );
+        assert_eq!(output.confidence, 0.0);
+    }
+
+    #[test]
+    fn johansen_eigenvalues_approx_runs_on_a_well_conditioned_pair() {
+        // R3, not-yet-validated (see doc comment on the function): this only
+        // exercises the reduction-to-standard-eigenproblem path end to end
+        // (keeps it reachable, confirms it doesn't panic/return None on
+        // ordinary input) -- it is NOT a correctness check of the Johansen
+        // statistic itself.
+        let xs = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let ys = vec![2.0, 3.0, 5.0, 4.0, 6.0, 5.0, 7.0, 6.0, 8.0, 9.0];
+
+        let eigenvalues = johansen_eigenvalues_approx(&xs, &ys);
+
+        assert!(eigenvalues.is_some());
+        assert_eq!(eigenvalues.unwrap().len(), 2);
     }
 
     #[test]
