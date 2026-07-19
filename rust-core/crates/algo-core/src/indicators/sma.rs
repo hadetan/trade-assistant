@@ -1,4 +1,4 @@
-use crate::{classify_by_distance, Algorithm, Horizon, MarketContext};
+use crate::{classify_by_distance, relative_magnitude, Algorithm, Horizon, MarketContext};
 
 pub struct SmaAlgorithm {
     period: usize,
@@ -29,7 +29,7 @@ impl Algorithm for SmaAlgorithm {
         let latest_close = *ctx.closes.last().unwrap();
 
         let (direction, confidence) = classify_by_distance(latest_close, sma);
-        let magnitude = ((latest_close - sma) / sma).abs();
+        let magnitude = relative_magnitude(latest_close, sma);
 
         crate::AlgoOutput {
             algo_id: self.id(),
