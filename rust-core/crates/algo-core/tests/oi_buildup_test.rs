@@ -97,7 +97,7 @@ fn no_op_guard_when_options_context_is_absent() {
 
     assert_eq!(output.direction, Direction::Neutral);
     assert_eq!(output.magnitude, 0.0);
-    assert_eq!(output.evidence, vec!["insufficient OHLCV".to_string()]);
+    assert_eq!(output.evidence, vec!["no options context".to_string()]);
 }
 
 #[test]

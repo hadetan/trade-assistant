@@ -29,10 +29,10 @@ impl Algorithm for OiBuildupAlgorithm {
 
     fn compute(&self, ctx: &MarketContext) -> crate::AlgoOutput {
         let Some(options) = ctx.options.as_ref() else {
-            return no_op(ctx);
+            return no_op(ctx, "no options context");
         };
         if ctx.closes.len() < 2 {
-            return no_op(ctx);
+            return no_op(ctx, "insufficient OHLCV");
         }
 
         let prev_close = ctx.closes[ctx.closes.len() - 2];
@@ -70,7 +70,7 @@ impl Algorithm for OiBuildupAlgorithm {
     }
 }
 
-fn no_op(ctx: &MarketContext) -> crate::AlgoOutput {
+fn no_op(ctx: &MarketContext, reason: &str) -> crate::AlgoOutput {
     crate::AlgoOutput {
         algo_id: "oi_buildup",
         symbol: ctx.symbol.clone(),
@@ -79,7 +79,7 @@ fn no_op(ctx: &MarketContext) -> crate::AlgoOutput {
         direction: Direction::Neutral,
         magnitude: 0.0,
         confidence: 0.0,
-        evidence: vec!["insufficient OHLCV".into()],
+        evidence: vec![reason.into()],
         computed_at: ctx.as_of,
     }
 }
