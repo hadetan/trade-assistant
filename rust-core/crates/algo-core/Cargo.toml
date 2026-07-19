@@ -6,3 +6,13 @@ edition.workspace = true
 [dependencies]
 chrono = "0.4"
 inventory = "0.3"
+rust_ti = "2.2.0"
+yata = "0.7.0"
+blackscholes = "0.24.0"
+implied-vol = "2.0.0"
+nalgebra = "0.35"
+statrs = "0.18"
+ort = { version = "2.0.0-rc.12", features = ["download-binaries"], optional = true }
+
+[features]
+kronos = ["dep:ort"]

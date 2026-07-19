@@ -1,6 +1,9 @@
 mod algorithm;
 pub mod confluence;
+mod forecast;
 mod indicators;
+mod options;
+mod quant;
 pub mod registry;
 
 pub use algorithm::{
@@ -8,3 +11,6 @@ pub use algorithm::{
     MarketContext, Timeframe,
 };
 pub use indicators::{EmaAlgorithm, RsiAlgorithm, SmaAlgorithm};
+pub use options::context::{HigherTfSeries, OptionChainSnapshot, OptionsContext, PeerSeries, StrikeRow};
+#[cfg(feature = "kronos")]
+pub use forecast::kronos::{KronosAlgorithm, KronosForecast};

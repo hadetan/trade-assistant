@@ -30,9 +30,12 @@ impl ReplayReport {
         self.per_algo.iter().find(|s| s.algo_id == algo_id)
     }
 
-    /// Per-algorithm hit-rate as the weight map `compute_confluence` accepts. In
-    /// the catalog phase these replace the sidecar handler's equal-weight
-    /// placeholder (design §6.3); here they prove the type-level bridge.
+    /// Per-algorithm hit-rate, returned as an owned `HashMap<String, f64>` since
+    /// `AlgoStats` stores `algo_id` as an owned `String`; callers remap each
+    /// entry (e.g. via `.as_str()`) into the `HashMap<&str, f64>` that
+    /// `compute_confluence` expects. In the catalog phase these replace the
+    /// sidecar handler's equal-weight placeholder (design §6.3); here they
+    /// prove the type-level bridge.
     pub fn hit_rate_weights(&self) -> HashMap<String, f64> {
         self.per_algo.iter().map(|s| (s.algo_id.clone(), s.hit_rate())).collect()
     }
@@ -49,6 +52,10 @@ pub fn run_replay(
     symbol: &str,
     timeframe: Timeframe,
 ) -> ReplayReport {
+    debug_assert!(
+        series.windows(2).all(|w| w[0].ts <= w[1].ts),
+        "run_replay requires ascending-by-ts series"
+    );
     let mut stats: BTreeMap<String, AlgoStats> = BTreeMap::new();
 
     for i in 0..series.len() {
@@ -59,20 +66,31 @@ pub fn run_replay(
         let outputs = run_applicable(algos, &ctx);
 
         let current = series[i].close;
+        if current <= 0.0 {
+            // A zero/negative-close bar (data glitch) would otherwise divide
+            // signed_return by zero/negative below, NaN- or sign-poisoning the
+            // hit-rate weight this feeds into confluence.
+            continue;
+        }
         let future = series[i + horizon_bars].close;
         for output in outputs {
-            let sign = match output.direction {
-                Direction::Bullish => 1.0,
-                Direction::Bearish => -1.0,
-                Direction::Neutral => continue,
-            };
-            let signed_return = sign * (future - current) / current;
+            // Look up (and register) the entry before the direction match so
+            // an algorithm that runs but never calls a direction -- Neutral-
+            // only overlays, non-directional vol estimators -- still gets a
+            // zero-directional_calls row in the report instead of being
+            // absent from it entirely.
             let entry = stats.entry(output.algo_id.to_string()).or_insert_with(|| AlgoStats {
                 algo_id: output.algo_id.to_string(),
                 directional_calls: 0,
                 hits: 0,
                 sum_signed_return: 0.0,
             });
+            let sign = match output.direction {
+                Direction::Bullish => 1.0,
+                Direction::Bearish => -1.0,
+                Direction::Neutral => continue,
+            };
+            let signed_return = sign * (future - current) / current;
             entry.directional_calls += 1;
             if signed_return > 0.0 {
                 entry.hits += 1;

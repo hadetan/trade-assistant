@@ -130,6 +130,94 @@ fn replay_binary_reports_errors_gracefully_instead_of_panicking() {
     assert!(!stderr.contains("panicked at"), "must not print a panic backtrace: {stderr}");
 }
 
+/// Fix 3a regression guard: a non-CSV file dropped in `--ingest-dir` (e.g.
+/// macOS's `.DS_Store`) must be skipped, not fed to the bhavcopy CSV parser
+/// where it would error the whole ingest out.
+#[test]
+fn replay_binary_ignores_non_csv_files_in_ingest_dir() {
+    let ingest_dir = tempdir().unwrap();
+    let lake_dir = tempdir().unwrap();
+
+    let header = "TradDt,FinInstrmTp,TckrSymb,SctySrs,OpnPric,HghPric,LwPric,ClsPric,LastPric,PrvsClsgPric,\
+TtlTradgVol,TtlTrfVal,TtlNbOfTxsExctd";
+    let mut synthetic = String::from(header);
+    synthetic.push('\n');
+    for day in 1..=25u32 {
+        let c = 100.0 + day as f64;
+        synthetic.push_str(&format!(
+            "2024-03-{day:02},STK,INFY,EQ,{c:.2},{c:.2},{c:.2},{c:.2},{c:.2},{c:.2},1000,100000.00,10\n"
+        ));
+    }
+    std::fs::write(ingest_dir.path().join("nse_bhavcopy_synthetic_history.csv"), synthetic).unwrap();
+    // A binary, non-CSV file with no extension at all -- exactly the shape of
+    // a stray `.DS_Store` that a naive "every file in the dir" ingest would
+    // otherwise try (and fail) to parse as bhavcopy CSV.
+    std::fs::write(ingest_dir.path().join(".DS_Store"), [0u8, 1, 2, 3, 255, 254]).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_replay"))
+        .args([
+            "--lake", lake_dir.path().to_str().unwrap(),
+            "--ingest-dir", ingest_dir.path().to_str().unwrap(),
+            "--symbol", "NSE:INFY",
+            "--timeframe", "day",
+            "--source", "bhavcopy",
+            "--horizon", "1",
+        ])
+        .output()
+        .expect("replay binary must run");
+
+    assert!(
+        output.status.success(),
+        "a non-csv file in --ingest-dir must be skipped, not fail the ingest: stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("sma"), "report missing sma: {stdout}");
+}
+
+/// Fix 3b regression guard: the exchange tagged onto each ingested symbol must
+/// be derived from the `--symbol` prefix, not hardcoded to "NSE". A CSV ticker
+/// "INFY" ingested under `--symbol BSE:INFY` must end up stored as
+/// "BSE:INFY", not "NSE:INFY" -- otherwise the CLI's own subsequent
+/// `read_sourced_candles(&symbol, ...)` lookup (using the exact `--symbol`
+/// string) would silently find nothing.
+#[test]
+fn replay_binary_derives_exchange_from_symbol_prefix_not_hardcoded_nse() {
+    let ingest_dir = tempdir().unwrap();
+    let lake_dir = tempdir().unwrap();
+
+    let header = "TradDt,FinInstrmTp,TckrSymb,SctySrs,OpnPric,HghPric,LwPric,ClsPric,LastPric,PrvsClsgPric,\
+TtlTradgVol,TtlTrfVal,TtlNbOfTxsExctd";
+    let mut synthetic = String::from(header);
+    synthetic.push('\n');
+    for day in 1..=25u32 {
+        let c = 100.0 + day as f64;
+        synthetic.push_str(&format!(
+            "2024-04-{day:02},STK,INFY,EQ,{c:.2},{c:.2},{c:.2},{c:.2},{c:.2},{c:.2},1000,100000.00,10\n"
+        ));
+    }
+    std::fs::write(ingest_dir.path().join("bse_bhavcopy_synthetic_history.csv"), synthetic).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_replay"))
+        .args([
+            "--lake", lake_dir.path().to_str().unwrap(),
+            "--ingest-dir", ingest_dir.path().to_str().unwrap(),
+            "--symbol", "BSE:INFY",
+            "--timeframe", "day",
+            "--source", "bhavcopy",
+            "--horizon", "1",
+        ])
+        .output()
+        .expect("replay binary must run");
+
+    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("sma"),
+        "expected a report for BSE:INFY (exchange derived from --symbol), got: {stdout}"
+    );
+}
+
 /// Fix 3 regression guard: an unrecognized `--timeframe` must error out
 /// instead of silently defaulting to `Timeframe::Day`.
 #[test]

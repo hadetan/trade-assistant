@@ -11,13 +11,9 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
         _ => Timeframe::Day,
     };
 
-    let ctx = MarketContext {
-        symbol: request.symbol.clone(),
-        timeframe,
-        horizon: Horizon::Positional,
-        closes: request.closes,
-        as_of: Utc::now(),
-    };
+    // Backtest-only per design Q2: the live sidecar path has no OHLCV/options
+    // feed yet, so every extra field stays empty/None via from_closes.
+    let ctx = MarketContext::from_closes(request.symbol.clone(), timeframe, Horizon::Positional, request.closes, Utc::now());
 
     // Route every compute() call through the one shared lookback gate
     // (algo_core::registry::run_applicable) so the sidecar and the backtest
@@ -71,36 +67,45 @@ mod tests {
 
     #[test]
     fn skips_algorithms_without_enough_lookback_instead_of_panicking() {
-        // 15 closes: enough for rsi (required_lookback = period + 1 = 15),
-        // but short of sma/ema's required_lookback of 20. Before the fix,
+        // 15 closes: enough for every algorithm with required_lookback <= 15
+        // (rsi included) out of the full 34-algorithm default catalog, but
+        // short of e.g. sma/ema's required_lookback of 20. Before the fix,
         // calling sma/ema here underflowed `closes.len() - period` and
         // panicked the whole process.
         let response = handle_request(request(42, closes_seq(15)));
 
         assert_eq!(response.id, 42);
-        assert_eq!(response.algo_results.len(), 1);
-        assert_eq!(response.algo_results[0].algo_id, "rsi");
+        assert_eq!(response.algo_results.len(), 24);
+        assert!(response.algo_results.iter().any(|r| r.algo_id == "rsi"));
     }
 
     #[test]
     fn empty_closes_yields_well_formed_zeroed_response() {
-        // No algorithm has enough lookback for zero closes -- handle_request
-        // must still return a well-formed response, not panic.
+        // Zero closes still satisfies the options/OI overlays' lookback of 0
+        // (bsm_greeks, implied_vol, max_pain, oi_buildup, put_call_ratio),
+        // which no-op to Neutral internally on the missing options context
+        // rather than being filtered out by run_applicable. Every
+        // closes-based algorithm is filtered out, so handle_request must
+        // still return a well-formed response, not panic.
         let response = handle_request(request(7, vec![]));
 
         assert_eq!(response.id, 7);
-        assert!(response.algo_results.is_empty());
+        assert_eq!(response.algo_results.len(), 5);
+        assert!(response.algo_results.iter().all(|r| r.direction == "Neutral"));
         assert_eq!(response.confluence.bullish_count, 0);
         assert_eq!(response.confluence.bearish_count, 0);
-        assert_eq!(response.confluence.neutral_count, 0);
-        assert_eq!(response.confluence.weighted_vote, 0.0);
+        assert_eq!(response.confluence.neutral_count, 5);
         assert!(!response.confluence.weighted_vote.is_nan());
     }
 
     #[test]
-    fn sufficient_closes_runs_all_registered_algorithms() {
+    fn sufficient_closes_runs_every_algorithm_applicable_at_that_lookback() {
+        // 21 closes clears the 3 Phase-1 algorithms (rsi/sma/ema, lookback
+        // <= 20) plus every catalog algorithm requiring <= 21 bars; adx (28),
+        // garch (30), macd (35), and ichimoku (52) are the only default-
+        // catalog algorithms still excluded at this length.
         let response = handle_request(request(1, closes_seq(21)));
 
-        assert_eq!(response.algo_results.len(), 3);
+        assert_eq!(response.algo_results.len(), 30);
     }
 }

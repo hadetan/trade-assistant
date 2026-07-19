@@ -23,6 +23,40 @@ fn context_at_reveals_only_up_to_the_frontier() {
     assert_eq!(ctx.symbol, "NSE:TEST");
 }
 
+/// Distinct-per-field candles (unlike `series()`'s open==high==low==close
+/// shortcut) so a future-bar leak in any one series shows up as a wrong
+/// value rather than a coincidental match.
+#[test]
+fn context_at_frontier_bounds_every_ohlcv_series() {
+    let base = 1_700_000_000;
+    let s: Vec<Candle> = (0..5)
+        .map(|i| Candle {
+            ts: base + i as i64 * 86_400,
+            open: 100.0 + i as f64,
+            high: 200.0 + i as f64,
+            low: 300.0 + i as f64,
+            close: 400.0 + i as f64,
+            volume: 500 + i as i64,
+        })
+        .collect();
+    let frontier_index = 2;
+    let ctx = context_at(&s, frontier_index, "NSE:TEST", Timeframe::Day, Horizon::Positional);
+
+    let expected_len = frontier_index + 1;
+    assert_eq!(ctx.closes.len(), expected_len);
+    assert_eq!(ctx.opens.len(), expected_len);
+    assert_eq!(ctx.highs.len(), expected_len);
+    assert_eq!(ctx.lows.len(), expected_len);
+    assert_eq!(ctx.volumes.len(), expected_len);
+    assert_eq!(ctx.timestamps.len(), expected_len);
+
+    assert_eq!(*ctx.opens.last().unwrap(), s[frontier_index].open);
+    assert_eq!(*ctx.highs.last().unwrap(), s[frontier_index].high);
+    assert_eq!(*ctx.lows.last().unwrap(), s[frontier_index].low);
+    assert_eq!(*ctx.volumes.last().unwrap(), s[frontier_index].volume as f64);
+    assert_eq!(*ctx.timestamps.last().unwrap(), s[frontier_index].ts);
+}
+
 /// A spy algorithm asserting the anti-lookahead invariant across a full manual
 /// walk: it must never observe a future bar. If windowing ever leaked bar i+1
 /// (or the whole series) into an earlier decision, the poison value would appear

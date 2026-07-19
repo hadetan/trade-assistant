@@ -1,3 +1,4 @@
+use crate::options::context::{HigherTfSeries, OptionChainSnapshot, OptionsContext, PeerSeries};
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,18 +23,66 @@ pub enum Timeframe {
 }
 
 /// What an `Algorithm::compute()` call needs. `closes` is the only series
-/// Phase 1's indicators read; later phases extend this with open/high/low/
-/// volume/oi as new algorithms need them.
+/// every algorithm can rely on; `opens`/`highs`/`lows`/`volumes`/`timestamps`
+/// are aligned 1:1 with `closes` when the caller has OHLCV data (backtest),
+/// else empty (e.g. the closes-only live sidecar path, Q2) -- so any
+/// algorithm reading them MUST guard on their length first (see the no-op
+/// guard convention in the algorithm-catalog plan). `options`/`chain`/`peer`/
+/// `higher_tf` are likewise absent unless the caller has that context.
 pub struct MarketContext {
     pub symbol: String,
     pub timeframe: Timeframe,
     pub horizon: Horizon,
     pub closes: Vec<f64>,
+    pub opens: Vec<f64>,
+    pub highs: Vec<f64>,
+    pub lows: Vec<f64>,
+    pub volumes: Vec<f64>,
+    /// Absolute Unix epoch per bar (e.g. session-anchored VWAP resets).
+    pub timestamps: Vec<i64>,
+    /// Greeks/IV/OI-buildup input.
+    pub options: Option<OptionsContext>,
+    /// PCR/Max-Pain input.
+    pub chain: Option<OptionChainSnapshot>,
+    /// Cointegration/OU spread's second leg.
+    pub peer: Option<PeerSeries>,
+    /// Forward-filled higher-timeframe closes for MTF confluence.
+    pub higher_tf: Option<HigherTfSeries>,
     /// The evaluation instant: the live wall-clock at the I/O boundary in
     /// production, or the replay frontier's simulated time during backtest.
     /// Supplied by the caller so `compute()` stays pure and replayed
     /// decisions carry their historical timestamp, not today's.
     pub as_of: DateTime<Utc>,
+}
+
+impl MarketContext {
+    /// Preserves the Phase-1 shape (closes-only): empty OHLCV series and
+    /// `None` for every options/peer/MTF extra. For callers and tests that
+    /// only ever populated `closes`.
+    pub fn from_closes(
+        symbol: impl Into<String>,
+        timeframe: Timeframe,
+        horizon: Horizon,
+        closes: Vec<f64>,
+        as_of: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            symbol: symbol.into(),
+            timeframe,
+            horizon,
+            closes,
+            opens: Vec::new(),
+            highs: Vec::new(),
+            lows: Vec::new(),
+            volumes: Vec::new(),
+            timestamps: Vec::new(),
+            options: None,
+            chain: None,
+            peer: None,
+            higher_tf: None,
+            as_of,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

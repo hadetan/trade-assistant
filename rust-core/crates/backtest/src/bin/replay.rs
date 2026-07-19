@@ -3,6 +3,7 @@ use backtest::engine::run_replay;
 use ingestion::importer::import_bhavcopy_files;
 use std::collections::HashMap;
 use std::error::Error;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use storage::CandleStore;
 
@@ -39,6 +40,13 @@ fn parse_timeframe(s: &str) -> Result<Timeframe, Box<dyn Error>> {
     }
 }
 
+fn parse_symbol(s: &str) -> Result<(&str, &str), Box<dyn Error>> {
+    match s.split_once(':') {
+        Some((exchange, ticker)) if !exchange.is_empty() && !ticker.is_empty() => Ok((exchange, ticker)),
+        _ => Err(format!("--symbol must be EXCHANGE:TICKER (e.g. NSE:INFY), got '{s}'").into()),
+    }
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args = parse_args()?;
     let lake = PathBuf::from(arg(&args, "lake")?);
@@ -51,6 +59,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     // Validate up front so a typo'd --timeframe fails loudly instead of
     // silently defaulting while `read_sourced_candles` reads the raw string.
     let timeframe = parse_timeframe(&timeframe_str)?;
+    // A malformed --symbol (missing exchange or ticker) would otherwise be
+    // ingested under an invalid exchange prefix; reject it here.
+    let (exchange, _ticker) = parse_symbol(&symbol)?;
 
     let store = CandleStore::open(&lake).map_err(|e| format!("cannot open --lake '{}': {e}", lake.display()))?;
 
@@ -61,13 +72,13 @@ fn run() -> Result<(), Box<dyn Error>> {
         for entry in entries {
             let entry = entry.map_err(|e| format!("cannot read entry in --ingest-dir '{ingest_dir}': {e}"))?;
             let path = entry.path();
-            if path.is_file() {
+            if path.is_file() && path.extension() == Some(OsStr::new("csv")) {
                 let bytes = std::fs::read(&path)
                     .map_err(|e| format!("cannot read bhavcopy file '{}': {e}", path.display()))?;
                 files.push(bytes);
             }
         }
-        let n = import_bhavcopy_files(&store, "NSE", &files)
+        let n = import_bhavcopy_files(&store, exchange, &files)
             .map_err(|e| format!("failed to import bhavcopy files from '{ingest_dir}': {e}"))?;
         eprintln!("ingested {n} candles from {ingest_dir}");
     }
@@ -94,5 +105,22 @@ fn main() {
     if let Err(e) = run() {
         eprintln!("error: {e}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_symbol;
+
+    #[test]
+    fn accepts_exchange_and_ticker() {
+        assert_eq!(parse_symbol("NSE:INFY").unwrap(), ("NSE", "INFY"));
+    }
+
+    #[test]
+    fn rejects_symbols_missing_exchange_or_ticker() {
+        for bad in ["INFY", ":INFY", "NSE:", ":", ""] {
+            assert!(parse_symbol(bad).is_err(), "{bad:?} should be rejected");
+        }
     }
 }
