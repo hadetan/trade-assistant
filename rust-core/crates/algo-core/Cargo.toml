@@ -16,3 +16,8 @@ ort = { version = "2.0.0-rc.12", features = ["download-binaries"], optional = tr
 
 [features]
 kronos = ["dep:ort"]
+ttm = ["dep:ort"]
+chronos = ["dep:ort"]
+moirai = ["dep:ort"]
+forecasters = ["ttm", "chronos", "moirai"]
+all-forecasters = ["kronos", "ttm", "chronos", "moirai"]
