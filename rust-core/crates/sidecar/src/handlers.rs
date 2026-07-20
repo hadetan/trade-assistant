@@ -18,7 +18,16 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
     // Route every compute() call through the one shared lookback gate
     // (algo_core::registry::run_applicable) so the sidecar and the backtest
     // engine cannot drift on the insufficient-history contract.
-    let algos = registry::all();
+    //
+    // registry::all() alone misses feature-gated forecasters in a release
+    // binary (see registry::ensure_forecasters_linked's doc comment), so the
+    // real algo list is the union of both, deduped by id.
+    let mut algos = registry::all();
+    for extra in registry::ensure_forecasters_linked() {
+        if !algos.iter().any(|a| a.id() == extra.id()) {
+            algos.push(extra);
+        }
+    }
     let outputs = run_applicable(&algos, &ctx);
 
     // Phase 1 uses equal weights for every algorithm; a later phase's

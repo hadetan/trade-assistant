@@ -89,7 +89,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let algos = registry::all();
+    let mut algos = registry::all();
+    for extra in registry::ensure_forecasters_linked() {
+        if !algos.iter().any(|a| a.id() == extra.id()) {
+            algos.push(extra);
+        }
+    }
     let report = run_replay(&series, &algos, horizon, &symbol, timeframe);
 
     for stat in &report.per_algo {
