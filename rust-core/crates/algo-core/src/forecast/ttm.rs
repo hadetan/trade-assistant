@@ -35,16 +35,13 @@ use std::sync::{Arc, OnceLock};
 
 use ort::value::TensorRef;
 
+use crate::forecast::assets::assets_base_dir;
 use crate::forecast::framework::{ForecastSummary, ForecasterAdapter, ForecasterSessions};
 use crate::forecast::ttm_math::{
     assemble_input, available_checkpoints, ensemble_summary, extract_forecast, forecast_return, CheckpointResult,
     PRED_LEN, REQUIRED_LOOKBACK,
 };
 use crate::{Horizon, MarketContext};
-
-const TTM_512_ONNX: &[u8] = include_bytes!("../../assets/ttm/ttm_512.onnx");
-const TTM_1024_ONNX: &[u8] = include_bytes!("../../assets/ttm/ttm_1024.onnx");
-const TTM_1536_ONNX: &[u8] = include_bytes!("../../assets/ttm/ttm_1536.onnx");
 
 fn session_name(context_len: usize) -> &'static str {
     match context_len {
@@ -56,19 +53,20 @@ fn session_name(context_len: usize) -> &'static str {
 }
 
 // `registry::all()` re-invokes every `AlgorithmFactory` closure -- including
-// `TtmAdapter::new` -- on every call, but the three bundled graphs must be
+// `TtmAdapter::new` -- on every call, but the three on-disk graphs must be
 // parsed AT MOST ONCE per process. `ort::Session` isn't `Clone`, so the
-// loaded bundle is parked behind a process-wide singleton and shared via
+// loaded sessions are parked behind a process-wide singleton and shared via
 // `Arc` rather than reloaded or cloned -- same pattern as `KronosSessions`.
 static SESSIONS: OnceLock<Arc<ForecasterSessions>> = OnceLock::new();
 
 fn shared_sessions() -> Arc<ForecasterSessions> {
     SESSIONS
         .get_or_init(|| {
-            Arc::new(ForecasterSessions::load(&[
-                (session_name(512), TTM_512_ONNX),
-                (session_name(1024), TTM_1024_ONNX),
-                (session_name(1536), TTM_1536_ONNX),
+            let base = assets_base_dir().join("ttm");
+            Arc::new(ForecasterSessions::load_from_files(&[
+                (session_name(512), base.join("ttm_512.onnx")),
+                (session_name(1024), base.join("ttm_1024.onnx")),
+                (session_name(1536), base.join("ttm_1536.onnx")),
             ]))
         })
         .clone()
@@ -80,7 +78,7 @@ pub struct TtmAdapter {
 
 impl TtmAdapter {
     /// Cheap: an `Arc` clone of the process-wide singleton, loading the
-    /// three bundled ONNX graphs only on the very first call across the
+    /// three on-disk ONNX graphs only on the very first call across the
     /// process.
     pub fn new() -> Self {
         Self { sessions: shared_sessions() }

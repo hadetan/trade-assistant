@@ -25,6 +25,7 @@ use std::sync::{Arc, OnceLock};
 
 use ort::value::TensorRef;
 
+use crate::forecast::assets::assets_base_dir;
 use crate::forecast::chronos_math::{
     build_context, forecast_return, horizon_scaled_volatility, read_quantiles,
     recent_log_return_volatility, target_step, CONTEXT_LENGTH, NUM_QUANTILES, PREDICTION_LENGTH,
@@ -34,7 +35,6 @@ use crate::forecast::framework::{
 };
 use crate::{Horizon, MarketContext};
 
-const CHRONOS_ONNX: &[u8] = include_bytes!("../../assets/chronos/chronos_bolt_small.onnx");
 const SESSION_NAME: &str = "chronos";
 
 // `registry::all()` re-invokes every `AlgorithmFactory` closure -- including
@@ -46,7 +46,10 @@ static SESSIONS: OnceLock<Arc<ForecasterSessions>> = OnceLock::new();
 
 fn shared_sessions() -> Arc<ForecasterSessions> {
     SESSIONS
-        .get_or_init(|| Arc::new(ForecasterSessions::load(&[(SESSION_NAME, CHRONOS_ONNX)])))
+        .get_or_init(|| {
+            let path = assets_base_dir().join("chronos").join("chronos_bolt_small.onnx");
+            Arc::new(ForecasterSessions::load_from_files(&[(SESSION_NAME, path)]))
+        })
         .clone()
 }
 
@@ -72,7 +75,7 @@ pub struct ChronosAdapter {
 
 impl ChronosAdapter {
     /// Cheap: an `Arc` clone of the process-wide singleton, loading the
-    /// bundled ONNX graph only on the very first call across the process.
+    /// on-disk ONNX graph only on the very first call across the process.
     pub fn new() -> Self {
         Self { sessions: shared_sessions() }
     }

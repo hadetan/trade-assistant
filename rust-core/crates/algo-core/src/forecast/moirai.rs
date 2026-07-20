@@ -27,6 +27,7 @@ use std::sync::{Arc, OnceLock};
 
 use ort::value::TensorRef;
 
+use crate::forecast::assets::assets_base_dir;
 use crate::forecast::framework::{
     conviction_from_quantile_spread, ForecastSummary, ForecasterAdapter, ForecasterSessions,
 };
@@ -35,7 +36,6 @@ use crate::forecast::moirai_math::{
 };
 use crate::{Horizon, MarketContext};
 
-const MOIRAI_ONNX: &[u8] = include_bytes!("../../assets/moirai/moirai_2_small.onnx");
 const SESSION_NAME: &str = "moirai";
 
 /// The model's own reconstructed `[1, NUM_PREDICT_TOKEN, NUM_QUANTILES,
@@ -61,7 +61,12 @@ pub struct MoiraiForecast {
 static SESSIONS: OnceLock<Arc<ForecasterSessions>> = OnceLock::new();
 
 fn shared_sessions() -> Arc<ForecasterSessions> {
-    SESSIONS.get_or_init(|| Arc::new(ForecasterSessions::load(&[(SESSION_NAME, MOIRAI_ONNX)]))).clone()
+    SESSIONS
+        .get_or_init(|| {
+            let path = assets_base_dir().join("moirai").join("moirai_2_small.onnx");
+            Arc::new(ForecasterSessions::load_from_files(&[(SESSION_NAME, path)]))
+        })
+        .clone()
 }
 
 pub struct MoiraiAdapter {
@@ -70,7 +75,7 @@ pub struct MoiraiAdapter {
 
 impl MoiraiAdapter {
     /// Cheap: an `Arc` clone of the process-wide singleton, loading the
-    /// bundled ONNX graph only on the very first call across the process.
+    /// on-disk ONNX graph only on the very first call across the process.
     pub fn new() -> Self {
         Self { sessions: shared_sessions() }
     }

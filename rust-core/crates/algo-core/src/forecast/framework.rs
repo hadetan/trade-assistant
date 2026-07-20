@@ -11,6 +11,7 @@
 //! allow is needed here anymore -- see individual items below for the few
 //! that are only reachable under a subset of the three features.
 
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use ort::session::Session;
@@ -27,18 +28,29 @@ pub struct ForecasterSessions {
 }
 
 impl ForecasterSessions {
-    /// Loads every `(name, bytes)` pair via `commit_from_memory`. Panics on
-    /// failure: a missing/corrupt bundled asset is a packaging bug (the
-    /// bytes are compiled in via `include_bytes!`), not a runtime condition
-    /// a caller could recover from -- same contract as `KronosSessions::load`.
-    pub fn load(graphs: &[(&'static str, &'static [u8])]) -> Self {
+    /// Loads every `(name, path)` pair via `commit_from_file`, reading the
+    /// `.onnx` bytes from disk instead of the previous `include_bytes!`
+    /// embedding. Panics on failure: a missing/corrupt on-disk asset is a
+    /// packaging/deployment bug, not a runtime condition a caller could
+    /// recover from -- same fail-fast contract as the old
+    /// `commit_from_memory`-based `load`, just with a path in the message
+    /// plus an actionable hint (assets are checked in via Git LFS, so a
+    /// shallow clone or missed `git lfs pull` is the likely cause).
+    pub fn load_from_files(graphs: &[(&'static str, PathBuf)]) -> Self {
         let sessions = graphs
             .iter()
-            .map(|&(name, bytes)| {
+            .map(|(name, path)| {
                 let session = Session::builder()
-                    .and_then(|mut builder| builder.commit_from_memory(bytes))
-                    .unwrap_or_else(|e| panic!("forecaster: failed to load bundled asset {name}: {e}"));
-                (name, Mutex::new(session))
+                    .and_then(|mut builder| builder.commit_from_file(path))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "forecaster: failed to load asset {name} from {}: {e} \
+                             (ensure the ONNX assets exist -- try `git lfs pull`, or set \
+                             ALGO_CORE_ASSETS_DIR to a directory that has them)",
+                            path.display()
+                        )
+                    });
+                (*name, Mutex::new(session))
             })
             .collect();
         Self { sessions }
@@ -373,7 +385,7 @@ mod tests {
 
     #[test]
     fn forecaster_sessions_get_panics_on_unknown_name() {
-        let sessions = ForecasterSessions::load(&[]);
+        let sessions = ForecasterSessions::load_from_files(&[]);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sessions.get("missing")));
         assert!(result.is_err());
     }

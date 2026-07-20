@@ -61,16 +61,12 @@ use chrono::DateTime;
 use ort::session::Session;
 use ort::value::TensorRef;
 
+use crate::forecast::assets::assets_base_dir;
 use crate::forecast::kronos_math::{
     calendar_features, denormalize, derive_amount, greedy_argmax, padding_mask, right_align,
     timeframe_step, zscore_normalize, CLIP, CTX_LEN, D_MODEL, FEATURES, MAX_CONTEXT, PRED_LEN,
 };
 use crate::{AlgoOutput, Algorithm, Direction, Horizon, MarketContext};
-
-const TOKENIZER_ENCODE_ONNX: &[u8] = include_bytes!("../../assets/kronos/tokenizer_encode.onnx");
-const TOKENIZER_DECODE_ONNX: &[u8] = include_bytes!("../../assets/kronos/tokenizer_decode.onnx");
-const DECODE_S1_ONNX: &[u8] = include_bytes!("../../assets/kronos/decode_s1.onnx");
-const DECODE_S2_ONNX: &[u8] = include_bytes!("../../assets/kronos/decode_s2.onnx");
 
 /// The model's own reconstructed OHLCV forecast + greedy token trace, ahead
 /// of this Algorithm's `AlgoOutput` summarization. Exposed beyond the
@@ -101,21 +97,30 @@ struct KronosSessions {
 }
 
 impl KronosSessions {
-    /// Loads all four bundled ONNX graphs. Panics on failure: a missing or
-    /// corrupt asset is a packaging bug (the four files are compiled into
-    /// the binary via `include_bytes!`), not a runtime condition any caller
-    /// could recover from.
+    /// Loads all four ONNX graphs from `assets/kronos/` on disk. Panics on
+    /// failure: a missing or corrupt asset is a packaging/deployment bug
+    /// (assets are checked in via Git LFS), not a runtime condition any
+    /// caller could recover from.
     fn load() -> Self {
-        let load = |bytes: &[u8], name: &str| {
+        let base = assets_base_dir().join("kronos");
+        let load = |file: &str| {
+            let path = base.join(file);
             Session::builder()
-                .and_then(|mut b| b.commit_from_memory(bytes))
-                .unwrap_or_else(|e| panic!("kronos: failed to load bundled asset {name}: {e}"))
+                .and_then(|mut b| b.commit_from_file(&path))
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "kronos: failed to load asset {file} from {}: {e} \
+                         (ensure the ONNX assets exist -- try `git lfs pull`, or set \
+                         ALGO_CORE_ASSETS_DIR to a directory that has them)",
+                        path.display()
+                    )
+                })
         };
         Self {
-            tokenizer_encode: Mutex::new(load(TOKENIZER_ENCODE_ONNX, "tokenizer_encode.onnx")),
-            tokenizer_decode: Mutex::new(load(TOKENIZER_DECODE_ONNX, "tokenizer_decode.onnx")),
-            decode_s1: Mutex::new(load(DECODE_S1_ONNX, "decode_s1.onnx")),
-            decode_s2: Mutex::new(load(DECODE_S2_ONNX, "decode_s2.onnx")),
+            tokenizer_encode: Mutex::new(load("tokenizer_encode.onnx")),
+            tokenizer_decode: Mutex::new(load("tokenizer_decode.onnx")),
+            decode_s1: Mutex::new(load("decode_s1.onnx")),
+            decode_s2: Mutex::new(load("decode_s2.onnx")),
         }
     }
 }
@@ -137,7 +142,7 @@ pub struct KronosAlgorithm {
 
 impl KronosAlgorithm {
     /// Cheap: an `Arc` clone of the process-wide singleton, loading the four
-    /// bundled ONNX graphs only on the very first call across the process.
+    /// on-disk ONNX graphs only on the very first call across the process.
     pub fn new() -> Self {
         Self { sessions: shared_sessions() }
     }

@@ -1,3 +1,6 @@
+#[cfg(any(feature = "kronos", feature = "ttm", feature = "chronos", feature = "moirai"))]
+pub(crate) mod assets;
+
 #[cfg(feature = "kronos")]
 pub(crate) mod kronos;
 #[cfg(feature = "kronos")]
