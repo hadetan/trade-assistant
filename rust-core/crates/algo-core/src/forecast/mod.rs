@@ -7,16 +7,16 @@ mod kronos_math;
 pub(crate) mod framework;
 
 #[cfg(feature = "ttm")]
-mod ttm;
+pub(crate) mod ttm;
 #[cfg(feature = "ttm")]
 mod ttm_math;
 
 #[cfg(feature = "chronos")]
-mod chronos;
+pub(crate) mod chronos;
 #[cfg(feature = "chronos")]
 mod chronos_math;
 
 #[cfg(feature = "moirai")]
-mod moirai;
+pub(crate) mod moirai;
 #[cfg(feature = "moirai")]
 mod moirai_math;
