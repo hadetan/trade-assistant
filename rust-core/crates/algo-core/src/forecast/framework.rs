@@ -5,12 +5,11 @@
 //! itself is not refactored onto this, it stays as its own four-graph
 //! pipeline.
 //!
-//! This task lands the framework ahead of its consumers: `ttm.rs`,
-//! `chronos.rs`, and `moirai.rs` are still empty stubs (Tasks 1-3 fill them
-//! in), so nothing in this build actually constructs a `ForecasterSessions`
-//! or a `ForecastAlgorithm` outside this module's own tests -- hence the
-//! blanket allow rather than per-item annotations.
-#![allow(dead_code)]
+//! `ttm.rs`, `chronos.rs`, and `moirai.rs` now all consume this scaffolding
+//! (`ForecasterSessions`, `ForecasterAdapter`, `ForecastAlgorithm`,
+//! `summary_to_output`/`no_op` via `compute()`), so no blanket `dead_code`
+//! allow is needed here anymore -- see individual items below for the few
+//! that are only reachable under a subset of the three features.
 
 use std::sync::Mutex;
 
@@ -95,6 +94,13 @@ fn model_opinion_line(reason: &str) -> String {
 /// decreasing as the ratio grows, landing in `(0, 1]` by construction; the
 /// explicit clamp is a defensive backstop for `f64` edge cases (e.g. NaN
 /// inputs), not load-bearing for the normal range.
+///
+/// Consumed by `chronos.rs` and `moirai.rs`; `ttm.rs` derives its own
+/// ensemble-agreement conviction instead (`ttm_math::ensemble_summary`), so
+/// under `--features ttm` alone (no `chronos`/`moirai`) this has no
+/// non-test caller in the crate -- hence the targeted allow rather than
+/// leaving it for the removed blanket one.
+#[allow(dead_code)]
 pub fn conviction_from_quantile_spread(q10: f64, q90: f64, median: f64, recent_vol: f64) -> f64 {
     let spread = (q90 - q10).abs();
     let scale = (median.abs() * recent_vol.abs()).max(1e-12);
