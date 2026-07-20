@@ -50,10 +50,21 @@ fn shared_sessions() -> Arc<ForecasterSessions> {
         .clone()
 }
 
-/// A single real close is enough to run the graph (the rest of the 2048-wide
-/// context window is NaN-padded, per `chronos_math::build_context`), but
-/// zero closes leaves no `last_close` to anchor a forecast return against.
+/// A single real close is enough to run the graph without panicking (the
+/// rest of the 2048-wide context window is NaN-padded, per
+/// `chronos_math::build_context`) -- zero closes is the only hard floor,
+/// since that leaves no `last_close` to anchor a forecast return against.
 const MIN_LOOKBACK: usize = 1;
+
+/// `registry::run_applicable`'s advertised floor, deliberately higher than
+/// `MIN_LOOKBACK`: the feasibility spike
+/// (`docs/superpowers/spikes/2026-07-20-chronos-onnx-feasibility.md` §4)
+/// only numerically cross-validated the NaN-padded path down to 500 real
+/// bars, not down to 1 -- below that, the model still runs (no panic/NaN),
+/// it's just an unvalidated input shape for registry-driven callers to lean
+/// on. A direct `compute()` call (e.g. in tests below) still exercises
+/// `MIN_LOOKBACK` and works fine on far thinner histories.
+const REGISTRY_REQUIRED_LOOKBACK: usize = 500;
 
 pub struct ChronosAdapter {
     sessions: Arc<ForecasterSessions>,
@@ -79,7 +90,7 @@ impl ForecasterAdapter for ChronosAdapter {
     }
 
     fn required_lookback(&self) -> usize {
-        MIN_LOOKBACK
+        REGISTRY_REQUIRED_LOOKBACK
     }
 
     fn applicable_horizons(&self) -> &'static [Horizon] {
