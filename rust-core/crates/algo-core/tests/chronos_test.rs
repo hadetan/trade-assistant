@@ -166,6 +166,99 @@ fn chronos_direction_is_bullish_on_a_monotone_up_synthetic_window() {
     }
 }
 
+/// Deterministic xorshift64 bit/unit-interval stream -- only used below to
+/// desynchronize a synthetic close path from a clean period, never a
+/// reimplementation of any adapter/framework math.
+struct Xorshift64(u64);
+
+impl Xorshift64 {
+    fn step(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn next_bit(&mut self) -> bool {
+        self.step() & 1 == 1
+    }
+
+    fn next_unit(&mut self) -> f64 {
+        (self.step() % 1_000_000) as f64 / 1_000_000.0
+    }
+}
+
+/// Fix 1 (code review, `task-7-brief.md`): the existing regression tests
+/// above pin `output.confidence` against a *fixed* fixture value, but never
+/// exercise `conviction_from_quantile_spread`'s actual direction of effect --
+/// a real gap, since a constant-confidence bug (e.g. a dropped `recent_vol`
+/// term) would still pass every assertion above. This drives `compute()` on
+/// two same-length, same-amplitude synthetic close paths through the real
+/// `ChronosAdapter` (via `registry::all()`, like every other test in this
+/// file) and asserts the model's own predicted quantile band comes out
+/// tighter -- and hence more confident -- for the more learnable of the two.
+///
+/// `regular` is a clean period-2 +-5% oscillation (perfectly predictable one
+/// step ahead); `irregular` matches its amplitude budget (jittered `0.6x` to
+/// `1.4x` per step, deterministic xorshift-driven sign/magnitude) but breaks
+/// the short period, so the model has genuinely less to go on. Both paths
+/// carry comparable realized volatility (`chronos_math::
+/// recent_log_return_volatility`), which is what makes this a fair test of
+/// the model's own quantile-spread confidence rather than a restatement of
+/// "high recent vol implies low confidence" -- empirically, `regular` scores
+/// roughly 2x `irregular`'s confidence at both horizons (verified against
+/// the live ONNX graph before landing this assertion, not assumed).
+#[test]
+fn chronos_conviction_is_higher_for_a_tighter_predicted_band_than_a_wider_one() {
+    let as_of = "2024-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+    let n = 300;
+    let amp = 0.05;
+
+    let mut regular = Vec::with_capacity(n);
+    let mut level = 1000.0f64;
+    for i in 0..n {
+        level *= if i % 2 == 0 { 1.0 + amp } else { 1.0 / (1.0 + amp) };
+        regular.push(level);
+    }
+
+    let mut rng = Xorshift64(0xDEAD_BEEF_1234_5678);
+    let mut irregular = Vec::with_capacity(n);
+    let mut level = 1000.0f64;
+    for _ in 0..n {
+        let up = rng.next_bit();
+        let mag = amp * (0.6 + 0.8 * rng.next_unit());
+        level *= if up { 1.0 + mag } else { 1.0 / (1.0 + mag) };
+        irregular.push(level);
+    }
+
+    for horizon in [Horizon::Intraday, Horizon::Positional] {
+        let regular_ctx =
+            MarketContext::from_closes("NSE:CHRONOS_TIGHT", Timeframe::Day, horizon, regular.clone(), as_of);
+        let irregular_ctx =
+            MarketContext::from_closes("NSE:CHRONOS_WIDE", Timeframe::Day, horizon, irregular.clone(), as_of);
+
+        let regular_output = chronos_algo().compute(&regular_ctx);
+        let irregular_output = chronos_algo().compute(&irregular_ctx);
+
+        for output in [&regular_output, &irregular_output] {
+            assert!(
+                (0.0..=1.0).contains(&output.confidence),
+                "confidence must be in [0,1]: {}",
+                output.confidence
+            );
+            assert!(output.evidence[0].starts_with("model opinion:"));
+        }
+
+        assert!(
+            regular_output.confidence > irregular_output.confidence,
+            "horizon {horizon:?}: tighter (regular) band should be more confident than wider (irregular): \
+             regular={:.6} irregular={:.6}",
+            regular_output.confidence,
+            irregular_output.confidence
+        );
+    }
+}
+
 #[test]
 fn chronos_no_ops_on_empty_close_history() {
     let as_of = "2020-01-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
