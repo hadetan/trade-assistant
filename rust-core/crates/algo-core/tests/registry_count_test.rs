@@ -145,3 +145,41 @@ fn registry_contains_exactly_the_catalog_for_enabled_forecaster_features() {
     assert_eq!(algos.len(), expected_ids.len());
     assert_eq!(ids, expected_ids);
 }
+
+/// `ensure_forecasters_linked()` exists to survive release dead-code-
+/// stripping (see its doc comment in registry.rs); under the default build
+/// (no forecaster feature enabled) it must construct nothing.
+#[test]
+fn ensure_forecasters_linked_is_empty_without_any_forecaster_feature() {
+    if !cfg!(any(feature = "kronos", feature = "ttm", feature = "chronos", feature = "moirai")) {
+        assert!(algo_core::registry::ensure_forecasters_linked().is_empty());
+    }
+}
+
+/// Reproduces the exact union-and-dedup-by-id the `replay`/`sidecar` binaries
+/// build their real algo list from, and asserts every forecaster enabled via
+/// Cargo features actually reaches that list -- the mechanism the release
+/// bins depend on, without loading the app itself.
+#[test]
+fn binary_algo_list_union_contains_every_enabled_forecaster() {
+    let mut algos = algo_core::registry::all();
+    for extra in algo_core::registry::ensure_forecasters_linked() {
+        if !algos.iter().any(|a| a.id() == extra.id()) {
+            algos.push(extra);
+        }
+    }
+    let ids: Vec<&str> = algos.iter().map(|a| a.id()).collect();
+
+    if cfg!(feature = "kronos") {
+        assert!(ids.contains(&"kronos"));
+    }
+    if cfg!(feature = "ttm") {
+        assert!(ids.contains(&"ttm"));
+    }
+    if cfg!(feature = "chronos") {
+        assert!(ids.contains(&"chronos"));
+    }
+    if cfg!(feature = "moirai") {
+        assert!(ids.contains(&"moirai"));
+    }
+}
