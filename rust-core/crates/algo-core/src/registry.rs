@@ -43,6 +43,22 @@ pub fn ensure_forecasters_linked() -> Vec<Box<dyn Algorithm>> {
     v
 }
 
+/// The real algo list a release binary must run against: `all()` unioned
+/// with `ensure_forecasters_linked()`, deduped by id. Every `compute()`
+/// caller outside this crate's tests (the sidecar handler, the backtest
+/// replay bin) needs this union rather than `all()` alone, per
+/// `ensure_forecasters_linked`'s doc comment above -- so the union lives
+/// here once instead of being re-derived at each call site.
+pub fn all_for_binary() -> Vec<Box<dyn Algorithm>> {
+    let mut algos = all();
+    for extra in ensure_forecasters_linked() {
+        if !algos.iter().any(|a| a.id() == extra.id()) {
+            algos.push(extra);
+        }
+    }
+    algos
+}
+
 /// The single enforcement point for `Algorithm::compute`'s history precondition.
 /// An algorithm whose `required_lookback()` exceeds `ctx.closes.len()` has no
 /// opinion to offer and would panic on its own slice arithmetic if called, so it

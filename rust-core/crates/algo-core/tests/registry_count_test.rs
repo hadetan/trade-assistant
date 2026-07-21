@@ -156,18 +156,13 @@ fn ensure_forecasters_linked_is_empty_without_any_forecaster_feature() {
     }
 }
 
-/// Reproduces the exact union-and-dedup-by-id the `replay`/`sidecar` binaries
+/// Calls the exact union-and-dedup-by-id the `replay`/`sidecar` binaries
 /// build their real algo list from, and asserts every forecaster enabled via
 /// Cargo features actually reaches that list -- the mechanism the release
 /// bins depend on, without loading the app itself.
 #[test]
 fn binary_algo_list_union_contains_every_enabled_forecaster() {
-    let mut algos = algo_core::registry::all();
-    for extra in algo_core::registry::ensure_forecasters_linked() {
-        if !algos.iter().any(|a| a.id() == extra.id()) {
-            algos.push(extra);
-        }
-    }
+    let algos = algo_core::registry::all_for_binary();
     let ids: Vec<&str> = algos.iter().map(|a| a.id()).collect();
 
     if cfg!(feature = "kronos") {
