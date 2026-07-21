@@ -1,0 +1,19 @@
+{
+  "name": "trade-assistant-app",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trade Assistant Electron shell (read-only analysis; never places orders).",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "tsc && node -e \"const fs=require('fs');fs.mkdirSync('dist/renderer',{recursive:true});fs.copyFileSync('src/renderer/index.html','dist/renderer/index.html')\"",
+    "test": "vitest run",
+    "start": "npm run build && electron ."
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.12.0",
+    "@types/node": "22.10.0",
+    "electron": "33.2.0",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
+  }
+}
