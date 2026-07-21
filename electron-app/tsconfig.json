@@ -4,15 +4,12 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "lib": ["ES2022", "DOM"],
-    "outDir": "dist",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "declaration": false,
-    "sourceMap": true
+    "noEmit": true
   },
   "include": ["src/**/*"],
-  "exclude": ["**/*.test.ts", "node_modules", "dist"]
+  "exclude": ["**/*.test.ts", "node_modules", "out"]
 }

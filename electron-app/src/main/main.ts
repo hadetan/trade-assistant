@@ -26,7 +26,7 @@ function currentStatus(): AppStatus {
 }
 
 function createMainWindow(): BrowserWindow {
-  const window = new BrowserWindow(mainWindowOptions(path.join(__dirname, "preload.js")));
+  const window = new BrowserWindow(mainWindowOptions(path.join(__dirname, "..", "preload", "preload.js")));
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
     return { action: "deny" };
@@ -37,7 +37,9 @@ function createMainWindow(): BrowserWindow {
     onBanner: (handler) => bannerHandlers.push(handler),
     sendToRenderer: (channel, payload) => window.webContents.send(channel, payload),
   });
-  window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+  if (rendererUrl) window.loadURL(rendererUrl);
+  else window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
   return window;
 }
 
