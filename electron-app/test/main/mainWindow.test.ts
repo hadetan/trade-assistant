@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mainWindowOptions } from "./mainWindow";
+import { mainWindowOptions } from "../../src/main/mainWindow";
 
 describe("mainWindowOptions", () => {
   it("locks the security posture on for every window", () => {
