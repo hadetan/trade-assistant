@@ -1,6 +1,6 @@
 import type { KiteClient } from "./kiteClient";
-import type { SidecarSupervisor } from "./sidecarSupervisor";
-import type { CandleWire } from "./sidecarProtocol";
+import type { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
+import type { CandleWire } from "./services/sidecar/sidecarProtocol";
 
 export interface RawKiteCandle {
   0: string;

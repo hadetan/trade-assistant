@@ -1,7 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import path from "node:path";
 import { mainWindowOptions } from "./mainWindow";
-import { SidecarSupervisor } from "./sidecarSupervisor";
+import { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
 import { KiteSessionState } from "./kiteSessionState";
 import { registerStatusBridge } from "./ipc/appBridge";
 import type { AppStatus, BannerEvent, SidecarStatus } from "./ipc/rendererApi";

@@ -9,7 +9,7 @@ import {
   SidecarResponseWire,
   encodeRequest,
 } from "./sidecarProtocol";
-import type { SidecarStatus } from "./ipc/rendererApi";
+import type { SidecarStatus } from "../../ipc/rendererApi";
 
 interface ChildProcessLike extends EventEmitter {
   stdin: Writable;

@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { SidecarSupervisor } from "./sidecarSupervisor";
+import { SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
