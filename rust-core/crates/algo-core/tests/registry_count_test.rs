@@ -73,8 +73,9 @@ fn from_closes_preserves_the_phase_one_shape() {
 /// 3 Phase-1 baseline algorithms + the 31 catalog algorithms (Tasks 1-31).
 /// Kept as an explicit sorted literal (not derived) so a registration that
 /// silently drops out of `inventory::submit!` fails this assertion instead
-/// of just shrinking a count.
-#[cfg(not(feature = "kronos"))]
+/// of just shrinking a count. Every forecaster (`kronos`/`ttm`/`chronos`/
+/// `moirai`) is feature-gated on top of this base catalog -- see
+/// `expected_ids_for_enabled_features` below.
 const EXPECTED_DEFAULT_IDS: &[&str] = &[
     "accumulation_distribution",
     "adx",
@@ -112,23 +113,68 @@ const EXPECTED_DEFAULT_IDS: &[&str] = &[
     "yang_zhang",
 ];
 
-#[cfg(not(feature = "kronos"))]
+/// `cfg!(feature = ...)` (a runtime bool, not `#[cfg]`) so this one test
+/// function covers every feature combination the `Cargo.toml` aggregates
+/// (`forecasters`, `all-forecasters`, or any individual forecaster feature)
+/// without needing a combinatorial explosion of `#[cfg]`-gated test fns.
+fn expected_ids_for_enabled_features() -> Vec<&'static str> {
+    let mut ids = EXPECTED_DEFAULT_IDS.to_vec();
+    if cfg!(feature = "kronos") {
+        ids.push("kronos");
+    }
+    if cfg!(feature = "ttm") {
+        ids.push("ttm");
+    }
+    if cfg!(feature = "chronos") {
+        ids.push("chronos");
+    }
+    if cfg!(feature = "moirai") {
+        ids.push("moirai");
+    }
+    ids.sort();
+    ids
+}
+
 #[test]
-fn registry_contains_exactly_the_full_default_catalog() {
+fn registry_contains_exactly_the_catalog_for_enabled_forecaster_features() {
     let algos = algo_core::registry::all();
     let mut ids: Vec<&str> = algos.iter().map(|a| a.id()).collect();
     ids.sort();
 
-    assert_eq!(algos.len(), 34);
-    assert_eq!(ids, EXPECTED_DEFAULT_IDS);
+    let expected_ids = expected_ids_for_enabled_features();
+    assert_eq!(algos.len(), expected_ids.len());
+    assert_eq!(ids, expected_ids);
 }
 
-#[cfg(feature = "kronos")]
+/// `ensure_forecasters_linked()` exists to survive release dead-code-
+/// stripping (see its doc comment in registry.rs); under the default build
+/// (no forecaster feature enabled) it must construct nothing.
 #[test]
-fn registry_contains_kronos_in_addition_to_the_default_catalog() {
-    let algos = algo_core::registry::all();
+fn ensure_forecasters_linked_is_empty_without_any_forecaster_feature() {
+    if !cfg!(any(feature = "kronos", feature = "ttm", feature = "chronos", feature = "moirai")) {
+        assert!(algo_core::registry::ensure_forecasters_linked().is_empty());
+    }
+}
+
+/// Calls the exact union-and-dedup-by-id the `replay`/`sidecar` binaries
+/// build their real algo list from, and asserts every forecaster enabled via
+/// Cargo features actually reaches that list -- the mechanism the release
+/// bins depend on, without loading the app itself.
+#[test]
+fn binary_algo_list_union_contains_every_enabled_forecaster() {
+    let algos = algo_core::registry::all_for_binary();
     let ids: Vec<&str> = algos.iter().map(|a| a.id()).collect();
 
-    assert_eq!(algos.len(), 35);
-    assert!(ids.contains(&"kronos"));
+    if cfg!(feature = "kronos") {
+        assert!(ids.contains(&"kronos"));
+    }
+    if cfg!(feature = "ttm") {
+        assert!(ids.contains(&"ttm"));
+    }
+    if cfg!(feature = "chronos") {
+        assert!(ids.contains(&"chronos"));
+    }
+    if cfg!(feature = "moirai") {
+        assert!(ids.contains(&"moirai"));
+    }
 }

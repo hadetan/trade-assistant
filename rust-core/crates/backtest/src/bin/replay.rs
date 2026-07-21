@@ -89,7 +89,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    let algos = registry::all();
+    let algos = registry::all_for_binary();
     let report = run_replay(&series, &algos, horizon, &symbol, timeframe);
 
     for stat in &report.per_algo {
