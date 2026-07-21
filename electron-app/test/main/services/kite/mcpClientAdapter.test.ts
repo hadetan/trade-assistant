@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { toToolCaller, toToolListing } from "./mcpClientAdapter";
+import { toToolCaller, toToolListing } from "../../../../src/main/services/kite/mcpClientAdapter";
 
 describe("mcpClientAdapter", () => {
   it("adapts callTool(name, args) to the SDK's { name, arguments } shape", async () => {

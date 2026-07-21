@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { KiteSessionState, classifyKiteResponse } from "./kiteSessionState";
+import { KiteSessionState, classifyKiteResponse } from "../../../../src/main/services/kite/kiteSessionState";
 
 describe("classifyKiteResponse", () => {
   it("treats a TokenException error payload as needsLogin", () => {

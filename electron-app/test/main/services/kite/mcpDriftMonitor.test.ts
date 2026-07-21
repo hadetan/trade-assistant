@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EXPECTED_KITE_TOOLS, checkKiteToolDrift, diffToolList } from "./mcpDriftMonitor";
+import { EXPECTED_KITE_TOOLS, checkKiteToolDrift, diffToolList } from "../../../../src/main/services/kite/mcpDriftMonitor";
 
 describe("mcpDriftMonitor", () => {
   it("reports no drift when the live list matches the pinned baseline exactly", () => {

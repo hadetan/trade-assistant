@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "./kiteClient";
+import { KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "./services/kite/kiteClient";
 import { KITE_READ_TOOL_ALLOWLIST, KITE_WRITE_TOOL_DENYLIST, buildClaudeArgs, spawnClaude } from "./claudeProvider";
 
 describe("claude subprocess scaffolding", () => {

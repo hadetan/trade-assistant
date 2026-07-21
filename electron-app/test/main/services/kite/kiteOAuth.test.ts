@@ -1,6 +1,6 @@
 import http from "node:http";
 import { describe, expect, it, vi } from "vitest";
-import { captureRequestToken, computeKiteChecksum, exchangeAccessToken } from "./kiteOAuth";
+import { captureRequestToken, computeKiteChecksum, exchangeAccessToken } from "../../../../src/main/services/kite/kiteOAuth";
 
 describe("kiteOAuth", () => {
   it("computes the SHA-256 checksum of api_key + request_token + api_secret", () => {

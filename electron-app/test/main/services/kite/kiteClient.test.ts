@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { KiteClient, KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "./kiteClient";
+import { KiteClient, KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "../../../../src/main/services/kite/kiteClient";
 
 const EXPECTED_METHODS = [
   "getGtts",

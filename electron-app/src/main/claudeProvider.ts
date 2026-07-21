@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "./kiteClient";
+import { KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "./services/kite/kiteClient";
 
 type SpawnFn = (command: string, args: string[]) => ChildProcess;
 

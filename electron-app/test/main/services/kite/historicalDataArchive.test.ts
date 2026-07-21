@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchAndArchive, parseKiteCandles } from "./historicalDataArchive";
-import { KiteClient } from "./kiteClient";
-import type { CandleWire } from "./sidecarProtocol";
+import { fetchAndArchive, parseKiteCandles } from "../../../../src/main/services/kite/historicalDataArchive";
+import { KiteClient } from "../../../../src/main/services/kite/kiteClient";
+import type { CandleWire } from "../../../../src/main/services/sidecar/sidecarProtocol";
 
 describe("parseKiteCandles", () => {
   it("parses the +0530 offset timestamp offset-aware into epoch seconds", () => {

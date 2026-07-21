@@ -3,9 +3,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { KiteClient } from "../src/main/kiteClient";
+import { KiteClient } from "../src/main/services/kite/kiteClient";
 import { SidecarSupervisor } from "../src/main/services/sidecar/sidecarSupervisor";
-import { fetchAndArchive } from "../src/main/historicalDataArchive";
+import { fetchAndArchive } from "../src/main/services/kite/historicalDataArchive";
 
 const SIDECAR = path.resolve(__dirname, "..", "..", "rust-core", "target", "debug", "sidecar");
 
