@@ -1,7 +1,10 @@
-use crate::protocol::{AlgoResultWire, ComputeRequest, ComputeResponse, ConfluenceWire};
+use crate::protocol::{
+    AlgoResultWire, ComputeRequest, ComputeResponse, ConfluenceWire, PersistCandlesRequest, PersistCandlesResponse,
+};
 use algo_core::{confluence::compute_confluence, registry::{self, run_applicable}, Horizon, MarketContext, Timeframe};
 use chrono::Utc;
 use std::collections::HashMap;
+use storage::{Candle, CandleStore};
 
 pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
     let timeframe = match request.timeframe.as_str() {
@@ -48,6 +51,26 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
             neutral_count: confluence.neutral_count,
             weighted_vote: confluence.weighted_vote,
         },
+    }
+}
+
+pub fn handle_persist(store: &CandleStore, request: PersistCandlesRequest) -> PersistCandlesResponse {
+    let candles: Vec<Candle> = request
+        .candles
+        .iter()
+        .map(|c| Candle {
+            ts: c.ts,
+            open: c.open,
+            high: c.high,
+            low: c.low,
+            close: c.close,
+            volume: c.volume,
+        })
+        .collect();
+
+    match store.write_sourced_candles(&request.symbol, &request.timeframe, &request.source, &candles) {
+        Ok(()) => PersistCandlesResponse { id: request.id, written: candles.len(), error: None },
+        Err(e) => PersistCandlesResponse { id: request.id, written: 0, error: Some(e.to_string()) },
     }
 }
 
@@ -110,5 +133,39 @@ mod tests {
         let response = handle_request(request(1, closes_seq(21)));
 
         assert_eq!(response.algo_results.len(), 30);
+    }
+
+    #[test]
+    fn handle_persist_writes_candles_that_read_back_from_the_kite_source() {
+        use storage::CandleStore;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        let request = crate::protocol::PersistCandlesRequest {
+            id: 11,
+            symbol: "NSE:INFY".to_string(),
+            timeframe: "day".to_string(),
+            source: "kite".to_string(),
+            candles: vec![crate::protocol::CandleWire {
+                ts: 1_710_000_000,
+                open: 1.0,
+                high: 2.0,
+                low: 0.5,
+                close: 1.5,
+                volume: 100,
+            }],
+        };
+
+        let response = handle_persist(&store, request);
+
+        assert_eq!(response.id, 11);
+        assert_eq!(response.written, 1);
+        assert!(response.error.is_none());
+
+        let stored = store.read_sourced_candles("NSE:INFY", "day", "kite").unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].close, 1.5);
     }
 }
