@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { BannerEvent, KiteSessionStatus } from "./rendererApi";
+import type { BannerEvent, KiteSessionStatus } from "./ipc/rendererApi";
 
 function containsLoginGateText(response: Record<string, unknown>): boolean {
   const content = response.content;

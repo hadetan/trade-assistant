@@ -3,8 +3,8 @@ import path from "node:path";
 import { mainWindowOptions } from "./mainWindow";
 import { SidecarSupervisor } from "./sidecarSupervisor";
 import { KiteSessionState } from "./kiteSessionState";
-import { registerStatusBridge } from "./appBridge";
-import type { AppStatus, BannerEvent, SidecarStatus } from "./rendererApi";
+import { registerStatusBridge } from "./ipc/appBridge";
+import type { AppStatus, BannerEvent, SidecarStatus } from "./ipc/rendererApi";
 
 export interface AppRuntime {
   start(): void;

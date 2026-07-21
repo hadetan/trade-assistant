@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildRendererApi } from "./rendererApi";
+import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
   it("exposes exactly getStatus and onBanner, and never leaks the raw transport", () => {

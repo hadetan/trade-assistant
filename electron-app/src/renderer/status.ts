@@ -1,4 +1,4 @@
-const api = (window as unknown as { tradeAssistant: import("../main/rendererApi").RendererApi }).tradeAssistant;
+const api = (window as unknown as { tradeAssistant: import("../main/ipc/rendererApi").RendererApi }).tradeAssistant;
 
 async function render(): Promise<void> {
   const status = await api.getStatus();
