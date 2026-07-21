@@ -86,10 +86,10 @@ pub trait ForecasterAdapter: Send + Sync {
     fn id(&self) -> &'static str;
     fn required_lookback(&self) -> usize;
     fn applicable_horizons(&self) -> &'static [Horizon];
-    /// Builds the normalized input in Rust (replicating the model's scaler
-    /// exactly -- like `kronos_math`), runs the once-loaded sessions,
-    /// denormalizes, and summarizes. `None` = Neutral no-op (insufficient
-    /// history / missing series).
+    /// Feeds the raw closes from `ctx` into the adapter's own once-loaded
+    /// session(s) and summarizes the output -- normalize/denormalize is the
+    /// ONNX graph's job, so `ForecastSummary` is already in raw-price units.
+    /// `None` = Neutral no-op (insufficient history / missing series).
     fn forecast(&self, ctx: &MarketContext) -> Option<ForecastSummary>;
 }
 
