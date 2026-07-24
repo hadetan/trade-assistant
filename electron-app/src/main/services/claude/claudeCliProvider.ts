@@ -2,6 +2,13 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { ZodType } from "zod";
 import { spawnClaude } from "./claudeProvider";
+import type { AnalysisEnvelope, Verdict } from "../analysis/contracts";
+import type { Provider } from "./provider";
+import { runPipeline, type PipelinePrompts } from "./personaPipeline";
+import { optionsGreeks } from "./systemPrompts/optionsGreeks";
+import { technicalQuant } from "./systemPrompts/technicalQuant";
+import { positionRisk } from "./systemPrompts/positionRisk";
+import { synthesis } from "./systemPrompts/synthesis";
 
 type SpawnFn = (command: string, args: string[]) => ChildProcess;
 
@@ -92,4 +99,28 @@ export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunn
 
     throw new Error(`persona ${spec.name} failed to produce valid structured output after retry`);
   };
+}
+
+const DEFAULT_PROMPTS: PipelinePrompts = {
+  optionsGreeks,
+  technicalQuant,
+  positionRisk,
+  synthesis,
+};
+
+export interface ClaudeCliProviderOptions {
+  spawnFn?: SpawnFn;
+  personaTimeoutMs?: number;
+}
+
+export class ClaudeCliProvider implements Provider {
+  private readonly runPersona: PersonaRunner;
+
+  constructor(options: ClaudeCliProviderOptions = {}) {
+    this.runPersona = makeClaudeRunner({ spawnFn: options.spawnFn, personaTimeoutMs: options.personaTimeoutMs });
+  }
+
+  complete(envelope: AnalysisEnvelope): Promise<Verdict> {
+    return runPipeline(envelope, { runPersona: this.runPersona, prompts: DEFAULT_PROMPTS });
+  }
 }
