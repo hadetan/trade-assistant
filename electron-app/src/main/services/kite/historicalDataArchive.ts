@@ -70,6 +70,16 @@ export async function fetchAndArchive(
 
   const candles = parseKiteCandles(extractRawCandles(response));
   const persistResult = await deps.sidecar.persistCandles(params.symbol, params.timeframe, candles, "kite");
+
+  if (persistResult.error != null) {
+    throw new Error(`archiving ${params.symbol} ${params.timeframe} failed: ${persistResult.error}`);
+  }
+  if (persistResult.written !== candles.length) {
+    throw new Error(
+      `archiving ${params.symbol} ${params.timeframe} failed: wrote ${persistResult.written} of ${candles.length} candles`,
+    );
+  }
+
   const closes = candles.map((candle) => candle.close);
 
   return { candles, closes, persisted: persistResult.written };
