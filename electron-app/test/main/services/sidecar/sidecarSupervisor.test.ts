@@ -109,4 +109,30 @@ describe("SidecarSupervisor", () => {
 
     consoleErrorSpy.mockRestore();
   });
+
+  it("rejects a request that never gets a response after requestTimeoutMs and leaves no pending leak", async () => {
+    const children: FakeChild[] = [];
+    const spawnFn = (_command: string, _args: string[]) => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as ReturnType<typeof spawnFn>;
+    };
+    const supervisor = new SidecarSupervisor({
+      binaryPath: "/fake/sidecar",
+      lakeRoot: "/fake/lake",
+      spawnFn,
+      requestTimeoutMs: 20,
+    });
+    supervisor.start();
+
+    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+
+    await expect(pending).rejects.toThrow(/sidecar request 1 timed out after 20ms/);
+    // No leak: a late response for id 1 must find no pending entry and be dropped.
+    expect(() =>
+      children[0].stdout.write(
+        `${JSON.stringify({ type: "compute", id: 1, algo_results: [], confluence: { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 } })}\n`,
+      ),
+    ).not.toThrow();
+  });
 });
