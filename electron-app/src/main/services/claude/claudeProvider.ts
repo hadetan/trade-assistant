@@ -25,10 +25,31 @@ export const KITE_WRITE_TOOL_DENYLIST = KITE_WRITE_TOOL_NAMES.map((name) => `mcp
 // denylist. Nothing today needs extra flags here -- when something does,
 // add it as its own named parameter with its own explicit validation, not a
 // passthrough array.
-export function buildClaudeArgs(prompt: string): string[] {
-  return ["--allowedTools", KITE_READ_TOOL_ALLOWLIST, "--disallowedTools", KITE_WRITE_TOOL_DENYLIST, "--strict-mcp-config", "--print", prompt];
+export interface ClaudeArgOptions {
+  systemPrompt?: string;
+  jsonSchema?: string;
+  outputFormat?: "json" | "text";
 }
 
-export function spawnClaude(prompt: string, spawnFn: SpawnFn = (command, args) => spawn(command, args)): ChildProcess {
-  return spawnFn("claude", buildClaudeArgs(prompt));
+export function buildClaudeArgs(prompt: string, opts: ClaudeArgOptions = {}): string[] {
+  const args = [
+    "--allowedTools",
+    KITE_READ_TOOL_ALLOWLIST,
+    "--disallowedTools",
+    KITE_WRITE_TOOL_DENYLIST,
+    "--strict-mcp-config",
+  ];
+  if (opts.systemPrompt !== undefined) args.push("--system-prompt", opts.systemPrompt);
+  if (opts.jsonSchema !== undefined) args.push("--json-schema", opts.jsonSchema);
+  if (opts.outputFormat !== undefined) args.push("--output-format", opts.outputFormat);
+  args.push("--print", prompt);
+  return args;
+}
+
+export function spawnClaude(
+  prompt: string,
+  opts: ClaudeArgOptions = {},
+  spawnFn: SpawnFn = (command, args) => spawn(command, args),
+): ChildProcess {
+  return spawnFn("claude", buildClaudeArgs(prompt, opts));
 }

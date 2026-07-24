@@ -34,8 +34,51 @@ describe("claude subprocess scaffolding", () => {
 
   it("passes the safety flags through to the spawned process argv", () => {
     const spawnFn = vi.fn().mockReturnValue({});
-    spawnClaude("analyze INFY", spawnFn);
+    spawnClaude("analyze INFY", {}, spawnFn);
     const [, argv] = spawnFn.mock.calls[0];
     expect(argv).toEqual(buildClaudeArgs("analyze INFY"));
+  });
+
+  it("appends persona flags after the three safety flags, keeping --print last", () => {
+    const args = buildClaudeArgs("analyze INFY", {
+      systemPrompt: "you are the technical quant persona",
+      jsonSchema: '{"type":"object"}',
+      outputFormat: "json",
+    });
+
+    // Three safety flags always first, in order.
+    expect(args.slice(0, 5)).toEqual([
+      "--allowedTools",
+      KITE_READ_TOOL_ALLOWLIST,
+      "--disallowedTools",
+      KITE_WRITE_TOOL_DENYLIST,
+      "--strict-mcp-config",
+    ]);
+    expect(args).toContain("--system-prompt");
+    expect(args).toContain("--json-schema");
+    expect(args).toContain("--output-format");
+    // --print <prompt> is always the last pair.
+    expect(args.slice(-2)).toEqual(["--print", "analyze INFY"]);
+  });
+
+  it("never drops or reorders the safety flags for any persona-option combination", () => {
+    const combos: Array<Parameters<typeof buildClaudeArgs>[1]> = [
+      {},
+      { systemPrompt: "s" },
+      { jsonSchema: "{}" },
+      { outputFormat: "json" },
+      { systemPrompt: "s", jsonSchema: "{}", outputFormat: "json" },
+    ];
+    for (const opts of combos) {
+      const args = buildClaudeArgs("p", opts);
+      expect(args.slice(0, 5)).toEqual([
+        "--allowedTools",
+        KITE_READ_TOOL_ALLOWLIST,
+        "--disallowedTools",
+        KITE_WRITE_TOOL_DENYLIST,
+        "--strict-mcp-config",
+      ]);
+      expect(args.slice(-2)).toEqual(["--print", "p"]);
+    }
   });
 });
