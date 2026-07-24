@@ -114,3 +114,32 @@ fn a_thin_history_request_between_two_valid_ones_does_not_kill_the_sidecar() {
     assert_eq!(responses[2]["id"], 3);
     assert_eq!(responses[2]["algo_results"].as_array().unwrap().len(), 30);
 }
+
+#[test]
+fn a_malformed_line_is_logged_to_stderr_instead_of_silently_dropped() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("sidecar binary must start");
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "not valid json").unwrap();
+    }
+    drop(child.stdin.take());
+
+    let stderr = child.stderr.take().unwrap();
+    let mut reader = BufReader::new(stderr);
+    let mut stderr_line = String::new();
+    reader.read_line(&mut stderr_line).unwrap();
+
+    child.wait().ok();
+
+    assert!(
+        stderr_line.contains("failed to parse"),
+        "expected a parse-error log on stderr, got: {stderr_line:?}"
+    );
+    assert!(stderr_line.contains("not valid json"));
+}

@@ -37,7 +37,10 @@ fn main() {
 
         let request = match parse_request(&line) {
             Ok(request) => request,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("sidecar: failed to parse request line ({e}): {line:?}");
+                continue;
+            }
         };
 
         let response = match request {
