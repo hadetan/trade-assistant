@@ -15,7 +15,7 @@ The app answers two kinds of questions:
 
 Both intraday and positional/swing horizons are in scope, decided per query rather than as a fixed mode. Instrument scope is anything searchable on Kite — individual equities, indices (Bank Nifty, Nifty 50), and their F&O (options/futures) — generalized via Kite's instrument search rather than hardcoded to specific symbols.
 
-This design supersedes, and is a superset of, an earlier personal prototype (`ws/trade/`) that used Claude Code skills to do Bank-Nifty/Nifty-50-only intraday probability analysis via the same Kite MCP endpoint. That prototype's hard rule was "never say buy/sell/hold" — probability output only. This app intentionally relaxes that: Claude is allowed to state an actual directional lean (sell / hold / add), because the user — not the app — is always the one who acts on it. What both designs share, and what carries forward unchanged, is: Kite MCP as the sole live data source, and an absolute prohibition on the app itself ever executing a trade.
+This design supersedes, and is a superset of, an earlier personal prototype (`ws/trade/`) that used Claude Code skills to do Bank-Nifty/Nifty-50-only intraday probability analysis via the same Kite MCP endpoint. That prototype's hard rule was "never say buy/sell/hold" — probability output only. This design reinstates that rule: output is always descriptive analysis — a direction (bullish / bearish / neutral), the evidence behind it, and a confidence level — never an imperative trade directive ("buy", "sell", "hold", "add", "watch", or any equivalent instruction to act). This constraint applies to wording and product-level presentation, in addition to — not instead of — the structural safety layers (§4) that already make order execution technically impossible; the user — not the app — is always the one who decides and acts. What both designs share, and what carries forward unchanged, is: Kite MCP as the sole live data source, and an absolute prohibition on the app itself ever executing a trade.
 
 ## 2. Non-Goals / Hard Constraints
 
@@ -234,7 +234,7 @@ interface AnalysisEnvelope {
 }
 
 interface Verdict {
-  direction: "sell" | "hold" | "add" | "watch";
+  direction: "bullish" | "bearish" | "neutral";  // matches the Direction enum (§6.1) — descriptive only, never an imperative directive (§1)
   conviction: "high" | "medium" | "low";
   reasoning: string;              // must cite specific algo_ids
   verify_before_acting: string;   // mandatory: what the human should check in Kite itself
