@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeClaudeRunner } from "../../../../src/main/services/claude/claudeCliProvider";
 import { personaFindingSchema, personaFindingJsonSchema } from "../../../../src/main/services/analysis/contracts";
 
@@ -109,5 +109,38 @@ describe("makeClaudeRunner", () => {
     controller.abort();
     await expect(pending).rejects.toThrow(/persona technical_quant aborted/);
     expect(children[0].killed).toBe(true);
+  });
+
+  it("rejects without spawning when the signal is already aborted", async () => {
+    const children: FakeChild[] = [];
+    const spawnFn = () => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as never;
+    };
+    const controller = new AbortController();
+    controller.abort();
+    const run = makeClaudeRunner({ spawnFn });
+    await expect(run({ ...baseSpec(), signal: controller.signal })).rejects.toThrow(
+      /persona technical_quant aborted/,
+    );
+    expect(children.length).toBe(0);
+  });
+
+  it("removes its abort listener once the attempt settles", async () => {
+    const spawnFn = () => {
+      const child = new FakeChild();
+      emitResult(child, validFinding);
+      return child as never;
+    };
+    const controller = new AbortController();
+    const addSpy = vi.spyOn(controller.signal, "addEventListener");
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    const run = makeClaudeRunner({ spawnFn });
+    await run({ ...baseSpec(), signal: controller.signal });
+    const abortAdds = addSpy.mock.calls.filter((call) => call[0] === "abort").length;
+    const abortRemoves = removeSpy.mock.calls.filter((call) => call[0] === "abort").length;
+    expect(abortAdds).toBeGreaterThan(0);
+    expect(abortRemoves).toBe(abortAdds);
   });
 });

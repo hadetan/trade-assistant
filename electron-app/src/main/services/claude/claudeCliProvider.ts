@@ -60,12 +60,16 @@ export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunn
 
   return async <T>(spec: PersonaRunSpec<T>): Promise<T> => {
     const attempt = async (prompt: string): Promise<{ ok: true; value: T } | { ok: false; error: string }> => {
+      if (spec.signal?.aborted) {
+        throw new Error(`persona ${spec.name} aborted`);
+      }
       const child = spawnClaude(
         prompt,
         { systemPrompt: spec.systemPrompt, jsonSchema: JSON.stringify(spec.jsonSchema), outputFormat: "json" },
         spawnFn,
       );
       let timer: NodeJS.Timeout | undefined;
+      let onAbort: (() => void) | undefined;
       // Reject BEFORE killing: killing the child emits `exit`, which would
       // otherwise let readResult settle the race with `undefined` first and
       // swallow the timeout/abort rejection.
@@ -74,16 +78,18 @@ export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunn
           reject(new Error(`persona ${spec.name} timed out after ${personaTimeoutMs}ms`));
           child.kill();
         }, personaTimeoutMs);
-        spec.signal?.addEventListener("abort", () => {
+        onAbort = () => {
           reject(new Error(`persona ${spec.name} aborted`));
           child.kill();
-        });
+        };
+        spec.signal?.addEventListener("abort", onAbort);
       });
       let raw: unknown;
       try {
         raw = await Promise.race([readResult(child), guard]);
       } finally {
         if (timer) clearTimeout(timer);
+        if (onAbort) spec.signal?.removeEventListener("abort", onAbort);
       }
       const parsed = spec.schema.safeParse(raw);
       if (parsed.success) return { ok: true, value: parsed.data };
