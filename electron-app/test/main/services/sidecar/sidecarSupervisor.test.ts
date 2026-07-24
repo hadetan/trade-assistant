@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
 
 class FakeChild extends EventEmitter {
@@ -89,5 +89,24 @@ describe("SidecarSupervisor", () => {
     // Respawn is on a RESTART_BACKOFF_MS timer, so wait past it before asserting.
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(children.length).toBe(2);
+  });
+
+  it("logs and skips a malformed JSON line without crashing, then still resolves later requests", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { supervisor, children } = makeSupervisor();
+    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+
+    expect(() => children[0].stdout.write("{not valid json\n")).not.toThrow();
+    expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
+
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "compute", id: 1, algo_results: [], confluence: { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 } })}\n`,
+    );
+
+    const response = await pending;
+    expect(response.id).toBe(1);
+    expect(response.type).toBe("compute");
+
+    consoleErrorSpy.mockRestore();
   });
 });

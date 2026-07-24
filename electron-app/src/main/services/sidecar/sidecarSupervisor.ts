@@ -114,7 +114,13 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   private dispatch(line: string): void {
-    const response = JSON.parse(line) as SidecarResponseWire;
+    let response: SidecarResponseWire;
+    try {
+      response = JSON.parse(line) as SidecarResponseWire;
+    } catch (error) {
+      console.error(`sidecar: failed to parse response line: ${(error as Error).message}`, line);
+      return;
+    }
     const waiting = this.pending.get(response.id);
     if (!waiting) return;
     this.pending.delete(response.id);
