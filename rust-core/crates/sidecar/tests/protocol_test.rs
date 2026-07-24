@@ -1,13 +1,16 @@
 use sidecar::protocol::{
     empty_response, encode_response, parse_request, AlgoResultWire, ComputeResponse,
-    ConfluenceWire,
+    ConfluenceWire, SidecarRequest, SidecarResponse,
 };
 
 #[test]
 fn request_round_trips_from_json_line() {
-    let line = r#"{"id":1,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0]}"#;
+    let line = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0]}"#;
 
-    let request = parse_request(line).unwrap();
+    let request = match parse_request(line).unwrap() {
+        SidecarRequest::Compute(request) => request,
+        _ => panic!("expected a compute request"),
+    };
 
     assert_eq!(request.id, 1);
     assert_eq!(request.symbol, "NSE:INFY");
@@ -16,7 +19,7 @@ fn request_round_trips_from_json_line() {
 
 #[test]
 fn response_encodes_to_a_single_json_line() {
-    let response = ComputeResponse {
+    let response = SidecarResponse::Compute(ComputeResponse {
         id: 1,
         algo_results: vec![AlgoResultWire {
             algo_id: "sma".to_string(),
@@ -30,7 +33,7 @@ fn response_encodes_to_a_single_json_line() {
             neutral_count: 0,
             weighted_vote: 1.0,
         },
-    };
+    });
 
     let line = encode_response(&response);
 
