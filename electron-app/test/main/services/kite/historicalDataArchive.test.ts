@@ -44,4 +44,26 @@ describe("fetchAndArchive", () => {
     expect(result.closes).toEqual([104, 107]);
     expect(sidecar.persistCandles).toHaveBeenCalledWith("NSE:INFY", "day", result.candles, "kite");
   });
+
+  it("throws when the sidecar reports a persist error instead of returning a false success", async () => {
+    const callTool = vi.fn().mockResolvedValue({
+      data: { candles: [["2026-01-02T00:00:00+0530", 100, 105, 99, 104, 5000]] },
+    });
+    const kite = new KiteClient({ callTool });
+    const sidecar = {
+      persistCandles: vi.fn(async () => ({
+        type: "persist_candles" as const,
+        id: 1,
+        written: 0,
+        error: "disk full",
+      })),
+    };
+
+    await expect(
+      fetchAndArchive(
+        { kite, sidecar: sidecar as never },
+        { symbol: "NSE:INFY", instrumentToken: "408065", timeframe: "day", from: "2026-01-01", to: "2026-01-03" },
+      ),
+    ).rejects.toThrow(/archiving NSE:INFY day failed: disk full/);
+  });
 });

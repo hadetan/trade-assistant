@@ -23,19 +23,23 @@ export interface SidecarSupervisorOptions {
   binaryPath: string;
   lakeRoot: string;
   spawnFn?: SpawnFn;
+  requestTimeoutMs?: number;
 }
 
 interface Pending {
   resolve: (response: SidecarResponseWire) => void;
   reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
 }
 
 const RESTART_BACKOFF_MS = 500;
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
 
 export class SidecarSupervisor extends EventEmitter {
   private readonly binaryPath: string;
   private readonly lakeRoot: string;
   private readonly spawnFn: SpawnFn;
+  private readonly requestTimeoutMs: number;
   private child: ChildProcessLike | null = null;
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
@@ -47,6 +51,7 @@ export class SidecarSupervisor extends EventEmitter {
     this.binaryPath = options.binaryPath;
     this.lakeRoot = options.lakeRoot;
     this.spawnFn = options.spawnFn ?? ((command, args) => spawn(command, args) as unknown as ChildProcessLike);
+    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
   start(): void {
@@ -56,6 +61,7 @@ export class SidecarSupervisor extends EventEmitter {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    for (const waiting of this.pending.values()) clearTimeout(waiting.timer);
     this.child?.kill();
     this.child = null;
   }
@@ -88,7 +94,12 @@ export class SidecarSupervisor extends EventEmitter {
         reject(new Error("sidecar is not running"));
         return;
       }
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (this.pending.delete(id)) {
+          reject(new Error(`sidecar request ${id} timed out after ${this.requestTimeoutMs}ms`));
+        }
+      }, this.requestTimeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(encodeRequest(request));
     });
   }
@@ -124,13 +135,17 @@ export class SidecarSupervisor extends EventEmitter {
     const waiting = this.pending.get(response.id);
     if (!waiting) return;
     this.pending.delete(response.id);
+    clearTimeout(waiting.timer);
     waiting.resolve(response);
   }
 
   private onExit(code: number | null): void {
     this.child = null;
     const error = new Error(`sidecar exited (code ${code ?? "null"})`);
-    for (const waiting of this.pending.values()) waiting.reject(error);
+    for (const waiting of this.pending.values()) {
+      clearTimeout(waiting.timer);
+      waiting.reject(error);
+    }
     this.pending.clear();
 
     if (this.stopped) {

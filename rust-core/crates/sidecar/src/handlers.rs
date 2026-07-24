@@ -6,6 +6,22 @@ use chrono::Utc;
 use std::collections::HashMap;
 use storage::{Candle, CandleStore};
 
+fn timeframe_to_wire(timeframe: Timeframe) -> &'static str {
+    match timeframe {
+        Timeframe::Minute => "minute",
+        Timeframe::FiveMinute => "5minute",
+        Timeframe::FifteenMinute => "15minute",
+        Timeframe::Day => "day",
+    }
+}
+
+fn horizon_to_wire(horizon: Horizon) -> &'static str {
+    match horizon {
+        Horizon::Intraday => "intraday",
+        Horizon::Positional => "positional",
+    }
+}
+
 pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
     let timeframe = match request.timeframe.as_str() {
         "minute" => Timeframe::Minute,
@@ -36,9 +52,14 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
         .iter()
         .map(|output| AlgoResultWire {
             algo_id: output.algo_id.to_string(),
+            symbol: output.symbol.clone(),
+            timeframe: timeframe_to_wire(output.timeframe).to_string(),
+            horizon: horizon_to_wire(output.horizon).to_string(),
             direction: format!("{:?}", output.direction),
+            magnitude: output.magnitude,
             confidence: output.confidence,
             evidence: output.evidence.clone(),
+            computed_at: output.computed_at.to_rfc3339(),
         })
         .collect();
 
@@ -133,6 +154,21 @@ mod tests {
         let response = handle_request(request(1, closes_seq(21)));
 
         assert_eq!(response.algo_results.len(), 30);
+    }
+
+    #[test]
+    fn widened_algo_result_carries_symbol_timeframe_horizon_and_rfc3339_timestamp() {
+        let response = handle_request(request(3, closes_seq(21)));
+        let first = response
+            .algo_results
+            .first()
+            .expect("21 closes runs several algorithms");
+
+        assert_eq!(first.symbol, "NSE:NEWLISTING");
+        assert_eq!(first.timeframe, "day");
+        // handle_request pins Horizon::Positional for the whole request today.
+        assert_eq!(first.horizon, "positional");
+        assert!(first.computed_at.contains('T'));
     }
 
     #[test]

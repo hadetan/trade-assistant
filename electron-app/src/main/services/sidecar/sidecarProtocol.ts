@@ -12,9 +12,14 @@ export interface CandleWire {
 
 export interface AlgoResultWire {
   algo_id: string;
+  symbol: string;
+  timeframe: string;
+  horizon: string;
   direction: string;
+  magnitude: number;
   confidence: number;
   evidence: string[];
+  computed_at: string;
 }
 
 export interface ConfluenceWire {

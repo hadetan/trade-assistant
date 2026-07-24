@@ -1,0 +1,5 @@
+export const WORDING_CONSTRAINT = `Output constraint (non-negotiable, applies to every field you write, not just direction):
+- A directional read is exactly one of: bullish, bearish, or neutral — a description of what the evidence shows, never an instruction to act.
+- Never phrase anything as an imperative trade directive: an instruction that tells the reader what action to take with their position or money (for example "buy", "sell", "hold", "add", "exit", "book profit", "enter here", "watch this level"). If a sentence would still make sense with "you should" placed in front of it, rewrite it as a description of the evidence instead.
+- You report what the data indicates; the human reader alone decides and acts. Never address the reader as someone about to place a trade.
+- Every claim must cite the specific algo_id(s) it rests on. Never introduce a number, signal, or level absent from the provided algo_results. If you cannot source a figure, say so explicitly rather than estimating it.`;

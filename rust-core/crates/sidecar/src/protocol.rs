@@ -11,9 +11,14 @@ pub struct ComputeRequest {
 #[derive(Debug, Serialize)]
 pub struct AlgoResultWire {
     pub algo_id: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub horizon: String,
     pub direction: String,
+    pub magnitude: f64,
     pub confidence: f64,
     pub evidence: Vec<String>,
+    pub computed_at: String,
 }
 
 #[derive(Debug, Serialize)]
