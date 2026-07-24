@@ -23,9 +23,14 @@ fn response_encodes_to_a_single_json_line() {
         id: 1,
         algo_results: vec![AlgoResultWire {
             algo_id: "sma".to_string(),
+            symbol: "NSE:INFY".to_string(),
+            timeframe: "day".to_string(),
+            horizon: "positional".to_string(),
             direction: "Bullish".to_string(),
+            magnitude: 0.0123,
             confidence: 0.5,
             evidence: vec!["close above SMA".to_string()],
+            computed_at: "2026-07-24T00:00:00+00:00".to_string(),
         }],
         confluence: ConfluenceWire {
             bullish_count: 1,
@@ -40,6 +45,11 @@ fn response_encodes_to_a_single_json_line() {
     assert!(!line.contains('\n'));
     assert!(line.contains("\"id\":1"));
     assert!(line.contains("\"algo_id\":\"sma\""));
+    assert!(line.contains("\"symbol\":\"NSE:INFY\""));
+    assert!(line.contains("\"timeframe\":\"day\""));
+    assert!(line.contains("\"horizon\":\"positional\""));
+    assert!(line.contains("\"magnitude\":0.0123"));
+    assert!(line.contains("\"computed_at\":\"2026-07-24T00:00:00+00:00\""));
 }
 
 #[test]
