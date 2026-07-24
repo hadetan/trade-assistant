@@ -77,6 +77,33 @@ describe("contracts schemas", () => {
     ]);
   });
 
+  it("rejects a PersonaFinding citing zero algo_ids", () => {
+    const result = personaFindingSchema.safeParse({
+      persona: "technical_quant",
+      direction: "bullish",
+      conviction: "high",
+      findings: ["rsi above 50"],
+      cited_algo_ids: [],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a Verdict citing zero algo_ids", () => {
+    const result = verdictSchema.safeParse({
+      direction: "bullish",
+      conviction: "high",
+      reasoning: "x",
+      cited_algo_ids: [],
+      verify_before_acting: "check LTP",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("requires at least one cited algo_id in the JSON-schema objects", () => {
+    expect((personaFindingJsonSchema.properties.cited_algo_ids as { minItems: number }).minItems).toBe(1);
+    expect((verdictJsonSchema.properties.cited_algo_ids as { minItems: number }).minItems).toBe(1);
+  });
+
   it("checks cited ids are a subset of the envelope's algo ids", () => {
     expect(citedIdsWithinEnvelope(["rsi"], envelope)).toBe(true);
     expect(citedIdsWithinEnvelope(["rsi", "made_up"], envelope)).toBe(false);

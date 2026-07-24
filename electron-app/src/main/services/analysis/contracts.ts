@@ -72,7 +72,7 @@ export const personaFindingSchema = z
     direction: directionSchema,
     conviction: convictionSchema,
     findings: z.array(z.string()),
-    cited_algo_ids: z.array(z.string()),
+    cited_algo_ids: z.array(z.string()).min(1),
   })
   .strict();
 
@@ -81,7 +81,7 @@ export const verdictSchema = z
     direction: directionSchema,
     conviction: convictionSchema,
     reasoning: z.string(),
-    cited_algo_ids: z.array(z.string()),
+    cited_algo_ids: z.array(z.string()).min(1),
     verify_before_acting: z.string(),
   })
   .strict();
@@ -98,7 +98,7 @@ export const personaFindingJsonSchema = {
     direction: { type: "string", enum: ["bullish", "bearish", "neutral"] },
     conviction: { type: "string", enum: ["high", "medium", "low"] },
     findings: { type: "array", items: { type: "string" } },
-    cited_algo_ids: { type: "array", items: { type: "string" } },
+    cited_algo_ids: { type: "array", items: { type: "string" }, minItems: 1 },
   },
 } as const;
 
@@ -110,7 +110,7 @@ export const verdictJsonSchema = {
     direction: { type: "string", enum: ["bullish", "bearish", "neutral"] },
     conviction: { type: "string", enum: ["high", "medium", "low"] },
     reasoning: { type: "string" },
-    cited_algo_ids: { type: "array", items: { type: "string" } },
+    cited_algo_ids: { type: "array", items: { type: "string" }, minItems: 1 },
     verify_before_acting: { type: "string" },
   },
 } as const;
