@@ -19,6 +19,18 @@ describe("classifyKiteResponse", () => {
   it("treats a normal profile payload as authenticated", () => {
     expect(classifyKiteResponse({ data: { user_id: "AB1234", user_name: "Trader" } })).toBe("authenticated");
   });
+
+  it("treats an unrecognized generic object as unknown, not authenticated", () => {
+    expect(classifyKiteResponse({ foo: "bar" })).toBe("unknown");
+  });
+
+  it("treats a data.user_id shape as authenticated", () => {
+    expect(classifyKiteResponse({ data: { user_id: "AB1234" } })).toBe("authenticated");
+  });
+
+  it("treats a data payload without user_id as unknown, not authenticated", () => {
+    expect(classifyKiteResponse({ data: { something_else: 1 } })).toBe("unknown");
+  });
 });
 
 describe("KiteSessionState", () => {

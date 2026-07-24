@@ -10,10 +10,23 @@ function containsLoginGateText(response: Record<string, unknown>): boolean {
   });
 }
 
+function looksAuthenticated(record: Record<string, unknown>): boolean {
+  const data = record.data;
+  if (typeof data !== "object" || data === null) return false;
+  return typeof (data as Record<string, unknown>).user_id === "string";
+}
+
 // The exact live shape of an unauthenticated MCP login-gate response must be
 // confirmed empirically (§4 notes it is a functional "please log in" response,
 // not a protocol error); these markers cover the documented TokenException /
 // 403 / gate-text forms. Extend with the real shape once observed in Task 10.
+//
+// The authenticated-side marker is likewise provisional: Kite Connect's
+// documented convention wraps successful responses as `data: {...}`, and
+// `user_id` is the field present specifically on the profile/login response.
+// Other successful shapes (quotes, historical data, ...) won't match this
+// narrow positive check yet and fall through to "unknown" until broader
+// markers are confirmed empirically — same extend-once-observed spirit.
 export function classifyKiteResponse(response: unknown): KiteSessionStatus {
   if (typeof response !== "object" || response === null) return "unknown";
   const record = response as Record<string, unknown>;
@@ -22,7 +35,8 @@ export function classifyKiteResponse(response: unknown): KiteSessionStatus {
   if (record.status === 403) return "needsLogin";
   if (containsLoginGateText(record)) return "needsLogin";
 
-  return "authenticated";
+  if (looksAuthenticated(record)) return "authenticated";
+  return "unknown";
 }
 
 export class KiteSessionState extends EventEmitter {
