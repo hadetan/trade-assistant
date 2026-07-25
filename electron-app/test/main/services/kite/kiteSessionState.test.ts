@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { KiteSessionState, classifyKiteResponse } from "../../../../src/main/services/kite/kiteSessionState";
+import { KiteSessionState, classifyKiteResponse, looksLikeSessionExpiry } from "../../../../src/main/services/kite/kiteSessionState";
 
 describe("classifyKiteResponse", () => {
   it("treats a TokenException error payload as needsLogin", () => {
@@ -30,6 +30,26 @@ describe("classifyKiteResponse", () => {
 
   it("treats a data payload without user_id as unknown, not authenticated", () => {
     expect(classifyKiteResponse({ data: { something_else: 1 } })).toBe("unknown");
+  });
+});
+
+describe("looksLikeSessionExpiry", () => {
+  it("matches an Error message carrying a TokenException marker", () => {
+    expect(looksLikeSessionExpiry(new Error('MCP call failed: {"error_type":"TokenException","message":"Invalid token"}'))).toBe(
+      true,
+    );
+  });
+
+  it("matches an Error message carrying a 403 status marker", () => {
+    expect(looksLikeSessionExpiry(new Error("request failed with status 403"))).toBe(true);
+  });
+
+  it("matches an Error message carrying the Kite login-gate text", () => {
+    expect(looksLikeSessionExpiry(new Error("Please login to Kite first to continue."))).toBe(true);
+  });
+
+  it("does not match an ordinary, unrelated error message", () => {
+    expect(looksLikeSessionExpiry(new Error("sidecar unreachable"))).toBe(false);
   });
 });
 

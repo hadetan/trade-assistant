@@ -85,7 +85,13 @@ export function createApp(): AppRuntime {
       onBanner: (handler) => bannerHandlers.push(handler),
       sendToRenderer: (channel, payload) => window.webContents.send(channel, payload),
     });
-    registerAnalysisBridge({ ipcMain, login, getSession: () => session, sidecar: supervisor });
+    registerAnalysisBridge({
+      ipcMain,
+      login,
+      getSession: () => session,
+      sidecar: supervisor,
+      markNeedsLogin: () => sessionState.markNeedsLogin(),
+    });
     const rendererUrl = process.env.ELECTRON_RENDERER_URL;
     if (rendererUrl) window.loadURL(rendererUrl);
     else window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));

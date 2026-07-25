@@ -5,6 +5,7 @@ import type { KiteSession } from "../services/kite/kiteLogin";
 import type { SidecarSupervisor } from "../services/sidecar/sidecarSupervisor";
 import { assembleEnvelope } from "../services/analysis/analysisEnvelope";
 import { generateDeterministicResponse } from "../services/analysis/deterministicResponseGenerator";
+import { looksLikeSessionExpiry } from "../services/kite/kiteSessionState";
 
 const INTRADAY_LOOKBACK_DAYS = 5;
 const POSITIONAL_LOOKBACK_DAYS = 365;
@@ -75,6 +76,7 @@ export interface AnalysisBridgeDeps {
   login: () => Promise<LoginResult>;
   getSession: () => KiteSession | null;
   sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
+  markNeedsLogin: () => void;
   now?: () => Date;
 }
 
@@ -84,12 +86,26 @@ function requireSession(getSession: () => KiteSession | null): KiteSession {
   return session;
 }
 
+// A thrown Error at this point has already lost the structured MCP response
+// classifyKiteResponse works from; this only re-arms the needs-login banner
+// when the error's own message happens to carry a recognizable marker, so it
+// never fires markNeedsLogin() on an ordinary network/sidecar failure.
+function guardSessionExpiry<T>(markNeedsLogin: () => void, promise: Promise<T>): Promise<T> {
+  return promise.catch((error) => {
+    if (looksLikeSessionExpiry(error)) markNeedsLogin();
+    throw error;
+  });
+}
+
 export function registerAnalysisBridge(deps: AnalysisBridgeDeps): void {
   deps.ipcMain.handle("kite:login", () => deps.login());
   deps.ipcMain.handle("kite:searchInstruments", (_event, args: { query: string }) =>
-    requireSession(deps.getSession).kite.searchInstruments(args.query),
+    guardSessionExpiry(deps.markNeedsLogin, requireSession(deps.getSession).kite.searchInstruments(args.query)),
   );
   deps.ipcMain.handle("analysis:run", (_event, params: AnalysisRunParams) =>
-    runAnalysisRequest({ kite: requireSession(deps.getSession).kite, sidecar: deps.sidecar, now: deps.now }, params),
+    guardSessionExpiry(
+      deps.markNeedsLogin,
+      runAnalysisRequest({ kite: requireSession(deps.getSession).kite, sidecar: deps.sidecar, now: deps.now }, params),
+    ),
   );
 }

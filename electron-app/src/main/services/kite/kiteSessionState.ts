@@ -39,6 +39,21 @@ export function classifyKiteResponse(response: unknown): KiteSessionStatus {
   return "unknown";
 }
 
+// By the time a failed Kite MCP call reaches an IPC handler's catch block,
+// the original structured response classifyKiteResponse expects is already
+// gone — only a thrown Error survives, and its .message is whatever the
+// throwing code chose to stringify. This only detects session expiry if
+// that message happens to carry one of the same three markers as text;
+// unverified against a real live session (see p5a-task-10-report.md's
+// deferred MCP header-format uncertainty for the same category of risk).
+export function looksLikeSessionExpiry(error: unknown): boolean {
+  const message = (error as Error)?.message ?? String(error);
+  if (/tokenexception/i.test(message)) return true;
+  if (/\b403\b/.test(message)) return true;
+  if (/log ?in/i.test(message) && /kite/i.test(message)) return true;
+  return false;
+}
+
 export class KiteSessionState extends EventEmitter {
   private current: KiteSessionStatus = "unknown";
 
