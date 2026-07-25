@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 import { KiteClient } from "../src/main/services/kite/kiteClient";
 import { SidecarSupervisor } from "../src/main/services/sidecar/sidecarSupervisor";
 import { fetchAndArchive } from "../src/main/services/kite/historicalDataArchive";
+import { assembleEnvelope } from "../src/main/services/analysis/analysisEnvelope";
+import { generateDeterministicResponse } from "../src/main/services/analysis/deterministicResponseGenerator";
 
 const SIDECAR = path.resolve(__dirname, "..", "..", "rust-core", "target", "debug", "sidecar");
 
@@ -44,6 +46,35 @@ describe.skipIf(!existsSync(SIDECAR))("end-to-end: fetch -> archive -> compute",
       expect(compute.algo_results.length).toBeGreaterThan(0);
       expect(compute.algo_results.some((r) => r.algo_id === "rsi")).toBe(true);
       expect(Number.isNaN(compute.confluence.weighted_vote)).toBe(false);
+    } finally {
+      await supervisor.stop();
+    }
+  });
+
+  it("generates non-directive engine-only prose from a real assembled envelope", async () => {
+    const lake = mkdtempSync(path.join(tmpdir(), "ta-e2e-gen-"));
+    const supervisor = new SidecarSupervisor({ binaryPath: SIDECAR, lakeRoot: lake });
+    supervisor.start();
+
+    try {
+      const envelope = await assembleEnvelope(
+        { kite: recordedKite(), sidecar: supervisor },
+        {
+          trigger: "reactive",
+          instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+          timeframe: "day",
+          horizon_requested: "positional",
+          intent_lens: "buying",
+          from: "2026-01-01",
+          to: "2026-01-20",
+        },
+      );
+
+      const response = generateDeterministicResponse(envelope);
+
+      expect(Number.isNaN(response.confluence.weighted_vote)).toBe(false);
+      expect(["bullish", "bearish", "neutral"]).toContain(response.direction);
+      expect(response.text).not.toMatch(/\b(buy|sell|hold|add|reduce|book|exit|enter|watch)\b/i);
     } finally {
       await supervisor.stop();
     }
