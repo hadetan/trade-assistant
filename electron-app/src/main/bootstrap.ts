@@ -3,15 +3,30 @@ import path from "node:path";
 import { mainWindowOptions } from "./mainWindow";
 import { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
 import { KiteSessionState } from "./services/kite/kiteSessionState";
+import { loadKiteConfig } from "./services/kite/kiteConfig";
+import { runKiteLogin } from "./services/kite/kiteLogin";
+import type { KiteSession } from "./services/kite/kiteLogin";
+import { captureRequestToken, exchangeAccessToken } from "./services/kite/kiteOAuth";
 import { registerStatusBridge } from "./ipc/appBridge";
-import type { AppStatus, BannerEvent, SidecarStatus } from "./ipc/rendererApi";
+import { registerAnalysisBridge } from "./ipc/analysisBridge";
+import type { AppStatus, BannerEvent, LoginResult, SidecarStatus } from "./ipc/rendererApi";
 
 export interface AppRuntime {
   start(): void;
   stop(): void;
 }
 
+async function postForm(url: string, form: Record<string, string>): Promise<unknown> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Kite-Version": "3" },
+    body: new URLSearchParams(form).toString(),
+  });
+  return response.json();
+}
+
 export function createApp(): AppRuntime {
+  const config = loadKiteConfig();
   const supervisor = new SidecarSupervisor({
     binaryPath:
       process.env.SIDECAR_BINARY ??
@@ -22,25 +37,40 @@ export function createApp(): AppRuntime {
 
   let sidecarStatus: SidecarStatus = "down";
   let driftWarning: string | null = null;
+  let session: KiteSession | null = null;
   const bannerHandlers: ((banner: BannerEvent) => void)[] = [];
 
   supervisor.on("statusChange", (status: SidecarStatus) => {
     sidecarStatus = status;
   });
-  sessionState.on("banner", (banner: BannerEvent) =>
-    bannerHandlers.forEach((handler) => handler(banner)),
-  );
+  sessionState.on("banner", (banner: BannerEvent) => bannerHandlers.forEach((handler) => handler(banner)));
 
-  const currentStatus = (): AppStatus => ({
-    sidecar: sidecarStatus,
-    kiteSession: sessionState.status,
-    driftWarning,
-  });
+  const currentStatus = (): AppStatus => ({ sidecar: sidecarStatus, kiteSession: sessionState.status, driftWarning });
+
+  const login = async (): Promise<LoginResult> => {
+    try {
+      session = await runKiteLogin({
+        config,
+        captureRequestToken,
+        exchangeAccessToken,
+        postForm,
+        openExternal: (url) => shell.openExternal(url),
+      });
+      if (session.drift.hasDrift) {
+        driftWarning = `MCP tools changed: added [${session.drift.added.join(", ")}], removed [${session.drift.removed.join(", ")}]`;
+        const banner: BannerEvent = { kind: "mcpDrift", message: driftWarning };
+        bannerHandlers.forEach((handler) => handler(banner));
+      }
+      sessionState.markAuthenticated();
+      return { status: "authenticated" };
+    } catch (error) {
+      sessionState.markNeedsLogin();
+      return { status: "error", message: (error as Error).message };
+    }
+  };
 
   const createMainWindow = (): BrowserWindow => {
-    const window = new BrowserWindow(
-      mainWindowOptions(path.join(__dirname, "..", "preload", "preload.js")),
-    );
+    const window = new BrowserWindow(mainWindowOptions(path.join(__dirname, "..", "preload", "preload.js")));
     window.webContents.setWindowOpenHandler(({ url }) => {
       if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
       return { action: "deny" };
@@ -51,6 +81,7 @@ export function createApp(): AppRuntime {
       onBanner: (handler) => bannerHandlers.push(handler),
       sendToRenderer: (channel, payload) => window.webContents.send(channel, payload),
     });
+    registerAnalysisBridge({ ipcMain, login, getSession: () => session, sidecar: supervisor });
     const rendererUrl = process.env.ELECTRON_RENDERER_URL;
     if (rendererUrl) window.loadURL(rendererUrl);
     else window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
@@ -63,6 +94,7 @@ export function createApp(): AppRuntime {
       createMainWindow();
     },
     stop: () => {
+      void session?.close();
       supervisor.stop();
     },
   };
