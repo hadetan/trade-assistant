@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
+import dotenv from "dotenv";
 import path from "node:path";
 import { mainWindowOptions } from "./mainWindow";
 import { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
@@ -26,6 +27,9 @@ async function postForm(url: string, form: Record<string, string>): Promise<unkn
 }
 
 export function createApp(): AppRuntime {
+  // loadKiteConfig reads process.env directly; nothing else in this codebase
+  // populates it from electron-app/.env, so this must run first.
+  dotenv.config({ path: path.join(app.getAppPath(), ".env") });
   const config = loadKiteConfig();
   const supervisor = new SidecarSupervisor({
     binaryPath:
