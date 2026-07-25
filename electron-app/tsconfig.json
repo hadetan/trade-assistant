@@ -4,6 +4,7 @@
     "module": "commonjs",
     "moduleResolution": "node",
     "lib": ["ES2022", "DOM"],
+    "jsx": "react-jsx",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -11,5 +12,5 @@
     "noEmit": true
   },
   "include": ["src/**/*"],
-  "exclude": ["**/*.test.ts", "node_modules", "out"]
+  "exclude": ["**/*.test.ts", "**/*.test.tsx", "node_modules", "out"]
 }

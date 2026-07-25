@@ -1,0 +1,54 @@
+// @vitest-environment jsdom
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { App } from "../../src/renderer/App";
+
+afterEach(cleanup);
+
+function installBridge(overrides: Record<string, unknown> = {}) {
+  const bridge = {
+    getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null }),
+    onBanner: vi.fn(),
+    login: vi.fn().mockResolvedValue({ status: "authenticated" }),
+    searchInstruments: vi.fn().mockResolvedValue({ data: [] }),
+    runAnalysis: vi.fn(),
+    ...overrides,
+  };
+  (window as unknown as { tradeAssistant: unknown }).tradeAssistant = bridge;
+  return bridge;
+}
+
+describe("App", () => {
+  it("renders the status line from the bridge", async () => {
+    installBridge();
+    render(<App />);
+    expect(await screen.findByText(/sidecar: up \| kite: needsLogin/)).toBeTruthy();
+  });
+
+  it("shows the Login button before authentication and no analysis form", async () => {
+    installBridge();
+    render(<App />);
+    expect(await screen.findByRole("button", { name: /login to kite/i })).toBeTruthy();
+    expect(screen.queryByLabelText(/instrument search/i)).toBeNull();
+  });
+
+  it("logs in and reflects authenticated status", async () => {
+    const bridge = installBridge({
+      getStatus: vi
+        .fn()
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null })
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /login to kite/i }));
+    await waitFor(() => expect(bridge.login).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/kite: authenticated/)).toBeTruthy();
+  });
+
+  it("shows the returned error message when login fails", async () => {
+    installBridge({ login: vi.fn().mockResolvedValue({ status: "error", message: "no session" }) });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /login to kite/i }));
+    expect(await screen.findByText(/no session/)).toBeTruthy();
+  });
+});
