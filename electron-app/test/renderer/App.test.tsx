@@ -80,4 +80,21 @@ describe("App", () => {
 
     expect(await screen.findByText(/Overall read: bullish/)).toBeTruthy();
   });
+
+  it("shows an error message when analysis fails instead of failing silently", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      searchInstruments: vi.fn().mockResolvedValue({
+        data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
+      }),
+      runAnalysis: vi.fn().mockRejectedValue(new Error("sidecar unreachable")),
+    });
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    expect(await screen.findByText(/sidecar unreachable/)).toBeTruthy();
+  });
 });

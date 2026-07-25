@@ -41,6 +41,7 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
   const [results, setResults] = useState<InstrumentSelection[]>([]);
   const [selected, setSelected] = useState<InstrumentSelection | null>(null);
   const [horizon, setHorizon] = useState<Horizon>("intraday");
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     if (query.trim().length < 2) {
@@ -48,7 +49,12 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
       return;
     }
     const timer = setTimeout(async () => {
-      setResults(parseInstruments(await bridge().searchInstruments(query)));
+      setSearchError(null);
+      try {
+        setResults(parseInstruments(await bridge().searchInstruments(query)));
+      } catch (error) {
+        setSearchError((error as Error).message);
+      }
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [query]);
@@ -61,6 +67,7 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
         value={query}
         onChange={(event) => setQuery(event.target.value)}
       />
+      {searchError && <div className="error">{searchError}</div>}
       <ul className="results">
         {results.map((instrument) => (
           <li key={instrument.instrumentToken}>

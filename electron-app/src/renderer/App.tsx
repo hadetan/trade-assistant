@@ -12,10 +12,16 @@ export function App(): JSX.Element {
   const [banners, setBanners] = useState<BannerEvent[]>([]);
   const [loggingIn, setLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
 
   const onAnalyze = async (instrument: InstrumentSelection, horizon: Horizon): Promise<void> => {
-    setResult(await bridge().runAnalysis({ instrument, horizon }));
+    setAnalysisError(null);
+    try {
+      setResult(await bridge().runAnalysis({ instrument, horizon }));
+    } catch (error) {
+      setAnalysisError((error as Error).message);
+    }
   };
 
   useEffect(() => {
@@ -56,6 +62,7 @@ export function App(): JSX.Element {
       )}
       {loginError && <div className="error">{loginError}</div>}
       {authenticated && <InstrumentSearch onSubmit={onAnalyze} />}
+      {analysisError && <div className="error">{analysisError}</div>}
       {result && <AnalysisResultView result={result} />}
     </main>
   );

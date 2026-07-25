@@ -58,4 +58,15 @@ describe("InstrumentSearch", () => {
       ),
     );
   });
+
+  it("shows an error message when the search fails instead of failing silently", async () => {
+    installBridge(async () => {
+      throw new Error("network down");
+    });
+    render(<InstrumentSearch onSubmit={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText(/instrument search/i), { target: { value: "infy" } });
+
+    expect(await screen.findByText(/network down/)).toBeTruthy();
+  });
 });
