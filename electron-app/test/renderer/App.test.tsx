@@ -51,4 +51,33 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /login to kite/i }));
     expect(await screen.findByText(/no session/)).toBeTruthy();
   });
+
+  it("runs an analysis when authenticated and renders the prose", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      searchInstruments: vi.fn().mockResolvedValue({
+        data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
+      }),
+      runAnalysis: vi.fn().mockResolvedValue({
+        mode: "engine_only",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+        horizon: "positional",
+        response: {
+          direction: "bullish",
+          conviction: "high",
+          text: "Overall read: bullish (high conviction).",
+          confluence: { bullish_count: 4, bearish_count: 1, neutral_count: 0, weighted_vote: 0.62 },
+        },
+        algo_results: [],
+      }),
+    });
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByLabelText(/positional/i));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    expect(await screen.findByText(/Overall read: bullish/)).toBeTruthy();
+  });
 });

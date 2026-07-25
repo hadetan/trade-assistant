@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import type { AppStatus, BannerEvent, RendererApi } from "../main/ipc/rendererApi";
+import { InstrumentSearch } from "./InstrumentSearch";
+import { AnalysisResultView } from "./AnalysisResult";
+import type { AnalysisResult, AppStatus, BannerEvent, Horizon, InstrumentSelection, RendererApi } from "../main/ipc/rendererApi";
 
 function bridge(): RendererApi {
   return (window as unknown as { tradeAssistant: RendererApi }).tradeAssistant;
@@ -10,6 +12,11 @@ export function App(): JSX.Element {
   const [banners, setBanners] = useState<BannerEvent[]>([]);
   const [loggingIn, setLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+
+  const onAnalyze = async (instrument: InstrumentSelection, horizon: Horizon): Promise<void> => {
+    setResult(await bridge().runAnalysis({ instrument, horizon }));
+  };
 
   useEffect(() => {
     void bridge()
@@ -48,6 +55,8 @@ export function App(): JSX.Element {
         </button>
       )}
       {loginError && <div className="error">{loginError}</div>}
+      {authenticated && <InstrumentSearch onSubmit={onAnalyze} />}
+      {result && <AnalysisResultView result={result} />}
     </main>
   );
 }
