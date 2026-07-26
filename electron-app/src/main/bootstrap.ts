@@ -8,8 +8,10 @@ import { loadKiteConfig } from "./services/kite/kiteConfig";
 import { runKiteLogin } from "./services/kite/kiteLogin";
 import type { KiteSession } from "./services/kite/kiteLogin";
 import { captureRequestToken, exchangeAccessToken } from "./services/kite/kiteOAuth";
+import { ClaudeCliProvider } from "./services/claude/claudeCliProvider";
 import { registerStatusBridge } from "./ipc/appBridge";
 import { registerAnalysisBridge } from "./ipc/analysisBridge";
+import { makeNarrativeSender } from "./ipc/narrativeBridge";
 import type { AppStatus, BannerEvent, KiteSessionStatus, LoginResult, SidecarStatus } from "./ipc/rendererApi";
 
 export interface AppRuntime {
@@ -49,6 +51,7 @@ export function createApp(): AppRuntime {
     lakeRoot: process.env.TRADE_ASSISTANT_LAKE ?? path.join(app.getPath("userData"), "candle-lake"),
   });
   const sessionState = new KiteSessionState();
+  const provider = new ClaudeCliProvider();
 
   let sidecarStatus: SidecarStatus = "down";
   let driftWarning: string | null = null;
@@ -134,6 +137,8 @@ export function createApp(): AppRuntime {
       login,
       getSession: () => session,
       sidecar: supervisor,
+      provider,
+      sendNarrative: makeNarrativeSender((channel, payload) => window.webContents.send(channel, payload)),
       markNeedsLogin: () => sessionState.markNeedsLogin(),
     });
     const rendererUrl = process.env.ELECTRON_RENDERER_URL;
