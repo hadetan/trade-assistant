@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "../../../../src/main/services/kite/kiteClient";
 import { KITE_READ_TOOL_ALLOWLIST, KITE_WRITE_TOOL_DENYLIST, buildClaudeArgs, spawnClaude } from "../../../../src/main/services/claude/claudeProvider";
+import { WEB_TOOL_NAMES, WEB_TOOL_ALLOWLIST } from "../../../../src/main/services/claude/claudeProvider";
 
 describe("claude subprocess scaffolding", () => {
   it("allowlists exactly KiteClient's own read tool set and nothing else", () => {
@@ -78,6 +79,69 @@ describe("claude subprocess scaffolding", () => {
         KITE_WRITE_TOOL_DENYLIST,
         "--strict-mcp-config",
       ]);
+      expect(args.slice(-2)).toEqual(["--print", "p"]);
+    }
+  });
+});
+
+describe("web-tool allowlist extension (additive, closed set)", () => {
+  const kiteReads = Object.values(KITE_READ_TOOL_NAMES).map((n) => `mcp__kite__${n}`);
+
+  it("grants exactly the Kite reads plus WebSearch and WebFetch when allowWebTools is true", () => {
+    const args = buildClaudeArgs("analyze INFY", { allowWebTools: true });
+    const allowed = new Set(args[args.indexOf("--allowedTools") + 1].split(","));
+    expect(allowed).toEqual(new Set([...kiteReads, "WebSearch", "WebFetch"]));
+  });
+
+  it("never names a write tool or any other built-in tool in the web grant", () => {
+    const allowed = new Set(
+      buildClaudeArgs("p", { allowWebTools: true })[1].split(","),
+    );
+    for (const w of KITE_WRITE_TOOL_NAMES) expect(allowed.has(`mcp__kite__${w}`)).toBe(false);
+    for (const t of ["Bash", "Write", "Edit", "Read", "Task", "Agent", "Glob", "Grep"]) {
+      expect(allowed.has(t)).toBe(false);
+    }
+    expect(WEB_TOOL_ALLOWLIST).toBe("WebSearch,WebFetch");
+    expect([...WEB_TOOL_NAMES]).toEqual(["WebSearch", "WebFetch"]);
+  });
+
+  it("returns byte-identical argv to today when allowWebTools is falsy (strictly additive, opt-in)", () => {
+    expect(buildClaudeArgs("analyze INFY")).toEqual([
+      "--allowedTools",
+      KITE_READ_TOOL_ALLOWLIST,
+      "--disallowedTools",
+      KITE_WRITE_TOOL_DENYLIST,
+      "--strict-mcp-config",
+      "--print",
+      "analyze INFY",
+    ]);
+    expect(buildClaudeArgs("analyze INFY", { allowWebTools: false })).toEqual(
+      buildClaudeArgs("analyze INFY"),
+    );
+  });
+
+  it("emits stream-json output format and --include-partial-messages only when asked", () => {
+    const streamed = buildClaudeArgs("p", { outputFormat: "stream-json", includePartialMessages: true });
+    expect(streamed).toContain("--include-partial-messages");
+    expect(streamed.slice(streamed.indexOf("--output-format"), streamed.indexOf("--output-format") + 2)).toEqual([
+      "--output-format",
+      "stream-json",
+    ]);
+    expect(buildClaudeArgs("p", {})).not.toContain("--include-partial-messages");
+  });
+
+  it("keeps the three safety flags first, in order, for every new option combination", () => {
+    const combos: Array<Parameters<typeof buildClaudeArgs>[1]> = [
+      { allowWebTools: true },
+      { outputFormat: "stream-json", includePartialMessages: true },
+      { allowWebTools: true, outputFormat: "json", jsonSchema: "{}", systemPrompt: "s" },
+    ];
+    for (const opts of combos) {
+      const args = buildClaudeArgs("p", opts);
+      expect(args[0]).toBe("--allowedTools");
+      expect(args[2]).toBe("--disallowedTools");
+      expect(args[3]).toBe(KITE_WRITE_TOOL_DENYLIST);
+      expect(args[4]).toBe("--strict-mcp-config");
       expect(args.slice(-2)).toEqual(["--print", "p"]);
     }
   });
