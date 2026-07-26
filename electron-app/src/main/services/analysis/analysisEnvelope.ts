@@ -1,7 +1,7 @@
 import type { KiteClient } from "../kite/kiteClient";
 import type { SidecarSupervisor } from "../sidecar/sidecarSupervisor";
 import { fetchAndArchive } from "../kite/historicalDataArchive";
-import type { AnalysisEnvelope } from "./contracts";
+import type { AnalysisEnvelope, IntentLens } from "./contracts";
 
 export interface AssembleEnvelopeDeps {
   kite: KiteClient;
@@ -20,7 +20,7 @@ export interface AssembleEnvelopeParams {
   instrument: InstrumentSelection;
   timeframe: string;
   horizon_requested: "intraday" | "positional" | "auto";
-  intent_lens: "buying" | "selling";
+  intent_lens: IntentLens;
   from: string;
   to: string;
 }

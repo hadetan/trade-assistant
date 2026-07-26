@@ -7,6 +7,7 @@ import {
   citedIdsWithinEnvelope,
   type AnalysisEnvelope,
 } from "../../../../src/main/services/analysis/contracts";
+import { intakeResultSchema, intakeResultJsonSchema } from "../../../../src/main/services/analysis/contracts";
 
 const envelope: AnalysisEnvelope = {
   trigger: "reactive",
@@ -107,5 +108,32 @@ describe("contracts schemas", () => {
   it("checks cited ids are a subset of the envelope's algo ids", () => {
     expect(citedIdsWithinEnvelope(["rsi"], envelope)).toBe(true);
     expect(citedIdsWithinEnvelope(["rsi", "made_up"], envelope)).toBe(false);
+  });
+});
+
+describe("IntakeResult contract", () => {
+  const valid = {
+    instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+    horizon: "positional",
+    researchNotes: "Q3 results due",
+  };
+
+  it("accepts a well-formed intake result", () => {
+    expect(intakeResultSchema.parse(valid)).toEqual(valid);
+  });
+
+  it("accepts an omitted researchNotes", () => {
+    const { researchNotes, ...withoutNotes } = valid;
+    expect(intakeResultSchema.safeParse(withoutNotes).success).toBe(true);
+  });
+
+  it("rejects an unsupported horizon (auto still deferred) and extra properties", () => {
+    expect(intakeResultSchema.safeParse({ ...valid, horizon: "auto" }).success).toBe(false);
+    expect(intakeResultSchema.safeParse({ ...valid, extra: 1 }).success).toBe(false);
+  });
+
+  it("mirrors the closed horizon enum in the CLI JSON schema", () => {
+    expect(intakeResultJsonSchema.properties.horizon.enum).toEqual(["intraday", "positional"]);
+    expect(intakeResultJsonSchema.additionalProperties).toBe(false);
   });
 });
