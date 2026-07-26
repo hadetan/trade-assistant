@@ -14,6 +14,7 @@ export interface KiteLoginDeps {
   openExternal: (url: string) => void;
   connectMcp?: (d: ConnectKiteMcpDeps) => Promise<McpConnection>;
   checkDrift?: (listing: ToolListing) => Promise<DriftResult>;
+  onKiteResponse?: (response: unknown) => void;
 }
 
 export interface KiteSession {
@@ -42,7 +43,7 @@ export async function runKiteLogin(deps: KiteLoginDeps): Promise<KiteSession> {
   const accessToken = extractAccessToken(tokenResponse);
 
   const connection = await connectMcp({ apiKey, accessToken });
-  const kite = new KiteClient(connection.caller);
+  const kite = new KiteClient(connection.caller, { onResponse: deps.onKiteResponse });
   const drift = await checkDrift(connection.listing);
 
   return { kite, connection, drift, close: connection.close };

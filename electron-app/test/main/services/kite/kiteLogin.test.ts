@@ -60,6 +60,17 @@ describe("runKiteLogin", () => {
     expect(session.drift).toEqual({ added: ["new_tool"], removed: [], hasDrift: true });
   });
 
+  it("wires onKiteResponse through to the session's KiteClient", async () => {
+    const { deps, connection } = baseDeps();
+    connection.caller.callTool = vi.fn().mockResolvedValue({ data: { user_id: "AB1234" } });
+    const onKiteResponse = vi.fn();
+
+    const session = await runKiteLogin({ ...deps, onKiteResponse });
+    await session.kite.getProfile();
+
+    expect(onKiteResponse).toHaveBeenCalledWith({ data: { user_id: "AB1234" } });
+  });
+
   it("rejects with a clear error when the token exchange has no access_token", async () => {
     const { deps } = baseDeps();
     deps.exchangeAccessToken = vi.fn().mockResolvedValue({ data: {} });

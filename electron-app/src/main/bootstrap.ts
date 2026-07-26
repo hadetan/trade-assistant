@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { mainWindowOptions } from "./mainWindow";
 import { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
-import { KiteSessionState } from "./services/kite/kiteSessionState";
+import { KiteSessionState, classifyKiteResponse } from "./services/kite/kiteSessionState";
 import { loadKiteConfig } from "./services/kite/kiteConfig";
 import { runKiteLogin } from "./services/kite/kiteLogin";
 import type { KiteSession } from "./services/kite/kiteLogin";
@@ -15,6 +15,17 @@ import type { AppStatus, BannerEvent, LoginResult, SidecarStatus } from "./ipc/r
 export interface AppRuntime {
   start(): void;
   stop(): void;
+}
+
+// classifyKiteResponse fails closed: ordinary successful reads (search
+// results, quotes, candles) match neither the needsLogin nor the
+// authenticated shape and classify as "unknown". Calling the general
+// sessionState.observe() here on every resolved response would downgrade an
+// authenticated session to "unknown" after the very next ordinary call, so
+// this only ever acts on the needsLogin verdict — mirrors
+// looksLikeSessionExpiry's one-directional check on thrown errors.
+export function handleKiteResponse(sessionState: KiteSessionState, response: unknown): void {
+  if (classifyKiteResponse(response) === "needsLogin") sessionState.markNeedsLogin();
 }
 
 async function postForm(url: string, form: Record<string, string>): Promise<unknown> {
@@ -59,6 +70,7 @@ export function createApp(): AppRuntime {
         exchangeAccessToken,
         postForm,
         openExternal: (url) => shell.openExternal(url),
+        onKiteResponse: (response) => handleKiteResponse(sessionState, response),
       });
       if (session.drift.hasDrift) {
         driftWarning = `MCP tools changed: added [${session.drift.added.join(", ")}], removed [${session.drift.removed.join(", ")}]`;
