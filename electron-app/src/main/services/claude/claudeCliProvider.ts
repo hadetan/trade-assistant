@@ -19,6 +19,7 @@ export interface PersonaRunSpec<T> {
   schema: ZodType<T>;
   prompt: string;
   signal?: AbortSignal;
+  allowWebTools?: boolean;
 }
 
 export type PersonaRunner = <T>(spec: PersonaRunSpec<T>) => Promise<T>;
@@ -65,7 +66,12 @@ export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunn
       }
       const child = spawnClaude(
         prompt,
-        { systemPrompt: spec.systemPrompt, jsonSchema: JSON.stringify(spec.jsonSchema), outputFormat: "json" },
+        {
+          systemPrompt: spec.systemPrompt,
+          jsonSchema: JSON.stringify(spec.jsonSchema),
+          outputFormat: "json",
+          allowWebTools: spec.allowWebTools,
+        },
         spawnFn,
       );
       let timer: NodeJS.Timeout | undefined;

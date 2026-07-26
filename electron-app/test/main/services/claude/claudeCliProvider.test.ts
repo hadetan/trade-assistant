@@ -143,4 +143,30 @@ describe("makeClaudeRunner", () => {
     expect(abortAdds).toBeGreaterThan(0);
     expect(abortRemoves).toBe(abortAdds);
   });
+
+  it("passes allowWebTools through to the spawned argv when the spec sets it", async () => {
+    const argvs: string[][] = [];
+    const spawnFn = (_c: string, args: string[]) => {
+      argvs.push(args);
+      const child = new FakeChild();
+      emitResult(child, validFinding);
+      return child as never;
+    };
+    const run = makeClaudeRunner({ spawnFn });
+    await run({ ...baseSpec(), allowWebTools: true });
+    expect(argvs[0][argvs[0].indexOf("--allowedTools") + 1]).toContain("WebSearch");
+    expect(argvs[0][argvs[0].indexOf("--allowedTools") + 1]).toContain("WebFetch");
+  });
+
+  it("does not grant web tools when the spec omits allowWebTools", async () => {
+    const argvs: string[][] = [];
+    const spawnFn = (_c: string, args: string[]) => {
+      argvs.push(args);
+      const child = new FakeChild();
+      emitResult(child, validFinding);
+      return child as never;
+    };
+    await makeClaudeRunner({ spawnFn })(baseSpec());
+    expect(argvs[0][argvs[0].indexOf("--allowedTools") + 1]).not.toContain("WebSearch");
+  });
 });
