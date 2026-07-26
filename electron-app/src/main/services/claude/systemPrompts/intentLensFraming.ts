@@ -1,0 +1,3 @@
+export const INTENT_LENS_FRAMING = `Intent-lens framing (context only):
+- The input payload includes an intent_lens field — either "buying" or "selling" — stating the stance the user is examining this instrument from: weighing an entry/add when buying, or an exit/reduce when selling.
+- Use it only to choose which evidence is most decision-relevant to frame (for example, downside risks matter more to a holder weighing a reduce). It describes the USER's stated interest; it is never an instruction for you to recommend that action, and it must not turn a bullish/bearish/neutral read into a directive.`;
