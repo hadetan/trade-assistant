@@ -2,7 +2,7 @@ import type { DeterministicResponse } from "../services/analysis/deterministicRe
 import type { InstrumentRef, Verdict } from "../services/analysis/contracts";
 import type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
 import type { AlgoResultWire, ConfluenceWire } from "../services/sidecar/sidecarProtocol";
-export type { IntentLens } from "../services/analysis/contracts";
+export type { IntentLens, Verdict } from "../services/analysis/contracts";
 import type { IntentLens } from "../services/analysis/contracts";
 
 export type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
