@@ -2,9 +2,16 @@ import { describe, expect, it, vi } from "vitest";
 import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
-  it("exposes exactly the five bridge methods and never leaks the raw transport", () => {
+  it("exposes exactly the six bridge methods and never leaks the raw transport", () => {
     const api = buildRendererApi(vi.fn().mockResolvedValue({}), vi.fn());
-    expect(Object.keys(api).sort()).toEqual(["getStatus", "login", "onBanner", "runAnalysis", "searchInstruments"]);
+    expect(Object.keys(api).sort()).toEqual([
+      "getStatus",
+      "login",
+      "onBanner",
+      "onNarrative",
+      "runAnalysis",
+      "searchInstruments",
+    ]);
     expect((api as Record<string, unknown>).ipcRenderer).toBeUndefined();
     expect((api as Record<string, unknown>).invoke).toBeUndefined();
   });
@@ -43,5 +50,22 @@ describe("buildRendererApi", () => {
     };
     await buildRendererApi(invoke, vi.fn()).runAnalysis(params);
     expect(invoke).toHaveBeenCalledWith("analysis:run", params);
+  });
+});
+
+describe("buildRendererApi narrative wiring", () => {
+  it("subscribes onNarrative to the analysis:narrative push channel", () => {
+    const subscribe = vi.fn();
+    const api = buildRendererApi(vi.fn(), subscribe);
+    const handler = vi.fn();
+    api.onNarrative(handler);
+    expect(subscribe).toHaveBeenCalledWith("analysis:narrative", handler);
+  });
+
+  it("routes an ai_assisted run through analysis:run", async () => {
+    const invoke = vi.fn().mockResolvedValue({ mode: "ai_assisted" });
+    const api = buildRendererApi(invoke, vi.fn());
+    await api.runAnalysis({ mode: "ai_assisted", query: "infy", intent_lens: "buying", requestId: "r1" });
+    expect(invoke).toHaveBeenCalledWith("analysis:run", { mode: "ai_assisted", query: "infy", intent_lens: "buying", requestId: "r1" });
   });
 });
