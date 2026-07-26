@@ -10,7 +10,7 @@ import type { KiteSession } from "./services/kite/kiteLogin";
 import { captureRequestToken, exchangeAccessToken } from "./services/kite/kiteOAuth";
 import { registerStatusBridge } from "./ipc/appBridge";
 import { registerAnalysisBridge } from "./ipc/analysisBridge";
-import type { AppStatus, BannerEvent, LoginResult, SidecarStatus } from "./ipc/rendererApi";
+import type { AppStatus, BannerEvent, KiteSessionStatus, LoginResult, SidecarStatus } from "./ipc/rendererApi";
 
 export interface AppRuntime {
   start(): void;
@@ -53,36 +53,68 @@ export function createApp(): AppRuntime {
   let sidecarStatus: SidecarStatus = "down";
   let driftWarning: string | null = null;
   let session: KiteSession | null = null;
+  let loginInFlight: Promise<LoginResult> | null = null;
   const bannerHandlers: ((banner: BannerEvent) => void)[] = [];
+
+  const dispatchBanner = (banner: BannerEvent): void => bannerHandlers.forEach((handler) => handler(banner));
 
   supervisor.on("statusChange", (status: SidecarStatus) => {
     sidecarStatus = status;
   });
-  sessionState.on("banner", (banner: BannerEvent) => bannerHandlers.forEach((handler) => handler(banner)));
+  sessionState.on("banner", dispatchBanner);
+  // Once the session state moves to needsLogin — whether from a live
+  // response/rejection classified as expired, or a failed re-login attempt
+  // below — the previous connection is no longer trustworthy. Closing and
+  // clearing it here (rather than only at quit) keeps `session` consistent
+  // with what the "needs login" banner is telling the user: kite:*
+  // IPC calls should reject with "not logged in", not keep succeeding
+  // against a stale connection.
+  sessionState.on("change", (status: KiteSessionStatus) => {
+    if (status === "needsLogin" && session) {
+      const closing = session;
+      session = null;
+      void closing.close().catch(() => {});
+    }
+  });
 
   const currentStatus = (): AppStatus => ({ sidecar: sidecarStatus, kiteSession: sessionState.status, driftWarning });
 
-  const login = async (): Promise<LoginResult> => {
-    try {
-      session = await runKiteLogin({
-        config,
-        captureRequestToken,
-        exchangeAccessToken,
-        postForm,
-        openExternal: (url) => shell.openExternal(url),
-        onKiteResponse: (response) => handleKiteResponse(sessionState, response),
-      });
-      if (session.drift.hasDrift) {
-        driftWarning = `MCP tools changed: added [${session.drift.added.join(", ")}], removed [${session.drift.removed.join(", ")}]`;
-        const banner: BannerEvent = { kind: "mcpDrift", message: driftWarning };
-        bannerHandlers.forEach((handler) => handler(banner));
+  const login = (): Promise<LoginResult> => {
+    if (loginInFlight) return loginInFlight;
+    loginInFlight = (async (): Promise<LoginResult> => {
+      try {
+        const previousSession = session;
+        const newSession = await runKiteLogin({
+          config,
+          captureRequestToken,
+          exchangeAccessToken,
+          postForm,
+          openExternal: (url) => shell.openExternal(url),
+          onKiteResponse: (response) => handleKiteResponse(sessionState, response),
+        });
+        // Defense in depth: the "change" listener above already closes a
+        // session as soon as it goes stale, but close whatever is still
+        // referenced here too so a redundant login() call can never leak it.
+        if (previousSession && previousSession !== newSession) {
+          void previousSession.close().catch(() => {});
+        }
+        session = newSession;
+        driftWarning = newSession.drift.hasDrift
+          ? `MCP tools changed: added [${newSession.drift.added.join(", ")}], removed [${newSession.drift.removed.join(", ")}]`
+          : null;
+        if (newSession.drift.hasDrift) {
+          dispatchBanner({ kind: "mcpDrift", message: driftWarning as string });
+        }
+        sessionState.markAuthenticated();
+        return { status: "authenticated" };
+      } catch (error) {
+        sessionState.markNeedsLogin();
+        return { status: "error", message: (error as Error).message };
+      } finally {
+        loginInFlight = null;
       }
-      sessionState.markAuthenticated();
-      return { status: "authenticated" };
-    } catch (error) {
-      sessionState.markNeedsLogin();
-      return { status: "error", message: (error as Error).message };
-    }
+    })();
+    return loginInFlight;
   };
 
   const createMainWindow = (): BrowserWindow => {
@@ -116,7 +148,7 @@ export function createApp(): AppRuntime {
       createMainWindow();
     },
     stop: () => {
-      void session?.close();
+      void session?.close().catch(() => {});
       supervisor.stop();
     },
   };

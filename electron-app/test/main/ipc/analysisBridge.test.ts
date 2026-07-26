@@ -1,51 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { horizonToFetchParams, registerAnalysisBridge, runAnalysisRequest } from "../../../src/main/ipc/analysisBridge";
 import { KiteClient } from "../../../src/main/services/kite/kiteClient";
-import type { CandleWire } from "../../../src/main/services/sidecar/sidecarProtocol";
 import type { KiteSession } from "../../../src/main/services/kite/kiteLogin";
-
-function historicalResponse() {
-  return {
-    data: {
-      candles: [
-        ["2026-01-02T00:00:00+0530", 100, 105, 99, 104, 5000],
-        ["2026-01-03T00:00:00+0530", 104, 108, 103, 107, 6000],
-      ],
-    },
-  };
-}
-
-function computeResponse() {
-  return {
-    type: "compute" as const,
-    id: 1,
-    algo_results: [
-      {
-        algo_id: "rsi",
-        symbol: "NSE:INFY",
-        timeframe: "day",
-        horizon: "positional",
-        direction: "Bullish",
-        magnitude: 0.4,
-        confidence: 0.6,
-        evidence: ["RSI 62"],
-        computed_at: "2026-07-25T00:00:00+00:00",
-      },
-    ],
-    confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
-  };
-}
-
-function mockSidecar() {
-  return {
-    persistCandles: vi.fn(async (_s: string, _t: string, candles: CandleWire[]) => ({
-      type: "persist_candles" as const,
-      id: 1,
-      written: candles.length,
-    })),
-    compute: vi.fn(async () => computeResponse()),
-  };
-}
+import { historicalResponse, mockSidecar } from "../../fixtures/sidecarFixtures";
 
 describe("horizonToFetchParams", () => {
   const now = new Date("2026-07-25T10:30:00+05:30");

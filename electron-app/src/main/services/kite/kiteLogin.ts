@@ -37,14 +37,21 @@ export async function runKiteLogin(deps: KiteLoginDeps): Promise<KiteSession> {
   const checkDrift = deps.checkDrift ?? checkKiteToolDrift;
   const { apiKey, apiSecret, loginPort } = deps.config;
 
-  const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${apiKey}&v=3`;
+  const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${encodeURIComponent(apiKey)}&v=3`;
   const requestToken = await deps.captureRequestToken({ port: loginPort, loginUrl, openExternal: deps.openExternal });
   const tokenResponse = await deps.exchangeAccessToken({ apiKey, apiSecret, requestToken, postForm: deps.postForm });
   const accessToken = extractAccessToken(tokenResponse);
 
   const connection = await connectMcp({ apiKey, accessToken });
-  const kite = new KiteClient(connection.caller, { onResponse: deps.onKiteResponse });
-  const drift = await checkDrift(connection.listing);
-
-  return { kite, connection, drift, close: connection.close };
+  try {
+    const kite = new KiteClient(connection.caller, { onResponse: deps.onKiteResponse });
+    const drift = await checkDrift(connection.listing);
+    return { kite, connection, drift, close: connection.close };
+  } catch (error) {
+    // checkDrift is a real network call (mcp.kite.trade's tools/list); if it
+    // fails after connectMcp already opened the connection, close it here —
+    // the caller only sees this rejection, never the open connection.
+    await connection.close().catch(() => {});
+    throw error;
+  }
 }

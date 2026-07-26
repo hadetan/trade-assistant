@@ -20,6 +20,21 @@ export function captureRequestToken(options: RequestTokenCaptureOptions): Promis
     const server = http.createServer((req, res) => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
       const requestToken = url.searchParams.get("request_token");
+      // Kite's documented failure/cancel redirect still carries recognizable
+      // query params (action/status/type); a request with none of these —
+      // a browser favicon probe, a prefetch, a scanner — isn't the real
+      // callback, so it gets a plain 404 and the server keeps listening
+      // instead of settling the promise on the first stray request.
+      const looksLikeKiteCallback =
+        requestToken !== null ||
+        url.searchParams.has("status") ||
+        url.searchParams.has("action") ||
+        url.searchParams.has("type");
+      if (!looksLikeKiteCallback) {
+        res.writeHead(404, { "Content-Type": "text/plain" });
+        res.end("not found");
+        return;
+      }
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(CLOSE_TAB_PAGE);
       server.close();

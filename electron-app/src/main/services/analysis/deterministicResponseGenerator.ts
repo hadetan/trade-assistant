@@ -31,6 +31,19 @@ function formatVote(vote: number): string {
   return `${vote >= 0 ? "+" : ""}${vote.toFixed(2)}`;
 }
 
+// direction (vote deadband) and conviction (count-agreement ratio) are
+// deliberately independent signals (§9.2: conviction reflects the vote's own
+// agreement/strength, not a re-derivation of direction) — but read together
+// unqualified, "neutral (high conviction)" reads as a contradiction. Naming
+// both facts explicitly instead of concatenating them avoids that without
+// changing either value.
+function headlineFor(direction: Direction, conviction: Conviction): string {
+  if (direction === "neutral" && conviction !== "low") {
+    return `Overall read: neutral — the net weighted vote sits near zero even though ${conviction}-conviction algorithms are in signal agreement.`;
+  }
+  return `Overall read: ${direction} (${conviction} conviction).`;
+}
+
 function rankByMagnitude(results: AlgoResultWire[]): AlgoResultWire[] {
   return [...results].sort((a, b) => {
     const byMagnitude = Math.abs(b.magnitude) - Math.abs(a.magnitude);
@@ -55,7 +68,7 @@ export function generateDeterministicResponse(
   const ranked = rankByMagnitude(envelope.algo_results);
   const cited = variant === "full" ? ranked : ranked.slice(0, CONCISE_TOP_N);
 
-  const headline = `Overall read: ${direction} (${conviction} conviction).`;
+  const headline = headlineFor(direction, conviction);
   const summary =
     `Confluence: ${confluence.bullish_count} bullish / ${confluence.bearish_count} bearish / ` +
     `${confluence.neutral_count} neutral, weighted vote ${formatVote(confluence.weighted_vote)}.`;

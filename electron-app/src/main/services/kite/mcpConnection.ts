@@ -1,16 +1,14 @@
+import { app } from "electron";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { toToolCaller, toToolListing } from "./mcpClientAdapter";
+import type { SdkCallClient, SdkListClient } from "./mcpClientAdapter";
 import type { McpToolCaller } from "./kiteClient";
 import type { ToolListing } from "./mcpDriftMonitor";
 
 const DEFAULT_MCP_URL = "https://mcp.kite.trade/mcp";
 
-interface SdkLikeClient {
-  callTool(a: { name: string; arguments: Record<string, unknown> }): Promise<unknown>;
-  listTools(): Promise<{ tools: { name: string }[] }>;
-  close(): Promise<void>;
-}
+type SdkLikeClient = SdkCallClient & SdkListClient & { close(): Promise<void> };
 
 export interface McpConnection {
   caller: McpToolCaller;
@@ -26,9 +24,6 @@ export interface ConnectKiteMcpDeps {
 }
 
 async function defaultCreateClient(params: { url: string; headers: Record<string, string> }): Promise<SdkLikeClient> {
-  // Lazy require keeps this module importable under Vitest's node env without an
-  // electron runtime; the real path runs only in the packaged/dev app.
-  const { app } = require("electron") as typeof import("electron");
   const transport = new StreamableHTTPClientTransport(new URL(params.url), {
     requestInit: { headers: params.headers },
   });

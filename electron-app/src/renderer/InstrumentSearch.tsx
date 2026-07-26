@@ -1,34 +1,9 @@
 import { useEffect, useState } from "react";
-import type { Horizon, InstrumentSelection, RendererApi } from "../main/ipc/rendererApi";
+import type { Horizon, InstrumentSelection } from "../main/ipc/rendererApi";
+import { bridge } from "./bridge";
+import { parseInstruments } from "./instrumentParsing";
 
-function bridge(): RendererApi {
-  return (window as unknown as { tradeAssistant: RendererApi }).tradeAssistant;
-}
-
-interface RawInstrument {
-  tradingsymbol?: string;
-  symbol?: string;
-  exchange?: string;
-  segment?: string;
-  instrument_token?: number | string;
-}
-
-export function parseInstruments(raw: unknown): InstrumentSelection[] {
-  const list = (raw as { data?: unknown })?.data ?? raw;
-  if (!Array.isArray(list)) return [];
-  return list
-    .map((entry: RawInstrument) => {
-      const tradingsymbol = String(entry.tradingsymbol ?? entry.symbol ?? "");
-      const exchange = String(entry.exchange ?? "");
-      return {
-        symbol: exchange && tradingsymbol ? `${exchange}:${tradingsymbol}` : tradingsymbol,
-        exchange,
-        segment: String(entry.segment ?? ""),
-        instrumentToken: String(entry.instrument_token ?? ""),
-      };
-    })
-    .filter((instrument) => instrument.symbol.length > 0);
-}
+export { parseInstruments };
 
 export interface InstrumentSearchProps {
   onSubmit: (instrument: InstrumentSelection, horizon: Horizon) => void;
@@ -44,19 +19,28 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
   const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
+    // A new query invalidates whatever was selected under the old one — the
+    // Analyze button must never submit an instrument that no longer matches
+    // what's on screen.
+    setSelected(null);
     if (query.trim().length < 2) {
       setResults([]);
       return;
     }
+    let cancelled = false;
     const timer = setTimeout(async () => {
       setSearchError(null);
       try {
-        setResults(parseInstruments(await bridge().searchInstruments(query)));
+        const parsed = parseInstruments(await bridge().searchInstruments(query));
+        if (!cancelled) setResults(parsed);
       } catch (error) {
-        setSearchError((error as Error).message);
+        if (!cancelled) setSearchError((error as Error).message);
       }
     }, SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [query]);
 
   return (

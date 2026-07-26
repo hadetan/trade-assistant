@@ -2,21 +2,9 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App } from "../../src/renderer/App";
+import { installBridge } from "./testBridge";
 
 afterEach(cleanup);
-
-function installBridge(overrides: Record<string, unknown> = {}) {
-  const bridge = {
-    getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null }),
-    onBanner: vi.fn(),
-    login: vi.fn().mockResolvedValue({ status: "authenticated" }),
-    searchInstruments: vi.fn().mockResolvedValue({ data: [] }),
-    runAnalysis: vi.fn(),
-    ...overrides,
-  };
-  (window as unknown as { tradeAssistant: unknown }).tradeAssistant = bridge;
-  return bridge;
-}
 
 describe("App", () => {
   it("renders the status line from the bridge", async () => {

@@ -11,8 +11,9 @@ describe("buildRendererApi", () => {
 
   it("routes getStatus through status:get", async () => {
     const invoke = vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null });
-    await buildRendererApi(invoke, vi.fn()).getStatus();
+    const status = await buildRendererApi(invoke, vi.fn()).getStatus();
     expect(invoke).toHaveBeenCalledWith("status:get");
+    expect(status.sidecar).toBe("up");
   });
 
   it("registers onBanner against the banner:push channel", () => {

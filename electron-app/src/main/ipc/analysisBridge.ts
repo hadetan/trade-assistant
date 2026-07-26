@@ -1,42 +1,15 @@
 import type { IpcMain } from "electron";
-import type { AnalysisRunParams, AnalysisResult, Horizon, LoginResult } from "./rendererApi";
+import type { AnalysisRunParams, AnalysisResult, LoginResult } from "./rendererApi";
 import type { KiteClient } from "../services/kite/kiteClient";
 import type { KiteSession } from "../services/kite/kiteLogin";
 import type { SidecarSupervisor } from "../services/sidecar/sidecarSupervisor";
 import { assembleEnvelope } from "../services/analysis/analysisEnvelope";
 import { generateDeterministicResponse } from "../services/analysis/deterministicResponseGenerator";
+import { horizonToFetchParams } from "../services/analysis/horizonFetchParams";
 import { looksLikeSessionExpiry } from "../services/kite/kiteSessionState";
 
-const INTRADAY_LOOKBACK_DAYS = 5;
-const POSITIONAL_LOOKBACK_DAYS = 365;
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-export interface HorizonFetchParams {
-  timeframe: string;
-  from: string;
-  to: string;
-}
-
-function pad(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
-function formatDate(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-function formatDateTime(d: Date): string {
-  return `${formatDate(d)} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
-export function horizonToFetchParams(horizon: Horizon, now: Date): HorizonFetchParams {
-  if (horizon === "intraday") {
-    const from = new Date(now.getTime() - INTRADAY_LOOKBACK_DAYS * DAY_MS);
-    return { timeframe: "5minute", from: formatDateTime(from), to: formatDateTime(now) };
-  }
-  const from = new Date(now.getTime() - POSITIONAL_LOOKBACK_DAYS * DAY_MS);
-  return { timeframe: "day", from: formatDate(from), to: formatDate(now) };
-}
+export { horizonToFetchParams } from "../services/analysis/horizonFetchParams";
+export type { HorizonFetchParams } from "../services/analysis/horizonFetchParams";
 
 export interface RunAnalysisDeps {
   kite: KiteClient;

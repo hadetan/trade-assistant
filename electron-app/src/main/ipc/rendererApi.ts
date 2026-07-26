@@ -1,6 +1,9 @@
 import type { DeterministicResponse } from "../services/analysis/deterministicResponseGenerator";
 import type { InstrumentRef } from "../services/analysis/contracts";
+import type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
 import type { AlgoResultWire } from "../services/sidecar/sidecarProtocol";
+
+export type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
 
 export type SidecarStatus = "up" | "down" | "restarting";
 export type KiteSessionStatus = "authenticated" | "needsLogin" | "unknown";
@@ -19,13 +22,6 @@ export interface BannerEvent {
 }
 
 export type Horizon = "intraday" | "positional";
-
-export interface InstrumentSelection {
-  symbol: string;
-  exchange: string;
-  segment: string;
-  instrumentToken: string;
-}
 
 export interface AnalysisRunParams {
   instrument: InstrumentSelection;

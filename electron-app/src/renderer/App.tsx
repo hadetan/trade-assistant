@@ -1,11 +1,8 @@
 import { useEffect, useState } from "react";
 import { InstrumentSearch } from "./InstrumentSearch";
 import { AnalysisResultView } from "./AnalysisResult";
-import type { AnalysisResult, AppStatus, BannerEvent, Horizon, InstrumentSelection, RendererApi } from "../main/ipc/rendererApi";
-
-function bridge(): RendererApi {
-  return (window as unknown as { tradeAssistant: RendererApi }).tradeAssistant;
-}
+import { bridge } from "./bridge";
+import type { AnalysisResult, AppStatus, BannerEvent, Horizon, InstrumentSelection } from "../main/ipc/rendererApi";
 
 export function App(): JSX.Element {
   const [status, setStatus] = useState<AppStatus | null>(null);
@@ -17,6 +14,7 @@ export function App(): JSX.Element {
 
   const onAnalyze = async (instrument: InstrumentSelection, horizon: Horizon): Promise<void> => {
     setAnalysisError(null);
+    setResult(null);
     try {
       setResult(await bridge().runAnalysis({ instrument, horizon }));
     } catch (error) {
@@ -28,16 +26,26 @@ export function App(): JSX.Element {
     void bridge()
       .getStatus()
       .then(setStatus);
-    bridge().onBanner((banner) => setBanners((prev) => [...prev, banner]));
+    bridge().onBanner((banner) => {
+      setBanners((prev) => [...prev, banner]);
+      // markNeedsLogin only pushes this banner — it never re-pushes status —
+      // so without this, `authenticated` (derived from `status` below) would
+      // stay stuck on its last value after a real mid-session expiry.
+      if (banner.kind === "kiteLogin") {
+        void bridge()
+          .getStatus()
+          .then(setStatus);
+      }
+    });
   }, []);
 
   const onLogin = async (): Promise<void> => {
     setLoggingIn(true);
     setLoginError(null);
-    const result = await bridge().login();
+    const loginResult = await bridge().login();
     setLoggingIn(false);
-    if (result.status === "authenticated") setStatus(await bridge().getStatus());
-    else setLoginError(result.message);
+    if (loginResult.status === "authenticated") setStatus(await bridge().getStatus());
+    else setLoginError(loginResult.message);
   };
 
   const authenticated = status?.kiteSession === "authenticated";

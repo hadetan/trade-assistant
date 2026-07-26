@@ -48,11 +48,12 @@ export function classifyKiteResponse(response: unknown): KiteSessionStatus {
 // deferred MCP header-format uncertainty for the same category of risk).
 // A bare /\b403\b/ would false-positive on any unrelated "403" substring in
 // free text (a byte count, a line number, an unrelated ID). Requiring
-// "status"/"code" to appear shortly before "403" targets how Node HTTP
-// clients typically stringify this exact error — e.g. axios's default
-// "Request failed with status code 403" — without over-narrowing to one
-// exact phrasing.
-const HTTP_403_MARKER = /\b(status|code)\D{0,10}403\b/i;
+// "status"/"code"/"http" to appear shortly before "403" targets both the
+// Node-HTTP-client convention (axios's "Request failed with status code
+// 403") and this app's actual live transport — the MCP SDK's
+// StreamableHTTPClientTransport throws "Error POSTing to endpoint (HTTP
+// 403): ..." — without over-narrowing to one exact phrasing.
+const HTTP_403_MARKER = /\b(status|code|http)\D{0,10}403\b/i;
 
 export function looksLikeSessionExpiry(error: unknown): boolean {
   const message = (error as Error)?.message ?? String(error);
