@@ -44,12 +44,20 @@ describe("looksLikeSessionExpiry", () => {
     expect(looksLikeSessionExpiry(new Error("request failed with status 403"))).toBe(true);
   });
 
+  it("matches an axios-style 'status code 403' error message", () => {
+    expect(looksLikeSessionExpiry(new Error("Request failed with status code 403"))).toBe(true);
+  });
+
   it("matches an Error message carrying the Kite login-gate text", () => {
     expect(looksLikeSessionExpiry(new Error("Please login to Kite first to continue."))).toBe(true);
   });
 
   it("does not match an ordinary, unrelated error message", () => {
     expect(looksLikeSessionExpiry(new Error("sidecar unreachable"))).toBe(false);
+  });
+
+  it("does not match a bare unrelated 403 substring with no status/code context", () => {
+    expect(looksLikeSessionExpiry(new Error("processed 403 candles before timing out"))).toBe(false);
   });
 });
 
