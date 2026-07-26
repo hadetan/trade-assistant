@@ -1,11 +1,11 @@
 import type { McpToolCaller } from "./kiteClient";
 import type { ToolListing } from "./mcpDriftMonitor";
 
-interface SdkCallClient {
+export interface SdkCallClient {
   callTool(args: { name: string; arguments: Record<string, unknown> }): Promise<unknown>;
 }
 
-interface SdkListClient {
+export interface SdkListClient {
   listTools(): Promise<{ tools: { name: string }[] }>;
 }
 

@@ -2,13 +2,14 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; object-src 'none'" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; object-src 'none'"
+    />
     <title>Trade Assistant</title>
   </head>
   <body>
-    <h1>Trade Assistant</h1>
-    <div id="status">Loading…</div>
-    <div id="banners"></div>
-    <script type="module" src="./status.ts"></script>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
   </body>
 </html>

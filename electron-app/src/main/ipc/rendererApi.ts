@@ -1,3 +1,10 @@
+import type { DeterministicResponse } from "../services/analysis/deterministicResponseGenerator";
+import type { InstrumentRef } from "../services/analysis/contracts";
+import type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
+import type { AlgoResultWire } from "../services/sidecar/sidecarProtocol";
+
+export type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
+
 export type SidecarStatus = "up" | "down" | "restarting";
 export type KiteSessionStatus = "authenticated" | "needsLogin" | "unknown";
 
@@ -14,9 +21,29 @@ export interface BannerEvent {
   message: string;
 }
 
+export type Horizon = "intraday" | "positional";
+
+export interface AnalysisRunParams {
+  instrument: InstrumentSelection;
+  horizon: Horizon;
+}
+
+export interface AnalysisResult {
+  mode: "engine_only";
+  instrument: InstrumentRef;
+  horizon: Horizon;
+  response: DeterministicResponse;
+  algo_results: AlgoResultWire[];
+}
+
+export type LoginResult = { status: "authenticated" } | { status: "error"; message: string };
+
 export interface RendererApi {
   getStatus(): Promise<AppStatus>;
   onBanner(handler: (banner: BannerEvent) => void): void;
+  login(): Promise<LoginResult>;
+  searchInstruments(query: string): Promise<unknown>;
+  runAnalysis(params: AnalysisRunParams): Promise<AnalysisResult>;
 }
 
 export function buildRendererApi(
@@ -26,5 +53,8 @@ export function buildRendererApi(
   return {
     getStatus: () => invoke("status:get") as Promise<AppStatus>,
     onBanner: (handler) => subscribe("banner:push", handler as (payload: unknown) => void),
+    login: () => invoke("kite:login") as Promise<LoginResult>,
+    searchInstruments: (query) => invoke("kite:searchInstruments", { query }),
+    runAnalysis: (params) => invoke("analysis:run", params) as Promise<AnalysisResult>,
   };
 }

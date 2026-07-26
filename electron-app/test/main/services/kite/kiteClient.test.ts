@@ -55,4 +55,23 @@ describe("KiteClient safety allowlist", () => {
       to: "2026-01-10",
     });
   });
+
+  it("invokes the onResponse callback with the raw response after a successful call", async () => {
+    const response = { data: { user_id: "AB1234" } };
+    const callTool = vi.fn().mockResolvedValue(response);
+    const onResponse = vi.fn();
+    const client = new KiteClient({ callTool }, { onResponse });
+
+    const result = await client.getProfile();
+
+    expect(onResponse).toHaveBeenCalledWith(response);
+    expect(result).toBe(response);
+  });
+
+  it("works without an onResponse callback", async () => {
+    const callTool = vi.fn().mockResolvedValue({ ok: true });
+    const client = new KiteClient({ callTool });
+
+    await expect(client.getMargins()).resolves.toEqual({ ok: true });
+  });
 });

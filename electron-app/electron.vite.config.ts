@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import react from "@vitejs/plugin-react";
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 
 // Relaxed only while the renderer is served by the Vite dev server: the strict
@@ -27,6 +28,7 @@ export default defineConfig({
       rollupOptions: { input: resolve(__dirname, "src/renderer/index.html") },
     },
     plugins: [
+      react(),
       {
         name: "trade-assistant-dev-csp",
         transformIndexHtml(html, ctx) {

@@ -8,9 +8,16 @@ export interface AssembleEnvelopeDeps {
   sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
 }
 
+export interface InstrumentSelection {
+  symbol: string;
+  exchange: string;
+  segment: string;
+  instrumentToken: string;
+}
+
 export interface AssembleEnvelopeParams {
   trigger: "reactive" | "proactive_scan";
-  instrument: { symbol: string; exchange: string; segment: string; instrumentToken: string };
+  instrument: InstrumentSelection;
   timeframe: string;
   horizon_requested: "intraday" | "positional" | "auto";
   intent_lens: "buying" | "selling";

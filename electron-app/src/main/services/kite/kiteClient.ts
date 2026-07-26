@@ -35,19 +35,35 @@ export const KITE_WRITE_TOOL_NAMES = [
   "delete_gtt_order",
 ] as const;
 
+export interface KiteClientOptions {
+  onResponse?: (response: unknown) => void;
+}
+
 export class KiteClient {
   private readonly caller: McpToolCaller;
+  private readonly onResponse?: (response: unknown) => void;
 
-  constructor(caller: McpToolCaller) {
+  // Declared as an arrow-function field (not a `method() {}` shorthand) so it
+  // stays an own property of each instance rather than landing on
+  // KiteClient.prototype — the exact-11-method-set test in kiteClient.test.ts
+  // enumerates prototype own-properties and must see only the 11 read tools.
+  private readonly call = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
+    const response = await this.caller.callTool(name, args);
+    this.onResponse?.(response);
+    return response;
+  };
+
+  constructor(caller: McpToolCaller, options: KiteClientOptions = {}) {
     this.caller = caller;
+    this.onResponse = options.onResponse;
   }
 
   searchInstruments(query: string): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.searchInstruments, { query });
+    return this.call(KITE_READ_TOOL_NAMES.searchInstruments, { query });
   }
 
   getHistoricalData(params: HistoricalDataParams): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getHistoricalData, {
+    return this.call(KITE_READ_TOOL_NAMES.getHistoricalData, {
       instrument_token: params.instrumentToken,
       interval: params.interval,
       from: params.from,
@@ -56,38 +72,38 @@ export class KiteClient {
   }
 
   getQuotes(instruments: string[]): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getQuotes, { instruments });
+    return this.call(KITE_READ_TOOL_NAMES.getQuotes, { instruments });
   }
 
   getOHLC(instruments: string[]): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getOHLC, { instruments });
+    return this.call(KITE_READ_TOOL_NAMES.getOHLC, { instruments });
   }
 
   getLTP(instruments: string[]): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getLTP, { instruments });
+    return this.call(KITE_READ_TOOL_NAMES.getLTP, { instruments });
   }
 
   getMargins(): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getMargins, {});
+    return this.call(KITE_READ_TOOL_NAMES.getMargins, {});
   }
 
   getHoldings(): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getHoldings, {});
+    return this.call(KITE_READ_TOOL_NAMES.getHoldings, {});
   }
 
   getPositions(): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getPositions, {});
+    return this.call(KITE_READ_TOOL_NAMES.getPositions, {});
   }
 
   getProfile(): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getProfile, {});
+    return this.call(KITE_READ_TOOL_NAMES.getProfile, {});
   }
 
   getGtts(): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.getGtts, {});
+    return this.call(KITE_READ_TOOL_NAMES.getGtts, {});
   }
 
   login(): Promise<unknown> {
-    return this.caller.callTool(KITE_READ_TOOL_NAMES.login, {});
+    return this.call(KITE_READ_TOOL_NAMES.login, {});
   }
 }
