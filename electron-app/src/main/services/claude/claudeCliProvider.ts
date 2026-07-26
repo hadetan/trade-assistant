@@ -2,13 +2,16 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { ZodType } from "zod";
 import { spawnClaude } from "./claudeProvider";
-import type { AnalysisEnvelope, Verdict } from "../analysis/contracts";
-import type { Provider } from "./provider";
-import { runPipeline, type PipelinePrompts } from "./personaPipeline";
+import type { AnalysisEnvelope, IntakeResult, Verdict } from "../analysis/contracts";
+import type { AiAssistedProvider, AiAssistedResult, CompleteAiAssistedOptions, Provider } from "./provider";
+import { runPipeline, runPersonaPipeline, narrativePrompt, type PipelinePrompts } from "./personaPipeline";
+import { makeNarrativeStreamer, type NarrativeStreamSpec } from "./streamingNarrative";
+import { runIntake } from "./intake";
 import { optionsGreeks } from "./systemPrompts/optionsGreeks";
 import { technicalQuant } from "./systemPrompts/technicalQuant";
 import { positionRisk } from "./systemPrompts/positionRisk";
 import { synthesis } from "./systemPrompts/synthesis";
+import { narrative } from "./systemPrompts/narrative";
 
 type SpawnFn = (command: string, args: string[]) => ChildProcess;
 
@@ -123,16 +126,40 @@ const DEFAULT_PROMPTS: PipelinePrompts = {
 export interface ClaudeCliProviderOptions {
   spawnFn?: SpawnFn;
   personaTimeoutMs?: number;
+  narrativeTimeoutMs?: number;
+  streamNarrative?: (spec: NarrativeStreamSpec) => Promise<string>;
 }
 
-export class ClaudeCliProvider implements Provider {
+export class ClaudeCliProvider implements Provider, AiAssistedProvider {
   private readonly runPersona: PersonaRunner;
+  private readonly streamNarrative: (spec: NarrativeStreamSpec) => Promise<string>;
 
   constructor(options: ClaudeCliProviderOptions = {}) {
     this.runPersona = makeClaudeRunner({ spawnFn: options.spawnFn, personaTimeoutMs: options.personaTimeoutMs });
+    this.streamNarrative =
+      options.streamNarrative ?? makeNarrativeStreamer({ spawnFn: options.spawnFn, timeoutMs: options.narrativeTimeoutMs });
   }
 
   complete(envelope: AnalysisEnvelope): Promise<Verdict> {
     return runPipeline(envelope, { runPersona: this.runPersona, prompts: DEFAULT_PROMPTS });
+  }
+
+  intake(query: string): Promise<IntakeResult> {
+    return runIntake({ runPersona: this.runPersona }, query);
+  }
+
+  async completeAiAssisted(envelope: AnalysisEnvelope, opts: CompleteAiAssistedOptions): Promise<AiAssistedResult> {
+    const { verdict, findings } = await runPersonaPipeline(
+      envelope,
+      { runPersona: this.runPersona, prompts: DEFAULT_PROMPTS },
+      { researchNotes: opts.researchNotes },
+    );
+    const narrativeText = await this.streamNarrative({
+      systemPrompt: narrative.systemPrompt,
+      prompt: narrativePrompt(verdict, findings, envelope.intent_lens, opts.researchNotes),
+      onToken: opts.onNarrativeToken,
+      signal: opts.signal,
+    });
+    return { verdict, narrative: narrativeText };
   }
 }

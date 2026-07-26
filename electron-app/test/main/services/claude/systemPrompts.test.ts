@@ -4,6 +4,7 @@ import { optionsGreeks } from "../../../../src/main/services/claude/systemPrompt
 import { technicalQuant } from "../../../../src/main/services/claude/systemPrompts/technicalQuant";
 import { positionRisk } from "../../../../src/main/services/claude/systemPrompts/positionRisk";
 import { synthesis } from "../../../../src/main/services/claude/systemPrompts/synthesis";
+import { narrative } from "../../../../src/main/services/claude/systemPrompts/narrative";
 import { INJECTION_DEFENSE } from "../../../../src/main/services/claude/systemPrompts/injectionDefense";
 import { INTENT_LENS_FRAMING } from "../../../../src/main/services/claude/systemPrompts/intentLensFraming";
 import {
@@ -65,5 +66,14 @@ describe("shared injection-defense and intent-lens fragments", () => {
   it("embeds INTENT_LENS_FRAMING in the three analytical personas only", () => {
     for (const persona of analytical) expect(persona.systemPrompt).toContain(INTENT_LENS_FRAMING);
     expect(synthesis.systemPrompt).not.toContain(INTENT_LENS_FRAMING);
+  });
+});
+
+describe("narrative system prompt", () => {
+  it("carries the wording, injection-defense and intent-lens fragments and forbids JSON", () => {
+    expect(narrative.systemPrompt).toContain(WORDING_CONSTRAINT);
+    expect(narrative.systemPrompt).toContain(INJECTION_DEFENSE);
+    expect(narrative.systemPrompt).toContain(INTENT_LENS_FRAMING);
+    expect(narrative.systemPrompt.toLowerCase()).toMatch(/prose|narrative/);
   });
 });
