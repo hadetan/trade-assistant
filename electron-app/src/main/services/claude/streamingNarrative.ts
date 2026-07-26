@@ -87,7 +87,11 @@ export function makeNarrativeStreamer(
           line.event.delta?.type === "text_delta" &&
           typeof line.event.delta.text === "string"
         ) {
-          spec.onToken(line.event.delta.text);
+          try {
+            spec.onToken(line.event.delta.text);
+          } catch (error) {
+            console.error(`narrative: onToken threw: ${(error as Error).message}`);
+          }
           return;
         }
         if (line.type === "result") {

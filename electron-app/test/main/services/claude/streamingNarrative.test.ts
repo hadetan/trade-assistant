@@ -61,6 +61,23 @@ describe("makeNarrativeStreamer", () => {
     expect(tokens).toEqual(["Bank", " Nifty"]);
   });
 
+  it("swallows a throwing onToken and still processes subsequent tokens and the terminal result", async () => {
+    const tokens: string[] = [];
+    const child = new FakeChild();
+    const run = makeNarrativeStreamer({ spawnFn: () => child as never });
+    const pending = run(
+      baseSpec((t) => {
+        tokens.push(t);
+        if (t === "Bank") throw new Error("onToken boom");
+      }),
+    );
+    child.stdout.write(`${delta("Bank")}\n${delta(" Nifty")}\n`);
+    child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Bank Nifty" })}\n`);
+    child.emit("exit", 0, null);
+    await expect(pending).resolves.toBe("Bank Nifty");
+    expect(tokens).toEqual(["Bank", " Nifty"]);
+  });
+
   it("rejects when the stream ends without a terminal success result", async () => {
     const child = new FakeChild();
     const pending = makeNarrativeStreamer({ spawnFn: () => child as never })(baseSpec(() => {}));
