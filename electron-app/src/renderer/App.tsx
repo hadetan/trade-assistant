@@ -1,10 +1,23 @@
 import { useEffect, useState } from "react";
+import { ModePicker } from "./ModePicker";
+import { IntentLensSelector } from "./IntentLensSelector";
 import { InstrumentSearch } from "./InstrumentSearch";
 import { AnalysisResultView } from "./AnalysisResult";
+import { ChatView } from "./ChatView";
 import { bridge } from "./bridge";
-import type { AnalysisResult, AppStatus, BannerEvent, Horizon, InstrumentSelection } from "../main/ipc/rendererApi";
+import type {
+  AnalysisMode,
+  AnalysisResult,
+  AppStatus,
+  BannerEvent,
+  Horizon,
+  InstrumentSelection,
+  IntentLens,
+} from "../main/ipc/rendererApi";
 
 export function App(): JSX.Element {
+  const [mode, setMode] = useState<AnalysisMode | null>(null);
+  const [intentLens, setIntentLens] = useState<IntentLens>("buying");
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [banners, setBanners] = useState<BannerEvent[]>([]);
   const [loggingIn, setLoggingIn] = useState(false);
@@ -16,7 +29,7 @@ export function App(): JSX.Element {
     setAnalysisError(null);
     setResult(null);
     try {
-      setResult(await bridge().runAnalysis({ instrument, horizon }));
+      setResult(await bridge().runAnalysis({ mode: "engine_only", instrument, horizon, intent_lens: intentLens }));
     } catch (error) {
       setAnalysisError((error as Error).message);
     }
@@ -63,15 +76,38 @@ export function App(): JSX.Element {
           </li>
         ))}
       </ul>
-      {!authenticated && (
-        <button type="button" onClick={onLogin} disabled={loggingIn}>
-          {loggingIn ? "Logging in…" : "Login to Kite"}
-        </button>
+
+      {mode === null && <ModePicker onSelect={setMode} />}
+
+      {mode !== null && !authenticated && (
+        <>
+          {mode === "ai_assisted" && (
+            <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
+          )}
+          <button type="button" onClick={onLogin} disabled={loggingIn}>
+            {loggingIn ? "Logging in…" : "Login to Kite"}
+          </button>
+          {loginError && <div className="error">{loginError}</div>}
+        </>
       )}
-      {loginError && <div className="error">{loginError}</div>}
-      {authenticated && <InstrumentSearch onSubmit={onAnalyze} />}
-      {analysisError && <div className="error">{analysisError}</div>}
-      {result && <AnalysisResultView result={result} />}
+
+      {mode !== null && authenticated && (
+        <>
+          <IntentLensSelector value={intentLens} onChange={setIntentLens} />
+          {mode === "engine_only" ? (
+            <>
+              <InstrumentSearch onSubmit={onAnalyze} />
+              {analysisError && <div className="error">{analysisError}</div>}
+              {result && <AnalysisResultView result={result} />}
+            </>
+          ) : (
+            <>
+              <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
+              <ChatView intentLens={intentLens} />
+            </>
+          )}
+        </>
+      )}
     </main>
   );
 }
