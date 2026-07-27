@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
-  it("exposes exactly the six bridge methods and never leaks the raw transport", () => {
+  it("exposes exactly the nine bridge methods and never leaks the raw transport", () => {
     const api = buildRendererApi(vi.fn().mockResolvedValue({}), vi.fn());
     expect(Object.keys(api).sort()).toEqual([
+      "createSession",
+      "getSession",
       "getStatus",
+      "listSessions",
       "login",
       "onBanner",
       "onNarrative",
@@ -45,8 +48,11 @@ describe("buildRendererApi", () => {
   it("routes runAnalysis through analysis:run with the params payload", async () => {
     const invoke = vi.fn().mockResolvedValue({ mode: "engine_only" });
     const params = {
+      mode: "engine_only" as const,
+      sessionId: "s1",
       instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
       horizon: "positional" as const,
+      intent_lens: "buying" as const,
     };
     await buildRendererApi(invoke, vi.fn()).runAnalysis(params);
     expect(invoke).toHaveBeenCalledWith("analysis:run", params);
@@ -65,7 +71,27 @@ describe("buildRendererApi narrative wiring", () => {
   it("routes an ai_assisted run through analysis:run", async () => {
     const invoke = vi.fn().mockResolvedValue({ mode: "ai_assisted" });
     const api = buildRendererApi(invoke, vi.fn());
-    await api.runAnalysis({ mode: "ai_assisted", query: "infy", intent_lens: "buying", requestId: "r1" });
-    expect(invoke).toHaveBeenCalledWith("analysis:run", { mode: "ai_assisted", query: "infy", intent_lens: "buying", requestId: "r1" });
+    await api.runAnalysis({ mode: "ai_assisted", sessionId: "s1", query: "infy", intent_lens: "buying", requestId: "r1" });
+    expect(invoke).toHaveBeenCalledWith("analysis:run", { mode: "ai_assisted", sessionId: "s1", query: "infy", intent_lens: "buying", requestId: "r1" });
+  });
+});
+
+describe("buildRendererApi history wiring", () => {
+  it("routes createSession through history:createSession with a mode payload", async () => {
+    const invoke = vi.fn().mockResolvedValue({ id: "s1" });
+    await buildRendererApi(invoke, vi.fn()).createSession("engine_only");
+    expect(invoke).toHaveBeenCalledWith("history:createSession", { mode: "engine_only" });
+  });
+
+  it("routes listSessions through history:listSessions with no args", async () => {
+    const invoke = vi.fn().mockResolvedValue([]);
+    await buildRendererApi(invoke, vi.fn()).listSessions();
+    expect(invoke).toHaveBeenCalledWith("history:listSessions");
+  });
+
+  it("routes getSession through history:getSession with an id payload", async () => {
+    const invoke = vi.fn().mockResolvedValue({ id: "s1", response_mode: "ai_assisted", messages: [] });
+    await buildRendererApi(invoke, vi.fn()).getSession("s1");
+    expect(invoke).toHaveBeenCalledWith("history:getSession", { id: "s1" });
   });
 });

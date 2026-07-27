@@ -1,8 +1,9 @@
-import type { AnalysisResult } from "../main/ipc/rendererApi";
+import type { AnalysisResult, HistoryMessage } from "../main/ipc/rendererApi";
 import { MessageMarkdown } from "./MessageMarkdown";
 
 export interface AnalysisResultViewProps {
   result: AnalysisResult;
+  history?: HistoryMessage[];
 }
 
 // Matches the precision the prose paragraph renders at (see
@@ -13,7 +14,7 @@ function formatWeightedVote(vote: number): string {
   return vote.toFixed(2);
 }
 
-export function AnalysisResultView({ result }: AnalysisResultViewProps): JSX.Element | null {
+export function AnalysisResultView({ result, history = [] }: AnalysisResultViewProps): JSX.Element | null {
   if (result.mode !== "engine_only") return null;
   const { response } = result;
   const stats: Array<[string, string | number]> = [
@@ -26,6 +27,18 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps): JSX.Ele
   ];
   return (
     <section className="analysis-result">
+      {history.length > 0 && (
+        <details className="session-history">
+          <summary>Past turns in this session</summary>
+          <ul>
+            {history.map((message, index) => (
+              <li key={index} className={`message message-${message.role}`}>
+                <MessageMarkdown text={message.rendered_text} />
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <MessageMarkdown text={response.text} />
       <dl className="confluence">
         {stats.map(([label, value]) => (

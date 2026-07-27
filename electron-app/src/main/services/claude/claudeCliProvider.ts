@@ -159,6 +159,8 @@ export class ClaudeCliProvider implements Provider, AiAssistedProvider {
       prompt: narrativePrompt(verdict, findings, envelope.intent_lens, opts.researchNotes),
       onToken: opts.onNarrativeToken,
       signal: opts.signal,
+      claudeSessionId: opts.claudeSessionId,
+      resumeSession: opts.resumeSession,
     });
     return { verdict, narrative: narrativeText };
   }

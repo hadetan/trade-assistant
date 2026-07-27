@@ -2,7 +2,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { AnalysisResultView } from "../../src/renderer/AnalysisResult";
-import type { AnalysisResult } from "../../src/main/ipc/rendererApi";
+import type { AnalysisResult, HistoryMessage } from "../../src/main/ipc/rendererApi";
 
 afterEach(cleanup);
 
@@ -25,5 +25,17 @@ describe("AnalysisResultView", () => {
     expect(await screen.findByText(/Overall read: bullish/)).toBeTruthy();
     expect(screen.getByText("bullish")).toBeTruthy();
     expect(screen.getByText("0.62")).toBeTruthy();
+    expect(screen.queryByText(/Past turns in this session/i)).toBeNull();
+  });
+
+  it("renders prior turns in a collapsible list when history is supplied", async () => {
+    const history: HistoryMessage[] = [
+      { role: "user", rendered_text: "earlier question", structured_payload: null, created_at: "t0" },
+      { role: "assistant", rendered_text: "earlier answer", structured_payload: null, created_at: "t1" },
+    ];
+    render(<AnalysisResultView result={result} history={history} />);
+    expect(screen.getByText(/Past turns in this session/i)).toBeTruthy();
+    expect(await screen.findByText(/earlier question/)).toBeTruthy();
+    expect(await screen.findByText(/earlier answer/)).toBeTruthy();
   });
 });

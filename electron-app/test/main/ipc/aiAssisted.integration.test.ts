@@ -53,10 +53,11 @@ describe("AI-assisted pipeline (fully mocked subprocess)", () => {
     const provider = new ClaudeCliProvider({ spawnFn: scriptedSpawn });
     const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
     const events: unknown[] = [];
+    const history = { appendMessage: vi.fn(), getClaudeSessionId: vi.fn().mockReturnValue(null), setClaudeSessionId: vi.fn() };
 
     const result = await runAiAssistedRequest(
-      { kite, sidecar: mockSidecar() as never, provider },
-      { mode: "ai_assisted", query: "how is infy for a swing", intent_lens: "buying", requestId: "rZ" },
+      { kite, sidecar: mockSidecar() as never, provider, history },
+      { mode: "ai_assisted", sessionId: "sess-Z", query: "how is infy for a swing", intent_lens: "buying", requestId: "rZ" },
       (event) => events.push(event),
     );
 
@@ -72,5 +73,7 @@ describe("AI-assisted pipeline (fully mocked subprocess)", () => {
       { requestId: "rZ", chunk: "is constructive." },
       { requestId: "rZ", done: true },
     ]);
+    expect(history.appendMessage).toHaveBeenCalledTimes(2);
+    expect(history.setClaudeSessionId).toHaveBeenCalledTimes(1);
   });
 });

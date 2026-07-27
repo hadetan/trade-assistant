@@ -34,6 +34,8 @@ export interface ClaudeArgOptions {
   outputFormat?: "json" | "text" | "stream-json";
   allowWebTools?: boolean;
   includePartialMessages?: boolean;
+  claudeSessionId?: string;
+  resumeSession?: boolean;
 }
 
 export function buildClaudeArgs(prompt: string, opts: ClaudeArgOptions = {}): string[] {
@@ -51,6 +53,9 @@ export function buildClaudeArgs(prompt: string, opts: ClaudeArgOptions = {}): st
   if (opts.jsonSchema !== undefined) args.push("--json-schema", opts.jsonSchema);
   if (opts.outputFormat !== undefined) args.push("--output-format", opts.outputFormat);
   if (opts.includePartialMessages) args.push("--include-partial-messages");
+  if (opts.claudeSessionId !== undefined) {
+    args.push(opts.resumeSession ? "--resume" : "--session-id", opts.claudeSessionId);
+  }
   args.push("--print", prompt);
   return args;
 }

@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import type { IpcMain } from "electron";
 import type { AnalysisRunParams, AnalysisResult, LoginResult, NarrativeEvent } from "./rendererApi";
 import type { KiteClient } from "../services/kite/kiteClient";
 import type { KiteSession } from "../services/kite/kiteLogin";
 import type { SidecarSupervisor } from "../services/sidecar/sidecarSupervisor";
 import type { AiAssistedProvider } from "../services/claude/provider";
+import type { HistoryStore } from "../services/history/historyStore";
 import { assembleEnvelope } from "../services/analysis/analysisEnvelope";
 import { generateDeterministicResponse } from "../services/analysis/deterministicResponseGenerator";
 import { horizonToFetchParams } from "../services/analysis/horizonFetchParams";
@@ -15,7 +17,12 @@ export type { HorizonFetchParams } from "../services/analysis/horizonFetchParams
 export interface RunAnalysisDeps {
   kite: KiteClient;
   sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
+  history: Pick<HistoryStore, "appendMessage">;
   now?: () => Date;
+}
+
+export function describeEngineOnlyQuery(params: Extract<AnalysisRunParams, { mode: "engine_only" }>): string {
+  return `${params.instrument.symbol} · ${params.horizon} · ${params.intent_lens}`;
 }
 
 export async function runAnalysisRequest(
@@ -23,6 +30,12 @@ export async function runAnalysisRequest(
   params: Extract<AnalysisRunParams, { mode: "engine_only" }>,
 ): Promise<AnalysisResult> {
   const now = deps.now?.() ?? new Date();
+  deps.history.appendMessage({
+    sessionId: params.sessionId,
+    role: "user",
+    renderedText: describeEngineOnlyQuery(params),
+    structuredPayload: params,
+  });
   const { timeframe, from, to } = horizonToFetchParams(params.horizon, now);
   const envelope = await assembleEnvelope(
     { kite: deps.kite, sidecar: deps.sidecar },
@@ -37,19 +50,31 @@ export async function runAnalysisRequest(
     },
   );
   const response = generateDeterministicResponse(envelope);
-  return {
+  const result: AnalysisResult = {
     mode: "engine_only",
     instrument: envelope.instrument,
     horizon: params.horizon,
     response,
     algo_results: envelope.algo_results,
   };
+  // If assembleEnvelope throws, this second write never runs — the user
+  // message is left orphaned with no assistant reply, matching ordinary
+  // chat-app behavior for a failed turn rather than retracting what was
+  // actually asked (P5c§7.2).
+  deps.history.appendMessage({
+    sessionId: params.sessionId,
+    role: "assistant",
+    renderedText: response.text,
+    structuredPayload: result,
+  });
+  return result;
 }
 
 export interface AiAssistedRequestDeps {
   kite: KiteClient;
   sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
   provider: AiAssistedProvider;
+  history: Pick<HistoryStore, "appendMessage" | "getClaudeSessionId" | "setClaudeSessionId">;
   now?: () => Date;
 }
 
@@ -60,6 +85,12 @@ export async function runAiAssistedRequest(
 ): Promise<AnalysisResult> {
   const now = deps.now?.() ?? new Date();
   try {
+    deps.history.appendMessage({
+      sessionId: params.sessionId,
+      role: "user",
+      renderedText: params.query,
+      structuredPayload: params,
+    });
     const intake = await deps.provider.intake(params.query);
     const { timeframe, from, to } = horizonToFetchParams(intake.horizon, now);
     const envelope = await assembleEnvelope(
@@ -74,12 +105,21 @@ export async function runAiAssistedRequest(
         to,
       },
     );
+    const existingClaudeSessionId = deps.history.getClaudeSessionId(params.sessionId);
+    const claudeSessionId = existingClaudeSessionId ?? randomUUID();
     const { verdict, narrative } = await deps.provider.completeAiAssisted(envelope, {
       researchNotes: intake.researchNotes,
       onNarrativeToken: (chunk) => sendNarrative({ requestId: params.requestId, chunk }),
+      claudeSessionId,
+      resumeSession: existingClaudeSessionId !== null,
     });
+    // Persisted only after success: a failed first turn must never pin a
+    // Claude-side session id that may not have materialized on disk (P5c§7.3).
+    if (existingClaudeSessionId === null) {
+      deps.history.setClaudeSessionId(params.sessionId, claudeSessionId);
+    }
     sendNarrative({ requestId: params.requestId, done: true });
-    return {
+    const result: AnalysisResult = {
       mode: "ai_assisted",
       instrument: envelope.instrument,
       horizon: intake.horizon,
@@ -89,6 +129,13 @@ export async function runAiAssistedRequest(
       algo_results: envelope.algo_results,
       confluence: envelope.confluence,
     };
+    deps.history.appendMessage({
+      sessionId: params.sessionId,
+      role: "assistant",
+      renderedText: narrative,
+      structuredPayload: result,
+    });
+    return result;
   } catch (error) {
     sendNarrative({ requestId: params.requestId, error: (error as Error).message });
     throw error;
@@ -101,6 +148,7 @@ export interface AnalysisBridgeDeps {
   getSession: () => KiteSession | null;
   sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
   provider: AiAssistedProvider;
+  history: Pick<HistoryStore, "appendMessage" | "getClaudeSessionId" | "setClaudeSessionId">;
   sendNarrative: (event: NarrativeEvent) => void;
   markNeedsLogin: () => void;
   now?: () => Date;
@@ -133,12 +181,16 @@ export function registerAnalysisBridge(deps: AnalysisBridgeDeps): void {
     if (params.mode === "ai_assisted") {
       return guardSessionExpiry(
         deps.markNeedsLogin,
-        runAiAssistedRequest({ kite, sidecar: deps.sidecar, provider: deps.provider, now: deps.now }, params, deps.sendNarrative),
+        runAiAssistedRequest(
+          { kite, sidecar: deps.sidecar, provider: deps.provider, history: deps.history, now: deps.now },
+          params,
+          deps.sendNarrative,
+        ),
       );
     }
     return guardSessionExpiry(
       deps.markNeedsLogin,
-      runAnalysisRequest({ kite, sidecar: deps.sidecar, now: deps.now }, params),
+      runAnalysisRequest({ kite, sidecar: deps.sidecar, history: deps.history, now: deps.now }, params),
     );
   });
 }

@@ -9,6 +9,8 @@ export interface NarrativeStreamSpec {
   prompt: string;
   onToken: (text: string) => void;
   signal?: AbortSignal;
+  claudeSessionId?: string;
+  resumeSession?: boolean;
 }
 
 export interface NarrativeStreamerOptions {
@@ -36,7 +38,13 @@ export function makeNarrativeStreamer(
 
     const child = spawnClaude(
       spec.prompt,
-      { systemPrompt: spec.systemPrompt, outputFormat: "stream-json", includePartialMessages: true },
+      {
+        systemPrompt: spec.systemPrompt,
+        outputFormat: "stream-json",
+        includePartialMessages: true,
+        claudeSessionId: spec.claudeSessionId,
+        resumeSession: spec.resumeSession,
+      },
       spawnFn,
     );
 

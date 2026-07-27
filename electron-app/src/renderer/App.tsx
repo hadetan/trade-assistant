@@ -3,54 +3,87 @@ import { ModePicker } from "./ModePicker";
 import { IntentLensSelector } from "./IntentLensSelector";
 import { InstrumentSearch } from "./InstrumentSearch";
 import { AnalysisResultView } from "./AnalysisResult";
-import { ChatView } from "./ChatView";
+import { ChatView, historyToChatMessages } from "./ChatView";
+import { HomeScreen } from "./HomeScreen";
 import { bridge } from "./bridge";
 import type {
   AnalysisMode,
   AnalysisResult,
+  AnalysisRunParams,
   AppStatus,
   BannerEvent,
+  HistoryMessage,
   Horizon,
   InstrumentSelection,
   IntentLens,
+  SessionDetail,
+  SessionSummary,
 } from "../main/ipc/rendererApi";
 
+interface ActiveSession {
+  id: string;
+  mode: AnalysisMode;
+}
+
+function deriveEngineOnlyView(detail: SessionDetail | null): { result?: AnalysisResult; history: HistoryMessage[] } {
+  const messages = detail?.messages ?? [];
+  const lastAssistantIndex = messages.map((m) => m.role).lastIndexOf("assistant");
+  if (lastAssistantIndex === -1) return { history: messages };
+  return {
+    result: messages[lastAssistantIndex].structured_payload as AnalysisResult,
+    history: messages.filter((_, index) => index !== lastAssistantIndex),
+  };
+}
+
 export function App(): JSX.Element {
-  const [mode, setMode] = useState<AnalysisMode | null>(null);
+  const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
+  const [showModePicker, setShowModePicker] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [intentLens, setIntentLens] = useState<IntentLens>("buying");
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [banners, setBanners] = useState<BannerEvent[]>([]);
   const [loggingIn, setLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
 
-  const onAnalyze = async (instrument: InstrumentSelection, horizon: Horizon): Promise<void> => {
-    setAnalysisError(null);
-    setResult(null);
-    try {
-      setResult(await bridge().runAnalysis({ mode: "engine_only", instrument, horizon, intent_lens: intentLens }));
-    } catch (error) {
-      setAnalysisError((error as Error).message);
+  useEffect(() => {
+    void bridge().getStatus().then(setStatus);
+    void bridge().listSessions().then(setSessions);
+    bridge().onBanner((banner) => {
+      setBanners((prev) => [...prev, banner]);
+      // markNeedsLogin only emits the banner, not a status update; re-fetch here to avoid stale
+      // authenticated state after a real Kite session expiry.
+      if (banner.kind === "kiteLogin") void bridge().getStatus().then(setStatus);
+    });
+  }, []);
+
+  const onNewChat = (): void => setShowModePicker(true);
+
+  const onSelectMode = async (mode: AnalysisMode): Promise<void> => {
+    const session = await bridge().createSession(mode);
+    setSessions((prev) => [session, ...prev]);
+    setSessionDetail(null);
+    setActiveSession({ id: session.id, mode });
+    setShowModePicker(false);
+  };
+
+  const onOpenSession = async (id: string): Promise<void> => {
+    const detail = await bridge().getSession(id);
+    setSessionDetail(detail);
+    setActiveSession({ id: detail.id, mode: detail.response_mode });
+    const lastUserMessage = [...detail.messages].reverse().find((m) => m.role === "user");
+    if (lastUserMessage) {
+      const payload = lastUserMessage.structured_payload as AnalysisRunParams;
+      setIntentLens(payload.intent_lens);
     }
   };
 
-  useEffect(() => {
-    void bridge()
-      .getStatus()
-      .then(setStatus);
-    bridge().onBanner((banner) => {
-      setBanners((prev) => [...prev, banner]);
-      // markNeedsLogin only pushes this banner — it never re-pushes status —
-      // so without this, `authenticated` (derived from `status` below) would
-      // stay stuck on its last value after a real mid-session expiry.
-      if (banner.kind === "kiteLogin") {
-        void bridge()
-          .getStatus()
-          .then(setStatus);
-      }
-    });
-  }, []);
+  const onBackToHome = (): void => {
+    setActiveSession(null);
+    setSessionDetail(null);
+    void bridge().listSessions().then(setSessions);
+  };
 
   const onLogin = async (): Promise<void> => {
     setLoggingIn(true);
@@ -61,7 +94,19 @@ export function App(): JSX.Element {
     else setLoginError(loginResult.message);
   };
 
+  const onAnalyze = async (instrument: InstrumentSelection, horizon: Horizon): Promise<void> => {
+    if (!activeSession) return;
+    setAnalysisError(null);
+    try {
+      await bridge().runAnalysis({ mode: "engine_only", sessionId: activeSession.id, instrument, horizon, intent_lens: intentLens });
+      setSessionDetail(await bridge().getSession(activeSession.id));
+    } catch (error) {
+      setAnalysisError((error as Error).message);
+    }
+  };
+
   const authenticated = status?.kiteSession === "authenticated";
+  const { result, history } = deriveEngineOnlyView(sessionDetail);
 
   return (
     <main className="app">
@@ -69,6 +114,11 @@ export function App(): JSX.Element {
       <div className="status">
         {status ? `sidecar: ${status.sidecar} | kite: ${status.kiteSession}` : "Loading…"}
       </div>
+      {activeSession !== null && (
+        <button type="button" onClick={onBackToHome}>
+          Home
+        </button>
+      )}
       <ul className="banners">
         {banners.map((banner, index) => (
           <li key={index}>
@@ -77,11 +127,14 @@ export function App(): JSX.Element {
         ))}
       </ul>
 
-      {mode === null && <ModePicker onSelect={setMode} />}
+      {activeSession === null && !showModePicker && (
+        <HomeScreen sessions={sessions} onNewChat={onNewChat} onOpenSession={onOpenSession} />
+      )}
+      {activeSession === null && showModePicker && <ModePicker onSelect={onSelectMode} />}
 
-      {mode !== null && !authenticated && (
+      {activeSession !== null && !authenticated && (
         <>
-          {mode === "ai_assisted" && (
+          {activeSession.mode === "ai_assisted" && (
             <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
           )}
           <button type="button" onClick={onLogin} disabled={loggingIn}>
@@ -91,19 +144,23 @@ export function App(): JSX.Element {
         </>
       )}
 
-      {mode !== null && authenticated && (
+      {activeSession !== null && authenticated && (
         <>
           <IntentLensSelector value={intentLens} onChange={setIntentLens} />
-          {mode === "engine_only" ? (
+          {activeSession.mode === "engine_only" ? (
             <>
               <InstrumentSearch onSubmit={onAnalyze} />
               {analysisError && <div className="error">{analysisError}</div>}
-              {result && <AnalysisResultView result={result} />}
+              {result && <AnalysisResultView result={result} history={history} />}
             </>
           ) : (
             <>
               <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
-              <ChatView intentLens={intentLens} />
+              <ChatView
+                intentLens={intentLens}
+                sessionId={activeSession.id}
+                initialMessages={historyToChatMessages(sessionDetail?.messages ?? [])}
+              />
             </>
           )}
         </>

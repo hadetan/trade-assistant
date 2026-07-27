@@ -146,3 +146,42 @@ describe("web-tool allowlist extension (additive, closed set)", () => {
     }
   });
 });
+
+describe("session continuity flags (--session-id vs --resume)", () => {
+  const uuid = "11111111-2222-3333-4444-555555555555";
+
+  it("pins a new conversation with --session-id when resumeSession is falsy", () => {
+    const args = buildClaudeArgs("p", { claudeSessionId: uuid });
+    expect(args.slice(args.indexOf("--session-id"), args.indexOf("--session-id") + 2)).toEqual(["--session-id", uuid]);
+    expect(args).not.toContain("--resume");
+  });
+
+  it("resumes with --resume when both fields are set", () => {
+    const args = buildClaudeArgs("p", { claudeSessionId: uuid, resumeSession: true });
+    expect(args.slice(args.indexOf("--resume"), args.indexOf("--resume") + 2)).toEqual(["--resume", uuid]);
+    expect(args).not.toContain("--session-id");
+  });
+
+  it("emits neither flag and stays byte-identical to today when claudeSessionId is absent", () => {
+    expect(buildClaudeArgs("analyze INFY", { resumeSession: true })).toEqual(buildClaudeArgs("analyze INFY"));
+    const args = buildClaudeArgs("p", {});
+    expect(args).not.toContain("--session-id");
+    expect(args).not.toContain("--resume");
+  });
+
+  it("keeps the three safety flags first and --print last for every continuity combination", () => {
+    const combos: Array<Parameters<typeof buildClaudeArgs>[1]> = [
+      { claudeSessionId: uuid },
+      { claudeSessionId: uuid, resumeSession: true },
+      { claudeSessionId: uuid, outputFormat: "stream-json", includePartialMessages: true, systemPrompt: "s" },
+    ];
+    for (const opts of combos) {
+      const args = buildClaudeArgs("p", opts);
+      expect(args[0]).toBe("--allowedTools");
+      expect(args[2]).toBe("--disallowedTools");
+      expect(args[3]).toBe(KITE_WRITE_TOOL_DENYLIST);
+      expect(args[4]).toBe("--strict-mcp-config");
+      expect(args.slice(-2)).toEqual(["--print", "p"]);
+    }
+  });
+});

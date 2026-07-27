@@ -220,4 +220,36 @@ describe("ClaudeCliProvider.completeAiAssisted", () => {
     });
     await expect(provider.intake("infosys swing")).resolves.toMatchObject({ horizon: "positional" });
   });
+
+  it("forwards continuity flags to the narrative call only, never to any persona/synthesis call", async () => {
+    const verdictOut = { direction: "bullish", conviction: "high", reasoning: "rsi", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP" };
+    const streamArgvs: string[][] = [];
+    const jsonArgvs: string[][] = [];
+    const spawnFn = (_c: string, args: string[]) => {
+      const child = new FakeChild();
+      if (args.includes("stream-json")) {
+        streamArgvs.push(args);
+        queueMicrotask(() => {
+          child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "narrative text" })}\n`);
+          child.emit("exit", 0, null);
+        });
+      } else {
+        jsonArgvs.push(args);
+        emitResult(child, args.some((a) => a.includes("synthesis")) ? verdictOut : validFinding);
+      }
+      return child as never;
+    };
+    const provider = new ClaudeCliProvider({ spawnFn });
+    await provider.completeAiAssisted(aiEnvelope, {
+      onNarrativeToken: () => {},
+      claudeSessionId: "uuid-xyz",
+      resumeSession: true,
+    });
+    expect(streamArgvs).toHaveLength(1);
+    expect(streamArgvs[0].slice(streamArgvs[0].indexOf("--resume"), streamArgvs[0].indexOf("--resume") + 2)).toEqual(["--resume", "uuid-xyz"]);
+    for (const argv of jsonArgvs) {
+      expect(argv).not.toContain("--session-id");
+      expect(argv).not.toContain("--resume");
+    }
+  });
 });
