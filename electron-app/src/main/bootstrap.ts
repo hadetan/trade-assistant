@@ -11,7 +11,9 @@ import { captureRequestToken, exchangeAccessToken } from "./services/kite/kiteOA
 import { ClaudeCliProvider } from "./services/claude/claudeCliProvider";
 import { registerStatusBridge } from "./ipc/appBridge";
 import { registerAnalysisBridge } from "./ipc/analysisBridge";
+import { registerHistoryBridge } from "./ipc/historyBridge";
 import { makeNarrativeSender } from "./ipc/narrativeBridge";
+import { HistoryStore } from "./services/history/historyStore";
 import type { AppStatus, BannerEvent, KiteSessionStatus, LoginResult, SidecarStatus } from "./ipc/rendererApi";
 
 export interface AppRuntime {
@@ -52,6 +54,9 @@ export function createApp(): AppRuntime {
   });
   const sessionState = new KiteSessionState();
   const provider = new ClaudeCliProvider();
+  const history = new HistoryStore({
+    path: process.env.TRADE_ASSISTANT_HISTORY_DB ?? path.join(app.getPath("userData"), "history.sqlite3"),
+  });
 
   let sidecarStatus: SidecarStatus = "down";
   let driftWarning: string | null = null;
@@ -138,9 +143,11 @@ export function createApp(): AppRuntime {
       getSession: () => session,
       sidecar: supervisor,
       provider,
+      history,
       sendNarrative: makeNarrativeSender((channel, payload) => window.webContents.send(channel, payload)),
       markNeedsLogin: () => sessionState.markNeedsLogin(),
     });
+    registerHistoryBridge({ ipcMain, history });
     const rendererUrl = process.env.ELECTRON_RENDERER_URL;
     if (rendererUrl) window.loadURL(rendererUrl);
     else window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
@@ -154,6 +161,7 @@ export function createApp(): AppRuntime {
     },
     stop: () => {
       void session?.close().catch(() => {});
+      history.close();
       supervisor.stop();
     },
   };

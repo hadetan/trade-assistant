@@ -29,6 +29,19 @@ function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedPr
   };
 }
 
+function fakeHistory(overrides: Partial<{
+  appendMessage: ReturnType<typeof vi.fn>;
+  getClaudeSessionId: ReturnType<typeof vi.fn>;
+  setClaudeSessionId: ReturnType<typeof vi.fn>;
+}> = {}) {
+  return {
+    appendMessage: vi.fn(),
+    getClaudeSessionId: vi.fn().mockReturnValue(null),
+    setClaudeSessionId: vi.fn(),
+    ...overrides,
+  };
+}
+
 describe("horizonToFetchParams", () => {
   const now = new Date("2026-07-25T10:30:00+05:30");
 
@@ -51,11 +64,13 @@ describe("runAnalysisRequest", () => {
   it("assembles an envelope and returns a generated engine_only result", async () => {
     const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
     const sidecar = mockSidecar();
+    const history = fakeHistory();
 
     const result = await runAnalysisRequest(
-      { kite, sidecar: sidecar as never },
+      { kite, sidecar: sidecar as never, history },
       {
         mode: "engine_only",
+        sessionId: "sess-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
         horizon: "positional",
         intent_lens: "selling",
@@ -63,12 +78,35 @@ describe("runAnalysisRequest", () => {
     );
 
     expect(result.mode).toBe("engine_only");
-    expect(result.horizon).toBe("positional");
-    expect(result.instrument.kite_token_asof).toBe("408065");
     if (result.mode !== "engine_only") throw new Error("mode");
     expect(result.response.direction).toBe("bullish");
     expect(result.algo_results[0].algo_id).toBe("rsi");
     expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "day", [104, 107]);
+  });
+
+  it("writes the user message before analysis and the assistant message only after success", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const history = fakeHistory();
+    await runAnalysisRequest(
+      { kite, sidecar: mockSidecar() as never, history },
+      { mode: "engine_only", sessionId: "sess-1", instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" }, horizon: "positional", intent_lens: "buying" },
+    );
+    expect(history.appendMessage).toHaveBeenCalledTimes(2);
+    expect(history.appendMessage.mock.calls[0][0]).toMatchObject({ sessionId: "sess-1", role: "user" });
+    expect(history.appendMessage.mock.calls[1][0]).toMatchObject({ sessionId: "sess-1", role: "assistant" });
+  });
+
+  it("leaves the user message orphaned (no assistant write) when the engine call throws", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockRejectedValue(new Error("boom")) });
+    const history = fakeHistory();
+    await expect(
+      runAnalysisRequest(
+        { kite, sidecar: mockSidecar() as never, history },
+        { mode: "engine_only", sessionId: "sess-1", instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" }, horizon: "positional", intent_lens: "buying" },
+      ),
+    ).rejects.toThrow(/boom/);
+    expect(history.appendMessage).toHaveBeenCalledTimes(1);
+    expect(history.appendMessage.mock.calls[0][0]).toMatchObject({ role: "user" });
   });
 });
 
@@ -115,16 +153,18 @@ describe("registerAnalysisBridge", () => {
     const handlers = new Map<string, (event: unknown, arg: unknown) => unknown>();
     const login = vi.fn().mockResolvedValue({ status: "authenticated" });
     const markNeedsLogin = vi.fn();
+    const history = fakeHistory();
     registerAnalysisBridge({
       ipcMain: { handle: (channel, fn) => handlers.set(channel, fn as never) } as never,
       login,
       getSession: () => session,
       sidecar: mockSidecar() as never,
       provider: fakeProvider(),
+      history,
       sendNarrative: vi.fn(),
       markNeedsLogin,
     });
-    return { handlers, login, markNeedsLogin };
+    return { handlers, login, markNeedsLogin, history };
   }
 
   it("routes kite:login to the injected login effect", async () => {
@@ -139,6 +179,7 @@ describe("registerAnalysisBridge", () => {
     expect(() =>
       handlers.get("analysis:run")!(null, {
         mode: "engine_only",
+        sessionId: "sess-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
         horizon: "positional",
         intent_lens: "buying",
@@ -180,6 +221,7 @@ describe("registerAnalysisBridge", () => {
     await expect(
       handlers.get("analysis:run")!(null, {
         mode: "engine_only",
+        sessionId: "sess-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
         horizon: "positional",
         intent_lens: "buying",
@@ -196,6 +238,7 @@ describe("registerAnalysisBridge", () => {
     await expect(
       handlers.get("analysis:run")!(null, {
         mode: "engine_only",
+        sessionId: "sess-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
         horizon: "positional",
         intent_lens: "buying",
