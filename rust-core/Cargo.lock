@@ -2673,6 +2673,8 @@ version = "0.1.0"
 dependencies = [
  "duckdb",
  "rusqlite",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
