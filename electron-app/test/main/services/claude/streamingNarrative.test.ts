@@ -112,3 +112,43 @@ describe("makeNarrativeStreamer", () => {
     expect(child.killed).toBe(true);
   });
 });
+
+describe("makeNarrativeStreamer continuity forwarding", () => {
+  const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+  function captureArgv(spec: Parameters<ReturnType<typeof makeNarrativeStreamer>>[0]) {
+    let captured: string[] = [];
+    const child = new FakeChild();
+    const run = makeNarrativeStreamer({
+      spawnFn: (_c, args) => {
+        captured = args;
+        return child as never;
+      },
+    });
+    const pending = run(spec);
+    child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "done" })}\n`);
+    child.emit("exit", 0, null);
+    return { captured, pending };
+  }
+
+  it("passes --session-id through when pinning a new conversation", async () => {
+    const { captured, pending } = captureArgv({ ...baseSpec(() => {}), claudeSessionId: uuid });
+    await pending;
+    expect(captured.slice(captured.indexOf("--session-id"), captured.indexOf("--session-id") + 2)).toEqual(["--session-id", uuid]);
+    expect(captured).not.toContain("--resume");
+  });
+
+  it("passes --resume through when resuming", async () => {
+    const { captured, pending } = captureArgv({ ...baseSpec(() => {}), claudeSessionId: uuid, resumeSession: true });
+    await pending;
+    expect(captured.slice(captured.indexOf("--resume"), captured.indexOf("--resume") + 2)).toEqual(["--resume", uuid]);
+    expect(captured).not.toContain("--session-id");
+  });
+
+  it("passes neither flag when no continuity is requested", async () => {
+    const { captured, pending } = captureArgv(baseSpec(() => {}));
+    await pending;
+    expect(captured).not.toContain("--session-id");
+    expect(captured).not.toContain("--resume");
+  });
+});
