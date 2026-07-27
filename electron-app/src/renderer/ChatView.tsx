@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { bridge } from "./bridge";
 import { MessageMarkdown } from "./MessageMarkdown";
-import type { IntentLens, NarrativeEvent, Verdict } from "../main/ipc/rendererApi";
+import type { AnalysisResult, HistoryMessage, IntentLens, NarrativeEvent, Verdict } from "../main/ipc/rendererApi";
 
 export interface ChatViewProps {
   intentLens: IntentLens;
+  sessionId: string;
+  initialMessages?: ChatMessage[];
 }
 
 interface AssistantMessage {
@@ -25,8 +27,17 @@ function newRequestId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function ChatView({ intentLens }: ChatViewProps): JSX.Element {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export function historyToChatMessages(messages: HistoryMessage[]): ChatMessage[] {
+  return messages.map((message) => {
+    if (message.role === "user") return { role: "user", text: message.rendered_text };
+    const payload = message.structured_payload as AnalysisResult | null;
+    const verdict = payload && payload.mode === "ai_assisted" ? payload.verdict : undefined;
+    return { role: "assistant", requestId: newRequestId(), text: message.rendered_text, verdict };
+  });
+}
+
+export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewProps): JSX.Element {
+  const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? []);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +69,7 @@ export function ChatView({ intentLens }: ChatViewProps): JSX.Element {
     setInput("");
     setMessages((prev) => [...prev, { role: "user", text: query }, { role: "assistant", requestId, text: "" }]);
     try {
-      const result = await bridge().runAnalysis({ mode: "ai_assisted", query, intent_lens: intentLens, requestId });
+      const result = await bridge().runAnalysis({ mode: "ai_assisted", sessionId, query, intent_lens: intentLens, requestId });
       if (result.mode === "ai_assisted") {
         setMessages((prev) =>
           prev.map((message) =>

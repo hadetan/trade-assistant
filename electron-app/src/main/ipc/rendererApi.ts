@@ -29,8 +29,8 @@ export type Horizon = "intraday" | "positional";
 export type AnalysisMode = "engine_only" | "ai_assisted";
 
 export type AnalysisRunParams =
-  | { mode: "engine_only"; instrument: InstrumentSelection; horizon: Horizon; intent_lens: IntentLens }
-  | { mode: "ai_assisted"; query: string; intent_lens: IntentLens; requestId: string };
+  | { mode: "engine_only"; sessionId: string; instrument: InstrumentSelection; horizon: Horizon; intent_lens: IntentLens }
+  | { mode: "ai_assisted"; sessionId: string; query: string; intent_lens: IntentLens; requestId: string };
 
 export type AnalysisResult =
   | {
