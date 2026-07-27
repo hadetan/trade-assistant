@@ -21,7 +21,7 @@ pub struct AlgoResultWire {
     pub computed_at: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfluenceWire {
     pub bullish_count: usize,
     pub bearish_count: usize,
@@ -84,10 +84,57 @@ pub struct PersistCandlesResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct AddWatchlistSymbolRequest {
+    pub id: u64,
+    pub symbol: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RemoveWatchlistSymbolRequest {
+    pub id: u64,
+    pub symbol: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListWatchlistRequest {
+    pub id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvaluateScanGateRequest {
+    pub id: u64,
+    pub symbol: String,
+    pub confluence: ConfluenceWire,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WatchlistResponse {
+    pub id: u64,
+    pub symbols: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScanGateResponse {
+    pub id: u64,
+    /// One of "NoChange" | "WorthLook" | "WorthAiCall" -- produced via
+    /// `format!("{decision:?}")`, the same convention `AlgoResultWire::direction`
+    /// uses to mirror an `algo_core` enum onto the wire as a Debug string.
+    pub decision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SidecarRequest {
     Compute(ComputeRequest),
     PersistCandles(PersistCandlesRequest),
+    AddWatchlistSymbol(AddWatchlistSymbolRequest),
+    RemoveWatchlistSymbol(RemoveWatchlistSymbolRequest),
+    ListWatchlist(ListWatchlistRequest),
+    EvaluateScanGate(EvaluateScanGateRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -95,6 +142,8 @@ pub enum SidecarRequest {
 pub enum SidecarResponse {
     Compute(ComputeResponse),
     PersistCandles(PersistCandlesResponse),
+    Watchlist(WatchlistResponse),
+    ScanGate(ScanGateResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {

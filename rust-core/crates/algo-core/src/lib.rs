@@ -5,6 +5,7 @@ mod indicators;
 mod options;
 mod quant;
 pub mod registry;
+pub mod scan_gate;
 
 pub use algorithm::{
     classify_by_distance, relative_magnitude, AlgoOutput, Algorithm, Direction, Horizon,

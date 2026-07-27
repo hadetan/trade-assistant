@@ -3,6 +3,7 @@ pub enum StorageError {
     Io(std::io::Error),
     Duckdb(duckdb::Error),
     Sqlite(rusqlite::Error),
+    Json(serde_json::Error),
 }
 
 impl std::fmt::Display for StorageError {
@@ -11,6 +12,7 @@ impl std::fmt::Display for StorageError {
             StorageError::Io(e) => write!(f, "storage io error: {e}"),
             StorageError::Duckdb(e) => write!(f, "storage duckdb error: {e}"),
             StorageError::Sqlite(e) => write!(f, "storage sqlite error: {e}"),
+            StorageError::Json(e) => write!(f, "storage json error: {e}"),
         }
     }
 }
@@ -32,6 +34,12 @@ impl From<duckdb::Error> for StorageError {
 impl From<rusqlite::Error> for StorageError {
     fn from(e: rusqlite::Error) -> Self {
         StorageError::Sqlite(e)
+    }
+}
+
+impl From<serde_json::Error> for StorageError {
+    fn from(e: serde_json::Error) -> Self {
+        StorageError::Json(e)
     }
 }
 

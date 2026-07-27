@@ -135,4 +135,61 @@ describe("SidecarSupervisor", () => {
       ),
     ).not.toThrow();
   });
+
+  it("resolves addWatchlistSymbol with a watchlist response carrying the matching id", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.addWatchlistSymbol("NSE:INFY");
+    await requestsSeen;
+    children[0].stdout.write(`${JSON.stringify({ type: "watchlist", id: 1, symbols: ["NSE:INFY"] })}\n`);
+    const response = await pending;
+    expect(response.type).toBe("watchlist");
+    expect(response.symbols).toEqual(["NSE:INFY"]);
+  });
+
+  it("resolves removeWatchlistSymbol with the updated list", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.removeWatchlistSymbol("NSE:INFY");
+    await requestsSeen;
+    children[0].stdout.write(`${JSON.stringify({ type: "watchlist", id: 1, symbols: [] })}\n`);
+    expect((await pending).symbols).toEqual([]);
+  });
+
+  it("resolves listWatchlist with the current list", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.listWatchlist();
+    await requestsSeen;
+    children[0].stdout.write(`${JSON.stringify({ type: "watchlist", id: 1, symbols: ["NSE:TCS"] })}\n`);
+    expect((await pending).symbols).toEqual(["NSE:TCS"]);
+  });
+
+  it("resolves evaluateScanGate with a scan_gate decision", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.evaluateScanGate("NSE:INFY", {
+      bullish_count: 5,
+      bearish_count: 2,
+      neutral_count: 10,
+      weighted_vote: 0.12,
+    });
+    await requestsSeen;
+    children[0].stdout.write(`${JSON.stringify({ type: "scan_gate", id: 1, decision: "WorthLook" })}\n`);
+    expect((await pending).decision).toBe("WorthLook");
+  });
+
+  it("rejects evaluateScanGate on timeout exactly like compute (shared send path, no new timeout code)", async () => {
+    const children: FakeChild[] = [];
+    const spawnFn = (_command: string, _args: string[]) => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as ReturnType<typeof spawnFn>;
+    };
+    const supervisor = new SidecarSupervisor({ binaryPath: "/fake/sidecar", lakeRoot: "/fake/lake", spawnFn, requestTimeoutMs: 20 });
+    supervisor.start();
+    await expect(
+      supervisor.evaluateScanGate("NSE:INFY", { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 }),
+    ).rejects.toThrow(/sidecar request 1 timed out after 20ms/);
+  });
 });

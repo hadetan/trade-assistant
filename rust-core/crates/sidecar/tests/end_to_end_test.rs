@@ -143,3 +143,100 @@ fn a_malformed_line_is_logged_to_stderr_instead_of_silently_dropped() {
     );
     assert!(stderr_line.contains("not valid json"));
 }
+
+#[test]
+fn watchlist_and_scan_gate_flow_over_stdin_stdout_with_a_lake_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let lake = dir.path().to_str().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
+        .arg("--lake-root")
+        .arg(lake)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("sidecar binary must start");
+
+    let add = r#"{"type":"add_watchlist_symbol","id":1,"symbol":"NSE:INFY"}"#;
+    let list = r#"{"type":"list_watchlist","id":2}"#;
+    let compute = r#"{"type":"compute","id":3,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0,103.0,104.0,105.0,106.0,107.0,108.0,109.0,110.0,111.0,112.0,113.0,114.0,115.0,116.0,117.0,118.0,119.0,120.0]}"#;
+    let gate = r#"{"type":"evaluate_scan_gate","id":4,"symbol":"NSE:INFY","confluence":{"bullish_count":8,"bearish_count":1,"neutral_count":2,"weighted_vote":0.5}}"#;
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{add}").unwrap();
+        writeln!(stdin, "{list}").unwrap();
+        writeln!(stdin, "{compute}").unwrap();
+        writeln!(stdin, "{gate}").unwrap();
+    }
+    drop(child.stdin.take());
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut responses = Vec::new();
+    for _ in 0..4 {
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("stdout must be readable");
+        responses.push(serde_json::from_str::<serde_json::Value>(line.trim()).unwrap());
+    }
+    child.wait().ok();
+
+    assert_eq!(responses[0]["type"], "watchlist");
+    assert_eq!(responses[1]["symbols"][0], "NSE:INFY");
+    assert_eq!(responses[2]["type"], "compute");
+    assert_eq!(responses[3]["type"], "scan_gate");
+    // First-ever gate evaluation for this symbol always clears the low bar.
+    assert_eq!(responses[3]["decision"], "WorthLook");
+
+    // The state store really opened (not silently None): its db file exists.
+    assert!(dir.path().join("state.sqlite3").exists());
+}
+
+#[test]
+fn a_malformed_evaluate_scan_gate_between_two_valid_ones_does_not_kill_the_sidecar() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
+        .arg("--lake-root")
+        .arg(dir.path().to_str().unwrap())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("sidecar binary must start");
+
+    let valid = r#"{"type":"add_watchlist_symbol","id":1,"symbol":"NSE:INFY"}"#;
+    // Well-typed tag but a confluence object missing required fields: parses as
+    // a request line only if serde accepts it; if it fails to parse it is logged
+    // and skipped. Either way the process must answer the two valid requests and
+    // exit cleanly, exactly like the existing thin-history regression test.
+    let malformed = r#"{"type":"evaluate_scan_gate","id":2,"symbol":"NSE:INFY"}"#;
+    let valid_2 = r#"{"type":"list_watchlist","id":3}"#;
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{valid}").unwrap();
+        writeln!(stdin, "{malformed}").unwrap();
+        writeln!(stdin, "{valid_2}").unwrap();
+    }
+    drop(child.stdin.take());
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut ids = Vec::new();
+    // The malformed line either parses (and answers with id 2) or is skipped, so
+    // read until EOF and collect whatever ids came back.
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap() == 0 {
+            break;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        ids.push(value["id"].as_u64().unwrap());
+    }
+
+    let status = child.wait().expect("sidecar must be waitable, not crashed");
+    assert!(status.success(), "sidecar should exit cleanly, not crash: {status:?}");
+    assert!(ids.contains(&1), "the first valid request must be answered");
+    assert!(ids.contains(&3), "the second valid request must be answered");
+}

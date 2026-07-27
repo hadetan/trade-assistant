@@ -4,4 +4,4 @@ mod state_store;
 
 pub use candle_store::{Candle, CandleStore};
 pub use error::StorageError;
-pub use state_store::StateStore;
+pub use state_store::{ConfluenceSnapshot, StateStore};

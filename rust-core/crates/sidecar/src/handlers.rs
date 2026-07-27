@@ -1,10 +1,14 @@
 use crate::protocol::{
-    AlgoResultWire, ComputeRequest, ComputeResponse, ConfluenceWire, PersistCandlesRequest, PersistCandlesResponse,
+    AddWatchlistSymbolRequest, AlgoResultWire, ComputeRequest, ComputeResponse, ConfluenceWire,
+    EvaluateScanGateRequest, ListWatchlistRequest, PersistCandlesRequest, PersistCandlesResponse,
+    RemoveWatchlistSymbolRequest, ScanGateResponse, WatchlistResponse,
 };
-use algo_core::{confluence::compute_confluence, registry::{self, run_applicable}, Horizon, MarketContext, Timeframe};
+use algo_core::confluence::{compute_confluence, ScorecardSummary};
+use algo_core::scan_gate::{evaluate_scan_gate, GateThresholds};
+use algo_core::{registry::{self, run_applicable}, Horizon, MarketContext, Timeframe};
 use chrono::Utc;
 use std::collections::HashMap;
-use storage::{Candle, CandleStore};
+use storage::{Candle, CandleStore, ConfluenceSnapshot, StateStore};
 
 fn timeframe_to_wire(timeframe: Timeframe) -> &'static str {
     match timeframe {
@@ -92,6 +96,70 @@ pub fn handle_persist(store: &CandleStore, request: PersistCandlesRequest) -> Pe
     match store.write_sourced_candles(&request.symbol, &request.timeframe, &request.source, &candles) {
         Ok(()) => PersistCandlesResponse { id: request.id, written: candles.len(), error: None },
         Err(e) => PersistCandlesResponse { id: request.id, written: 0, error: Some(e.to_string()) },
+    }
+}
+
+fn wire_to_scorecard(wire: &ConfluenceWire) -> ScorecardSummary {
+    ScorecardSummary {
+        bullish_count: wire.bullish_count,
+        bearish_count: wire.bearish_count,
+        neutral_count: wire.neutral_count,
+        weighted_vote: wire.weighted_vote,
+    }
+}
+
+fn scorecard_to_snapshot(summary: &ScorecardSummary) -> ConfluenceSnapshot {
+    ConfluenceSnapshot {
+        bullish_count: summary.bullish_count,
+        bearish_count: summary.bearish_count,
+        neutral_count: summary.neutral_count,
+        weighted_vote: summary.weighted_vote,
+    }
+}
+
+fn snapshot_to_scorecard(snapshot: &ConfluenceSnapshot) -> ScorecardSummary {
+    ScorecardSummary {
+        bullish_count: snapshot.bullish_count,
+        bearish_count: snapshot.bearish_count,
+        neutral_count: snapshot.neutral_count,
+        weighted_vote: snapshot.weighted_vote,
+    }
+}
+
+pub fn handle_add_watchlist_symbol(store: &StateStore, request: AddWatchlistSymbolRequest) -> WatchlistResponse {
+    match store.add_watchlist_symbol(&request.symbol).and_then(|_| store.watchlist()) {
+        Ok(symbols) => WatchlistResponse { id: request.id, symbols, error: None },
+        Err(e) => WatchlistResponse { id: request.id, symbols: Vec::new(), error: Some(e.to_string()) },
+    }
+}
+
+pub fn handle_remove_watchlist_symbol(store: &StateStore, request: RemoveWatchlistSymbolRequest) -> WatchlistResponse {
+    match store.remove_watchlist_symbol(&request.symbol).and_then(|_| store.watchlist()) {
+        Ok(symbols) => WatchlistResponse { id: request.id, symbols, error: None },
+        Err(e) => WatchlistResponse { id: request.id, symbols: Vec::new(), error: Some(e.to_string()) },
+    }
+}
+
+pub fn handle_list_watchlist(store: &StateStore, request: ListWatchlistRequest) -> WatchlistResponse {
+    match store.watchlist() {
+        Ok(symbols) => WatchlistResponse { id: request.id, symbols, error: None },
+        Err(e) => WatchlistResponse { id: request.id, symbols: Vec::new(), error: Some(e.to_string()) },
+    }
+}
+
+pub fn handle_evaluate_scan_gate(store: &StateStore, request: EvaluateScanGateRequest) -> ScanGateResponse {
+    let curr = wire_to_scorecard(&request.confluence);
+    let prev_snapshot = match store.get_last_snapshot(&request.symbol) {
+        Ok(snapshot) => snapshot,
+        Err(e) => return ScanGateResponse { id: request.id, decision: "NoChange".to_string(), error: Some(e.to_string()) },
+    };
+    let prev_scorecard = prev_snapshot.as_ref().map(snapshot_to_scorecard);
+    let decision = evaluate_scan_gate(prev_scorecard.as_ref(), &curr, &GateThresholds::default());
+    // Always store the current tick (even on NoChange): comparing tick-to-tick,
+    // not tick-to-last-meaningful-change, lets slow drift eventually register.
+    match store.set_last_snapshot(&request.symbol, &scorecard_to_snapshot(&curr)) {
+        Ok(()) => ScanGateResponse { id: request.id, decision: format!("{decision:?}"), error: None },
+        Err(e) => ScanGateResponse { id: request.id, decision: format!("{decision:?}"), error: Some(e.to_string()) },
     }
 }
 
@@ -203,5 +271,77 @@ mod tests {
         let stored = store.read_sourced_candles("NSE:INFY", "day", "kite").unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].close, 1.5);
+    }
+
+    fn state_store() -> (tempfile::TempDir, StateStore) {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let store = StateStore::open(&dir.path().join("state.sqlite3")).unwrap();
+        (dir, store)
+    }
+
+    fn confluence_wire(bullish: usize, bearish: usize, neutral: usize, weighted_vote: f64) -> ConfluenceWire {
+        ConfluenceWire { bullish_count: bullish, bearish_count: bearish, neutral_count: neutral, weighted_vote }
+    }
+
+    #[test]
+    fn handle_add_watchlist_symbol_returns_the_updated_list() {
+        let (_dir, store) = state_store();
+        let response = handle_add_watchlist_symbol(
+            &store,
+            AddWatchlistSymbolRequest { id: 1, symbol: "NSE:INFY".to_string() },
+        );
+        assert_eq!(response.id, 1);
+        assert_eq!(response.symbols, vec!["NSE:INFY".to_string()]);
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn handle_remove_watchlist_symbol_returns_the_updated_list() {
+        let (_dir, store) = state_store();
+        store.add_watchlist_symbol("NSE:INFY").unwrap();
+        store.add_watchlist_symbol("NSE:TCS").unwrap();
+        let response = handle_remove_watchlist_symbol(
+            &store,
+            RemoveWatchlistSymbolRequest { id: 2, symbol: "NSE:INFY".to_string() },
+        );
+        assert_eq!(response.symbols, vec!["NSE:TCS".to_string()]);
+    }
+
+    #[test]
+    fn handle_list_watchlist_returns_the_current_list() {
+        let (_dir, store) = state_store();
+        store.add_watchlist_symbol("NSE:INFY").unwrap();
+        let response = handle_list_watchlist(&store, ListWatchlistRequest { id: 3 });
+        assert_eq!(response.id, 3);
+        assert_eq!(response.symbols, vec!["NSE:INFY".to_string()]);
+    }
+
+    #[test]
+    fn handle_evaluate_scan_gate_returns_worth_look_on_first_scan_and_persists_the_snapshot() {
+        let (_dir, store) = state_store();
+        let response = handle_evaluate_scan_gate(
+            &store,
+            EvaluateScanGateRequest { id: 4, symbol: "NSE:INFY".to_string(), confluence: confluence_wire(5, 2, 10, 0.12) },
+        );
+        assert_eq!(response.decision, "WorthLook");
+        assert!(response.error.is_none());
+        // The snapshot was persisted, so a second identical call can compare.
+        assert!(store.get_last_snapshot("NSE:INFY").unwrap().is_some());
+    }
+
+    #[test]
+    fn handle_evaluate_scan_gate_returns_no_change_on_an_identical_second_scan() {
+        let (_dir, store) = state_store();
+        let first = handle_evaluate_scan_gate(
+            &store,
+            EvaluateScanGateRequest { id: 5, symbol: "NSE:INFY".to_string(), confluence: confluence_wire(5, 2, 10, 0.12) },
+        );
+        assert_eq!(first.decision, "WorthLook");
+        let second = handle_evaluate_scan_gate(
+            &store,
+            EvaluateScanGateRequest { id: 6, symbol: "NSE:INFY".to_string(), confluence: confluence_wire(5, 2, 10, 0.12) },
+        );
+        assert_eq!(second.decision, "NoChange");
     }
 }

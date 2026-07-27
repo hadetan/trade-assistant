@@ -1,6 +1,8 @@
 use sidecar::protocol::{
-    empty_response, encode_response, parse_request, AlgoResultWire, ComputeResponse,
-    ConfluenceWire, SidecarRequest, SidecarResponse,
+    empty_response, encode_response, parse_request, AddWatchlistSymbolRequest, AlgoResultWire,
+    ComputeResponse, ConfluenceWire, EvaluateScanGateRequest, ListWatchlistRequest,
+    RemoveWatchlistSymbolRequest, ScanGateResponse, SidecarRequest, SidecarResponse,
+    WatchlistResponse,
 };
 
 #[test]
@@ -65,4 +67,138 @@ fn empty_response_answers_the_given_id_with_zeroed_everything() {
     assert_eq!(response.confluence.bearish_count, 0);
     assert_eq!(response.confluence.neutral_count, 0);
     assert_eq!(response.confluence.weighted_vote, 0.0);
+}
+
+#[test]
+fn confluence_wire_deserializes_from_a_json_object() {
+    let json = r#"{"bullish_count":5,"bearish_count":2,"neutral_count":10,"weighted_vote":0.12}"#;
+    let wire: ConfluenceWire = serde_json::from_str(json).unwrap();
+    assert_eq!(wire.bullish_count, 5);
+    assert_eq!(wire.bearish_count, 2);
+    assert_eq!(wire.neutral_count, 10);
+    assert!((wire.weighted_vote - 0.12).abs() < 1e-9);
+}
+
+#[test]
+fn add_watchlist_symbol_request_payload_deserializes() {
+    let req: AddWatchlistSymbolRequest =
+        serde_json::from_str(r#"{"id":7,"symbol":"NSE:INFY"}"#).unwrap();
+    assert_eq!(req.id, 7);
+    assert_eq!(req.symbol, "NSE:INFY");
+}
+
+#[test]
+fn remove_watchlist_symbol_request_payload_deserializes() {
+    let req: RemoveWatchlistSymbolRequest =
+        serde_json::from_str(r#"{"id":8,"symbol":"NSE:INFY"}"#).unwrap();
+    assert_eq!(req.id, 8);
+    assert_eq!(req.symbol, "NSE:INFY");
+}
+
+#[test]
+fn list_watchlist_request_payload_deserializes() {
+    let req: ListWatchlistRequest = serde_json::from_str(r#"{"id":9}"#).unwrap();
+    assert_eq!(req.id, 9);
+}
+
+#[test]
+fn evaluate_scan_gate_request_payload_deserializes_with_its_confluence() {
+    let req: EvaluateScanGateRequest = serde_json::from_str(
+        r#"{"id":10,"symbol":"NSE:INFY","confluence":{"bullish_count":5,"bearish_count":2,"neutral_count":10,"weighted_vote":0.12}}"#,
+    )
+    .unwrap();
+    assert_eq!(req.id, 10);
+    assert_eq!(req.symbol, "NSE:INFY");
+    assert_eq!(req.confluence.bullish_count, 5);
+}
+
+#[test]
+fn watchlist_response_omits_error_field_when_none() {
+    let json = serde_json::to_string(&WatchlistResponse {
+        id: 7,
+        symbols: vec!["NSE:INFY".to_string()],
+        error: None,
+    })
+    .unwrap();
+    assert!(json.contains("\"id\":7"));
+    assert!(json.contains("\"symbols\":[\"NSE:INFY\"]"));
+    assert!(!json.contains("error"));
+}
+
+#[test]
+fn scan_gate_response_serializes_its_decision_string() {
+    let json = serde_json::to_string(&ScanGateResponse {
+        id: 10,
+        decision: "WorthLook".to_string(),
+        error: None,
+    })
+    .unwrap();
+    assert!(json.contains("\"id\":10"));
+    assert!(json.contains("\"decision\":\"WorthLook\""));
+    assert!(!json.contains("error"));
+}
+
+#[test]
+fn parses_a_tagged_add_watchlist_symbol_request() {
+    match parse_request(r#"{"type":"add_watchlist_symbol","id":7,"symbol":"NSE:INFY"}"#).unwrap() {
+        SidecarRequest::AddWatchlistSymbol(request) => {
+            assert_eq!(request.id, 7);
+            assert_eq!(request.symbol, "NSE:INFY");
+        }
+        _ => panic!("expected an add_watchlist_symbol request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_remove_watchlist_symbol_request() {
+    match parse_request(r#"{"type":"remove_watchlist_symbol","id":8,"symbol":"NSE:INFY"}"#).unwrap() {
+        SidecarRequest::RemoveWatchlistSymbol(request) => assert_eq!(request.id, 8),
+        _ => panic!("expected a remove_watchlist_symbol request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_list_watchlist_request() {
+    match parse_request(r#"{"type":"list_watchlist","id":9}"#).unwrap() {
+        SidecarRequest::ListWatchlist(request) => assert_eq!(request.id, 9),
+        _ => panic!("expected a list_watchlist request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_evaluate_scan_gate_request() {
+    match parse_request(
+        r#"{"type":"evaluate_scan_gate","id":10,"symbol":"NSE:INFY","confluence":{"bullish_count":5,"bearish_count":2,"neutral_count":10,"weighted_vote":0.12}}"#,
+    )
+    .unwrap()
+    {
+        SidecarRequest::EvaluateScanGate(request) => {
+            assert_eq!(request.id, 10);
+            assert_eq!(request.confluence.neutral_count, 10);
+        }
+        _ => panic!("expected an evaluate_scan_gate request"),
+    }
+}
+
+#[test]
+fn encodes_a_tagged_watchlist_response() {
+    let line = encode_response(&SidecarResponse::Watchlist(WatchlistResponse {
+        id: 7,
+        symbols: vec!["NSE:INFY".to_string()],
+        error: None,
+    }));
+    assert!(!line.contains('\n'));
+    assert!(line.contains("\"type\":\"watchlist\""));
+    assert!(line.contains("\"symbols\":[\"NSE:INFY\"]"));
+}
+
+#[test]
+fn encodes_a_tagged_scan_gate_response() {
+    let line = encode_response(&SidecarResponse::ScanGate(ScanGateResponse {
+        id: 10,
+        decision: "WorthLook".to_string(),
+        error: None,
+    }));
+    assert!(line.contains("\"type\":\"scan_gate\""));
+    assert!(line.contains("\"decision\":\"WorthLook\""));
 }

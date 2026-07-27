@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { HistoryStore } from "../../../../src/main/services/history/historyStore";
+import { DEFAULT_SCAN_CONFIG, HistoryStore } from "../../../../src/main/services/history/historyStore";
 
 const tempDirs: string[] = [];
 
@@ -131,6 +131,34 @@ describe("HistoryStore persistence across instances", () => {
     expect(second.getSession(session.id)?.messages[0].rendered_text).toBe("kept");
     expect(second.getClaudeSessionId(session.id)).toBe("persisted-uuid");
     expect(second.listSessions().map((s) => s.id)).toContain(session.id);
+    second.close();
+  });
+});
+
+describe("HistoryStore scan_config", () => {
+  it("returns the seeded default on a fresh database", () => {
+    const store = memoryStore();
+    expect(store.getScanConfig()).toEqual({ enabled: false, intervalMinutes: 15 });
+    expect(DEFAULT_SCAN_CONFIG).toEqual({ enabled: false, intervalMinutes: 15 });
+    store.close();
+  });
+
+  it("round-trips setScanConfig through getScanConfig", () => {
+    const store = memoryStore();
+    store.setScanConfig({ enabled: true, intervalMinutes: 30 });
+    expect(store.getScanConfig()).toEqual({ enabled: true, intervalMinutes: 30 });
+    store.close();
+  });
+
+  it("does not reset or duplicate the singleton row when re-opened against the same file", () => {
+    const dbPath = tempDbPath();
+    const first = new HistoryStore({ path: dbPath, now: monotonicNow() });
+    first.setScanConfig({ enabled: true, intervalMinutes: 60 });
+    first.close();
+
+    const second = new HistoryStore({ path: dbPath, now: monotonicNow() });
+    // INSERT OR IGNORE on re-open must not clobber the persisted value back to default.
+    expect(second.getScanConfig()).toEqual({ enabled: true, intervalMinutes: 60 });
     second.close();
   });
 });

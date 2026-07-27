@@ -1,7 +1,8 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Notification, shell, type Tray } from "electron";
 import dotenv from "dotenv";
 import path from "node:path";
 import { mainWindowOptions } from "./mainWindow";
+import { settingsWindowOptions } from "./settingsWindow";
 import { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
 import { KiteSessionState, classifyKiteResponse } from "./services/kite/kiteSessionState";
 import { loadKiteConfig } from "./services/kite/kiteConfig";
@@ -12,13 +13,18 @@ import { ClaudeCliProvider } from "./services/claude/claudeCliProvider";
 import { registerStatusBridge } from "./ipc/appBridge";
 import { registerAnalysisBridge } from "./ipc/analysisBridge";
 import { registerHistoryBridge } from "./ipc/historyBridge";
+import { registerSettingsBridge } from "./ipc/settingsBridge";
 import { makeNarrativeSender } from "./ipc/narrativeBridge";
 import { HistoryStore } from "./services/history/historyStore";
+import { ScanScheduler } from "./scanScheduler";
+import { createTray } from "./tray";
 import type { AppStatus, BannerEvent, KiteSessionStatus, LoginResult, SidecarStatus } from "./ipc/rendererApi";
 
 export interface AppRuntime {
   start(): void;
   stop(): void;
+  showMainWindow(): void;
+  isScanningEnabled(): boolean;
 }
 
 // classifyKiteResponse fails closed: ordinary successful reads (search
@@ -62,6 +68,11 @@ export function createApp(): AppRuntime {
   let driftWarning: string | null = null;
   let session: KiteSession | null = null;
   let loginInFlight: Promise<LoginResult> | null = null;
+  let mainWindow: BrowserWindow | null = null;
+  let settingsWindow: BrowserWindow | null = null;
+  // Retained so Electron does not garbage-collect the tray icon (a documented
+  // Electron gotcha for an otherwise-unreferenced Tray).
+  let tray: Tray | null = null;
   const bannerHandlers: ((banner: BannerEvent) => void)[] = [];
 
   const dispatchBanner = (banner: BannerEvent): void => bannerHandlers.forEach((handler) => handler(banner));
@@ -125,44 +136,126 @@ export function createApp(): AppRuntime {
     return loginInFlight;
   };
 
+  // Reads the current mainWindow at call time rather than closing over one fixed
+  // window instance, so a recreated window (tray "Show"/activate) still receives
+  // pushed banner/narrative events.
+  const sendToRenderer = (channel: string, payload: unknown): void => {
+    mainWindow?.webContents.send(channel, payload);
+  };
+
   const createMainWindow = (): BrowserWindow => {
     const window = new BrowserWindow(mainWindowOptions(path.join(__dirname, "..", "preload", "preload.js")));
+    mainWindow = window;
+    window.on("closed", () => {
+      mainWindow = null;
+    });
     window.webContents.setWindowOpenHandler(({ url }) => {
       if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
       return { action: "deny" };
     });
-    registerStatusBridge({
-      ipcMain,
-      getStatus: currentStatus,
-      onBanner: (handler) => bannerHandlers.push(handler),
-      sendToRenderer: (channel, payload) => window.webContents.send(channel, payload),
-    });
-    registerAnalysisBridge({
-      ipcMain,
-      login,
-      getSession: () => session,
-      sidecar: supervisor,
-      provider,
-      history,
-      sendNarrative: makeNarrativeSender((channel, payload) => window.webContents.send(channel, payload)),
-      markNeedsLogin: () => sessionState.markNeedsLogin(),
-    });
-    registerHistoryBridge({ ipcMain, history });
     const rendererUrl = process.env.ELECTRON_RENDERER_URL;
     if (rendererUrl) window.loadURL(rendererUrl);
     else window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
     return window;
   };
 
+  const showMainWindow = (): void => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+      return;
+    }
+    createMainWindow();
+  };
+
+  const createSettingsWindow = (): BrowserWindow => {
+    const window = new BrowserWindow(settingsWindowOptions(path.join(__dirname, "..", "preload", "settingsPreload.js")));
+    settingsWindow = window;
+    window.on("closed", () => {
+      settingsWindow = null;
+    });
+    // Mirrors createMainWindow's handler exactly: without it, this window falls
+    // back to Electron's default of allowing window.open() for arbitrary URLs.
+    window.webContents.setWindowOpenHandler(({ url }) => {
+      if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
+      return { action: "deny" };
+    });
+    const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+    if (rendererUrl) window.loadURL(`${rendererUrl}/settings.html`);
+    else window.loadFile(path.join(__dirname, "..", "renderer", "settings.html"));
+    return window;
+  };
+
+  const showSettingsWindow = (): void => {
+    if (settingsWindow) {
+      settingsWindow.show();
+      settingsWindow.focus();
+      return;
+    }
+    createSettingsWindow();
+  };
+
+  const sendScanNotification = (title: string, body: string): void => {
+    if (!Notification.isSupported()) return;
+    const notification = new Notification({ title, body });
+    // Resolves showMainWindow at click time (long after every const above is
+    // assigned), so a notification click reaches whichever window is current.
+    notification.on("click", () => showMainWindow());
+    notification.show();
+  };
+
+  const scanScheduler = new ScanScheduler(
+    {
+      sidecar: supervisor,
+      getKite: () => session?.kite ?? null,
+      provider,
+      history,
+      notify: sendScanNotification,
+    },
+    history.getScanConfig(),
+  );
+
+  // IPC handlers are registered exactly once, decoupled from window creation:
+  // ipcMain.handle throws on a second registration for the same channel, and
+  // createMainWindow/createSettingsWindow can now run more than once (showMainWindow/
+  // showSettingsWindow after a close).
+  registerStatusBridge({
+    ipcMain,
+    getStatus: currentStatus,
+    onBanner: (handler) => bannerHandlers.push(handler),
+    sendToRenderer,
+  });
+  registerAnalysisBridge({
+    ipcMain,
+    login,
+    getSession: () => session,
+    sidecar: supervisor,
+    provider,
+    history,
+    sendNarrative: makeNarrativeSender(sendToRenderer),
+    markNeedsLogin: () => sessionState.markNeedsLogin(),
+  });
+  registerHistoryBridge({ ipcMain, history });
+  registerSettingsBridge({ ipcMain, history, scanScheduler, sidecar: supervisor, getStatus: currentStatus });
+
   return {
     start: () => {
       supervisor.start();
       createMainWindow();
+      tray = createTray({ showMainWindow, showSettingsWindow, quit: () => app.quit() });
     },
     stop: () => {
+      // Stop the scheduler first, before the sidecar/history teardown it depends
+      // on. stop() only clears the interval timer; a tick already in flight is
+      // caught by tickOneSymbol's own try/catch if it hits a closed store.
+      scanScheduler.stop();
       void session?.close().catch(() => {});
       history.close();
       supervisor.stop();
+      tray?.destroy();
+      tray = null;
     },
+    showMainWindow,
+    isScanningEnabled: () => scanScheduler.getConfig().enabled,
   };
 }

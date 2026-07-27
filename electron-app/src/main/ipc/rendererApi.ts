@@ -6,6 +6,8 @@ export type { IntentLens, Verdict } from "../services/analysis/contracts";
 import type { IntentLens } from "../services/analysis/contracts";
 export type { SessionSummary, HistoryMessage, SessionDetail } from "../services/history/historyStore";
 import type { SessionSummary, HistoryMessage, SessionDetail } from "../services/history/historyStore";
+export type { ScanConfig, ScanIntervalMinutes } from "../services/history/historyStore";
+import type { ScanConfig } from "../services/history/historyStore";
 
 export type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
 
@@ -86,5 +88,27 @@ export function buildRendererApi(
     createSession: (mode) => invoke("history:createSession", { mode }) as Promise<SessionSummary>,
     listSessions: () => invoke("history:listSessions") as Promise<SessionSummary[]>,
     getSession: (id) => invoke("history:getSession", { id }) as Promise<SessionDetail>,
+  };
+}
+
+export interface SettingsApi {
+  getScanConfig(): Promise<ScanConfig>;
+  setScanConfig(config: ScanConfig): Promise<ScanConfig>;
+  listWatchlist(): Promise<string[]>;
+  addWatchlistSymbol(symbol: string): Promise<string[]>;
+  removeWatchlistSymbol(symbol: string): Promise<string[]>;
+  getAccountStatus(): Promise<AppStatus>;
+  searchInstruments(query: string): Promise<unknown>;
+}
+
+export function buildSettingsApi(invoke: (channel: string, ...args: unknown[]) => Promise<unknown>): SettingsApi {
+  return {
+    getScanConfig: () => invoke("settings:getScanConfig") as Promise<ScanConfig>,
+    setScanConfig: (config) => invoke("settings:setScanConfig", config) as Promise<ScanConfig>,
+    listWatchlist: () => invoke("settings:listWatchlist") as Promise<string[]>,
+    addWatchlistSymbol: (symbol) => invoke("settings:addWatchlistSymbol", { symbol }) as Promise<string[]>,
+    removeWatchlistSymbol: (symbol) => invoke("settings:removeWatchlistSymbol", { symbol }) as Promise<string[]>,
+    getAccountStatus: () => invoke("settings:getAccountStatus") as Promise<AppStatus>,
+    searchInstruments: (query) => invoke("kite:searchInstruments", { query }),
   };
 }

@@ -18,14 +18,24 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()],
     build: {
-      rollupOptions: { input: resolve(__dirname, "src/main/ipc/preload.ts") },
+      rollupOptions: {
+        input: {
+          preload: resolve(__dirname, "src/main/ipc/preload.ts"),
+          settingsPreload: resolve(__dirname, "src/main/ipc/settingsPreload.ts"),
+        },
+      },
     },
   },
   renderer: {
     root: resolve(__dirname, "src/renderer"),
     build: {
       modulePreload: { polyfill: false },
-      rollupOptions: { input: resolve(__dirname, "src/renderer/index.html") },
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, "src/renderer/index.html"),
+          settings: resolve(__dirname, "src/renderer/settings.html"),
+        },
+      },
     },
     plugins: [
       react(),
