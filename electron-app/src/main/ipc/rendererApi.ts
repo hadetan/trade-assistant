@@ -4,6 +4,8 @@ import type { InstrumentSelection } from "../services/analysis/analysisEnvelope"
 import type { AlgoResultWire, ConfluenceWire } from "../services/sidecar/sidecarProtocol";
 export type { IntentLens, Verdict } from "../services/analysis/contracts";
 import type { IntentLens } from "../services/analysis/contracts";
+export type { SessionSummary, HistoryMessage, SessionDetail } from "../services/history/historyStore";
+import type { SessionSummary, HistoryMessage, SessionDetail } from "../services/history/historyStore";
 
 export type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
 
@@ -65,6 +67,9 @@ export interface RendererApi {
   login(): Promise<LoginResult>;
   searchInstruments(query: string): Promise<unknown>;
   runAnalysis(params: AnalysisRunParams): Promise<AnalysisResult>;
+  createSession(mode: AnalysisMode): Promise<SessionSummary>;
+  listSessions(): Promise<SessionSummary[]>;
+  getSession(id: string): Promise<SessionDetail>;
 }
 
 export function buildRendererApi(
@@ -78,5 +83,8 @@ export function buildRendererApi(
     login: () => invoke("kite:login") as Promise<LoginResult>,
     searchInstruments: (query) => invoke("kite:searchInstruments", { query }),
     runAnalysis: (params) => invoke("analysis:run", params) as Promise<AnalysisResult>,
+    createSession: (mode) => invoke("history:createSession", { mode }) as Promise<SessionSummary>,
+    listSessions: () => invoke("history:listSessions") as Promise<SessionSummary[]>,
+    getSession: (id) => invoke("history:getSession", { id }) as Promise<SessionDetail>,
   };
 }
