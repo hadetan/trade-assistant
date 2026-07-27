@@ -13,6 +13,8 @@ export interface CompleteAiAssistedOptions {
   researchNotes?: string;
   onNarrativeToken: (text: string) => void;
   signal?: AbortSignal;
+  claudeSessionId: string;
+  resumeSession: boolean;
 }
 
 export interface AiAssistedProvider {

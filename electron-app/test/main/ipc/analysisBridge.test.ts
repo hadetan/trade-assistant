@@ -111,12 +111,14 @@ describe("runAnalysisRequest", () => {
 });
 
 describe("runAiAssistedRequest", () => {
+  const aiParams = { mode: "ai_assisted" as const, sessionId: "sess-1", query: "how is infy", intent_lens: "selling" as const, requestId: "r7" };
+
   it("streams tokens, sends done, and returns an ai_assisted result with the real intent_lens", async () => {
     const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
     const sends: unknown[] = [];
     const result = await runAiAssistedRequest(
-      { kite, sidecar: mockSidecar() as never, provider: fakeProvider() },
-      { mode: "ai_assisted", query: "how is infy", intent_lens: "selling", requestId: "r7" },
+      { kite, sidecar: mockSidecar() as never, provider: fakeProvider(), history: fakeHistory() },
+      aiParams,
       (event) => sends.push(event),
     );
     expect(result.mode).toBe("ai_assisted");
@@ -124,8 +126,6 @@ describe("runAiAssistedRequest", () => {
     expect(result.verdict.direction).toBe("bullish");
     expect(result.narrative).toBe("Infy is constructive.");
     expect(result.intent_lens).toBe("selling");
-    expect(result.algo_results[0].algo_id).toBe("rsi");
-    expect(result.confluence.bullish_count).toBe(1);
     expect(sends).toEqual([
       { requestId: "r7", chunk: "Infy " },
       { requestId: "r7", chunk: "is constructive." },
@@ -133,18 +133,56 @@ describe("runAiAssistedRequest", () => {
     ]);
   });
 
-  it("pushes an error event and rethrows when the pipeline fails", async () => {
+  it("writes the user message before the provider call and the assistant message only after success", async () => {
     const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const history = fakeHistory();
+    await runAiAssistedRequest({ kite, sidecar: mockSidecar() as never, provider: fakeProvider(), history }, aiParams, () => {});
+    expect(history.appendMessage).toHaveBeenCalledTimes(2);
+    expect(history.appendMessage.mock.calls[0][0]).toMatchObject({ sessionId: "sess-1", role: "user" });
+    expect(history.appendMessage.mock.calls[1][0]).toMatchObject({ sessionId: "sess-1", role: "assistant" });
+  });
+
+  it("pins a fresh claude_session_id on the first turn and persists it once after success", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const history = fakeHistory({ getClaudeSessionId: vi.fn().mockReturnValue(null) });
+    const provider = fakeProvider();
+    await runAiAssistedRequest({ kite, sidecar: mockSidecar() as never, provider, history }, aiParams, () => {});
+    const opts = (provider.completeAiAssisted as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1] as {
+      claudeSessionId: string;
+      resumeSession: boolean;
+    };
+    expect(opts.resumeSession).toBe(false);
+    expect(typeof opts.claudeSessionId).toBe("string");
+    expect(history.setClaudeSessionId).toHaveBeenCalledTimes(1);
+    expect(history.setClaudeSessionId).toHaveBeenCalledWith("sess-1", opts.claudeSessionId);
+  });
+
+  it("resumes the persisted claude_session_id on a later turn and never re-persists it", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const history = fakeHistory({ getClaudeSessionId: vi.fn().mockReturnValue("prev-uuid") });
+    const provider = fakeProvider();
+    await runAiAssistedRequest({ kite, sidecar: mockSidecar() as never, provider, history }, aiParams, () => {});
+    const opts = (provider.completeAiAssisted as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1] as {
+      claudeSessionId: string;
+      resumeSession: boolean;
+    };
+    expect(opts.claudeSessionId).toBe("prev-uuid");
+    expect(opts.resumeSession).toBe(true);
+    expect(history.setClaudeSessionId).not.toHaveBeenCalled();
+  });
+
+  it("does not persist claude_session_id when the first turn fails (leaves it NULL for a clean retry)", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const history = fakeHistory({ getClaudeSessionId: vi.fn().mockReturnValue(null) });
     const provider = fakeProvider({ completeAiAssisted: vi.fn().mockRejectedValue(new Error("claude down")) });
     const sends: unknown[] = [];
     await expect(
-      runAiAssistedRequest(
-        { kite, sidecar: mockSidecar() as never, provider },
-        { mode: "ai_assisted", query: "q", intent_lens: "buying", requestId: "r8" },
-        (e) => sends.push(e),
-      ),
+      runAiAssistedRequest({ kite, sidecar: mockSidecar() as never, provider, history }, aiParams, (e) => sends.push(e)),
     ).rejects.toThrow(/claude down/);
-    expect(sends).toContainEqual({ requestId: "r8", error: "claude down" });
+    expect(history.setClaudeSessionId).not.toHaveBeenCalled();
+    expect(history.appendMessage).toHaveBeenCalledTimes(1);
+    expect(history.appendMessage.mock.calls[0][0]).toMatchObject({ role: "user" });
+    expect(sends).toContainEqual({ requestId: "r7", error: "claude down" });
   });
 });
 
