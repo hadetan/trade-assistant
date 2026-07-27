@@ -62,6 +62,7 @@ export function createApp(): AppRuntime {
   let driftWarning: string | null = null;
   let session: KiteSession | null = null;
   let loginInFlight: Promise<LoginResult> | null = null;
+  let mainWindow: BrowserWindow | null = null;
   const bannerHandlers: ((banner: BannerEvent) => void)[] = [];
 
   const dispatchBanner = (banner: BannerEvent): void => bannerHandlers.forEach((handler) => handler(banner));
@@ -125,34 +126,58 @@ export function createApp(): AppRuntime {
     return loginInFlight;
   };
 
+  // Reads the current mainWindow at call time rather than closing over one fixed
+  // window instance, so a recreated window (tray "Show"/activate) still receives
+  // pushed banner/narrative events.
+  const sendToRenderer = (channel: string, payload: unknown): void => {
+    mainWindow?.webContents.send(channel, payload);
+  };
+
   const createMainWindow = (): BrowserWindow => {
     const window = new BrowserWindow(mainWindowOptions(path.join(__dirname, "..", "preload", "preload.js")));
+    mainWindow = window;
+    window.on("closed", () => {
+      mainWindow = null;
+    });
     window.webContents.setWindowOpenHandler(({ url }) => {
       if (/^(https?|mailto):/.test(url)) shell.openExternal(url);
       return { action: "deny" };
     });
-    registerStatusBridge({
-      ipcMain,
-      getStatus: currentStatus,
-      onBanner: (handler) => bannerHandlers.push(handler),
-      sendToRenderer: (channel, payload) => window.webContents.send(channel, payload),
-    });
-    registerAnalysisBridge({
-      ipcMain,
-      login,
-      getSession: () => session,
-      sidecar: supervisor,
-      provider,
-      history,
-      sendNarrative: makeNarrativeSender((channel, payload) => window.webContents.send(channel, payload)),
-      markNeedsLogin: () => sessionState.markNeedsLogin(),
-    });
-    registerHistoryBridge({ ipcMain, history });
     const rendererUrl = process.env.ELECTRON_RENDERER_URL;
     if (rendererUrl) window.loadURL(rendererUrl);
     else window.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
     return window;
   };
+
+  const showMainWindow = (): void => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+      return;
+    }
+    createMainWindow();
+  };
+
+  // IPC handlers are registered exactly once, decoupled from window creation:
+  // ipcMain.handle throws on a second registration for the same channel, and
+  // createMainWindow can now run more than once (showMainWindow after a close).
+  registerStatusBridge({
+    ipcMain,
+    getStatus: currentStatus,
+    onBanner: (handler) => bannerHandlers.push(handler),
+    sendToRenderer,
+  });
+  registerAnalysisBridge({
+    ipcMain,
+    login,
+    getSession: () => session,
+    sidecar: supervisor,
+    provider,
+    history,
+    sendNarrative: makeNarrativeSender(sendToRenderer),
+    markNeedsLogin: () => sessionState.markNeedsLogin(),
+  });
+  registerHistoryBridge({ ipcMain, history });
 
   return {
     start: () => {
