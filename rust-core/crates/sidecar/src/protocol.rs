@@ -131,6 +131,10 @@ pub struct ScanGateResponse {
 pub enum SidecarRequest {
     Compute(ComputeRequest),
     PersistCandles(PersistCandlesRequest),
+    AddWatchlistSymbol(AddWatchlistSymbolRequest),
+    RemoveWatchlistSymbol(RemoveWatchlistSymbolRequest),
+    ListWatchlist(ListWatchlistRequest),
+    EvaluateScanGate(EvaluateScanGateRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -138,6 +142,8 @@ pub enum SidecarRequest {
 pub enum SidecarResponse {
     Compute(ComputeResponse),
     PersistCandles(PersistCandlesResponse),
+    Watchlist(WatchlistResponse),
+    ScanGate(ScanGateResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {

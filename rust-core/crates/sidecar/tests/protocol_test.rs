@@ -137,3 +137,68 @@ fn scan_gate_response_serializes_its_decision_string() {
     assert!(json.contains("\"decision\":\"WorthLook\""));
     assert!(!json.contains("error"));
 }
+
+#[test]
+fn parses_a_tagged_add_watchlist_symbol_request() {
+    match parse_request(r#"{"type":"add_watchlist_symbol","id":7,"symbol":"NSE:INFY"}"#).unwrap() {
+        SidecarRequest::AddWatchlistSymbol(request) => {
+            assert_eq!(request.id, 7);
+            assert_eq!(request.symbol, "NSE:INFY");
+        }
+        _ => panic!("expected an add_watchlist_symbol request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_remove_watchlist_symbol_request() {
+    match parse_request(r#"{"type":"remove_watchlist_symbol","id":8,"symbol":"NSE:INFY"}"#).unwrap() {
+        SidecarRequest::RemoveWatchlistSymbol(request) => assert_eq!(request.id, 8),
+        _ => panic!("expected a remove_watchlist_symbol request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_list_watchlist_request() {
+    match parse_request(r#"{"type":"list_watchlist","id":9}"#).unwrap() {
+        SidecarRequest::ListWatchlist(request) => assert_eq!(request.id, 9),
+        _ => panic!("expected a list_watchlist request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_evaluate_scan_gate_request() {
+    match parse_request(
+        r#"{"type":"evaluate_scan_gate","id":10,"symbol":"NSE:INFY","confluence":{"bullish_count":5,"bearish_count":2,"neutral_count":10,"weighted_vote":0.12}}"#,
+    )
+    .unwrap()
+    {
+        SidecarRequest::EvaluateScanGate(request) => {
+            assert_eq!(request.id, 10);
+            assert_eq!(request.confluence.neutral_count, 10);
+        }
+        _ => panic!("expected an evaluate_scan_gate request"),
+    }
+}
+
+#[test]
+fn encodes_a_tagged_watchlist_response() {
+    let line = encode_response(&SidecarResponse::Watchlist(WatchlistResponse {
+        id: 7,
+        symbols: vec!["NSE:INFY".to_string()],
+        error: None,
+    }));
+    assert!(!line.contains('\n'));
+    assert!(line.contains("\"type\":\"watchlist\""));
+    assert!(line.contains("\"symbols\":[\"NSE:INFY\"]"));
+}
+
+#[test]
+fn encodes_a_tagged_scan_gate_response() {
+    let line = encode_response(&SidecarResponse::ScanGate(ScanGateResponse {
+        id: 10,
+        decision: "WorthLook".to_string(),
+        error: None,
+    }));
+    assert!(line.contains("\"type\":\"scan_gate\""));
+    assert!(line.contains("\"decision\":\"WorthLook\""));
+}
