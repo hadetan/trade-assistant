@@ -38,6 +38,15 @@ export interface HistoryStoreOptions {
   now?: () => Date;
 }
 
+export type ScanIntervalMinutes = 5 | 15 | 30 | 60;
+
+export interface ScanConfig {
+  enabled: boolean;
+  intervalMinutes: ScanIntervalMinutes;
+}
+
+export const DEFAULT_SCAN_CONFIG: ScanConfig = { enabled: false, intervalMinutes: 15 };
+
 const PREVIEW_MAX_LENGTH = 120;
 
 function summarizePreview(latestMessageText: string | null): string {
@@ -75,7 +84,13 @@ export class HistoryStore {
          created_at TEXT NOT NULL
        );
        CREATE INDEX IF NOT EXISTS messages_session_id_idx ON messages(session_id);
-       CREATE INDEX IF NOT EXISTS sessions_last_active_at_idx ON sessions(last_active_at);`,
+       CREATE INDEX IF NOT EXISTS sessions_last_active_at_idx ON sessions(last_active_at);
+       CREATE TABLE IF NOT EXISTS scan_config (
+         id INTEGER PRIMARY KEY CHECK (id = 1),
+         enabled INTEGER NOT NULL DEFAULT 0,
+         interval_minutes INTEGER NOT NULL DEFAULT 15
+       );
+       INSERT OR IGNORE INTO scan_config (id, enabled, interval_minutes) VALUES (1, 0, 15);`,
     );
 
     const insertMessage = this.db.prepare(
@@ -175,6 +190,20 @@ export class HistoryStore {
 
   setClaudeSessionId(sessionId: string, claudeSessionId: string): void {
     this.db.prepare("UPDATE sessions SET claude_session_id = ? WHERE id = ?").run(claudeSessionId, sessionId);
+  }
+
+  getScanConfig(): ScanConfig {
+    const row = this.db.prepare("SELECT enabled, interval_minutes FROM scan_config WHERE id = 1").get() as {
+      enabled: number;
+      interval_minutes: number;
+    };
+    return { enabled: row.enabled === 1, intervalMinutes: row.interval_minutes as ScanIntervalMinutes };
+  }
+
+  setScanConfig(config: ScanConfig): void {
+    this.db
+      .prepare("UPDATE scan_config SET enabled = ?, interval_minutes = ? WHERE id = 1")
+      .run(config.enabled ? 1 : 0, config.intervalMinutes);
   }
 
   close(): void {
