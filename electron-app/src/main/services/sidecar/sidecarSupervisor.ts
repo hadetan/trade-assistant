@@ -4,9 +4,12 @@ import type { Readable, Writable } from "node:stream";
 import {
   CandleWire,
   ComputeResponseWire,
+  ConfluenceWire,
   PersistCandlesResponseWire,
+  ScanGateResponseWire,
   SidecarRequestWire,
   SidecarResponseWire,
+  WatchlistResponseWire,
   encodeRequest,
 } from "./sidecarProtocol";
 import type { SidecarStatus } from "../../ipc/rendererApi";
@@ -84,6 +87,22 @@ export class SidecarSupervisor extends EventEmitter {
       source,
       candles,
     }) as Promise<PersistCandlesResponseWire>;
+  }
+
+  addWatchlistSymbol(symbol: string): Promise<WatchlistResponseWire> {
+    return this.send({ type: "add_watchlist_symbol", id: this.nextId, symbol }) as Promise<WatchlistResponseWire>;
+  }
+
+  removeWatchlistSymbol(symbol: string): Promise<WatchlistResponseWire> {
+    return this.send({ type: "remove_watchlist_symbol", id: this.nextId, symbol }) as Promise<WatchlistResponseWire>;
+  }
+
+  listWatchlist(): Promise<WatchlistResponseWire> {
+    return this.send({ type: "list_watchlist", id: this.nextId }) as Promise<WatchlistResponseWire>;
+  }
+
+  evaluateScanGate(symbol: string, confluence: ConfluenceWire): Promise<ScanGateResponseWire> {
+    return this.send({ type: "evaluate_scan_gate", id: this.nextId, symbol, confluence }) as Promise<ScanGateResponseWire>;
   }
 
   private send(request: SidecarRequestWire): Promise<SidecarResponseWire> {

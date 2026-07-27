@@ -43,11 +43,33 @@ export interface PersistCandlesResponseWire {
   error?: string;
 }
 
-export type SidecarResponseWire = ComputeResponseWire | PersistCandlesResponseWire;
+export interface WatchlistResponseWire {
+  type: "watchlist";
+  id: number;
+  symbols: string[];
+  error?: string;
+}
+
+export interface ScanGateResponseWire {
+  type: "scan_gate";
+  id: number;
+  decision: "NoChange" | "WorthLook" | "WorthAiCall";
+  error?: string;
+}
+
+export type SidecarResponseWire =
+  | ComputeResponseWire
+  | PersistCandlesResponseWire
+  | WatchlistResponseWire
+  | ScanGateResponseWire;
 
 export type SidecarRequestWire =
   | { type: "compute"; id: number; symbol: string; timeframe: string; closes: number[] }
-  | { type: "persist_candles"; id: number; symbol: string; timeframe: string; source: string; candles: CandleWire[] };
+  | { type: "persist_candles"; id: number; symbol: string; timeframe: string; source: string; candles: CandleWire[] }
+  | { type: "add_watchlist_symbol"; id: number; symbol: string }
+  | { type: "remove_watchlist_symbol"; id: number; symbol: string }
+  | { type: "list_watchlist"; id: number }
+  | { type: "evaluate_scan_gate"; id: number; symbol: string; confluence: ConfluenceWire };
 
 export function encodeRequest(request: SidecarRequestWire): string {
   return `${JSON.stringify(request)}\n`;
