@@ -52,6 +52,8 @@ export function App(): JSX.Element {
     void bridge().listSessions().then(setSessions);
     bridge().onBanner((banner) => {
       setBanners((prev) => [...prev, banner]);
+      // markNeedsLogin only emits the banner, not a status update; re-fetch here to avoid stale
+      // authenticated state after a real Kite session expiry.
       if (banner.kind === "kiteLogin") void bridge().getStatus().then(setStatus);
     });
   }, []);
