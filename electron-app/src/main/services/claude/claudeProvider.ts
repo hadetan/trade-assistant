@@ -18,6 +18,9 @@ export const KITE_READ_TOOL_ALLOWLIST = Object.values(KITE_READ_TOOL_NAMES)
 
 export const KITE_WRITE_TOOL_DENYLIST = KITE_WRITE_TOOL_NAMES.map((name) => `mcp__kite__${name}`).join(",");
 
+export const WEB_TOOL_NAMES = ["WebSearch", "WebFetch"] as const;
+export const WEB_TOOL_ALLOWLIST = WEB_TOOL_NAMES.join(",");
+
 // No caller-supplied extra argv: Claude CLI's flag surface has aliases and
 // bypass flags (--dangerously-skip-permissions, --mcp-config, hyphenated
 // spellings) this module can't fully enumerate, so stripping known
@@ -28,13 +31,18 @@ export const KITE_WRITE_TOOL_DENYLIST = KITE_WRITE_TOOL_NAMES.map((name) => `mcp
 export interface ClaudeArgOptions {
   systemPrompt?: string;
   jsonSchema?: string;
-  outputFormat?: "json" | "text";
+  outputFormat?: "json" | "text" | "stream-json";
+  allowWebTools?: boolean;
+  includePartialMessages?: boolean;
 }
 
 export function buildClaudeArgs(prompt: string, opts: ClaudeArgOptions = {}): string[] {
+  const allowedTools = opts.allowWebTools
+    ? `${KITE_READ_TOOL_ALLOWLIST},${WEB_TOOL_ALLOWLIST}`
+    : KITE_READ_TOOL_ALLOWLIST;
   const args = [
     "--allowedTools",
-    KITE_READ_TOOL_ALLOWLIST,
+    allowedTools,
     "--disallowedTools",
     KITE_WRITE_TOOL_DENYLIST,
     "--strict-mcp-config",
@@ -42,6 +50,7 @@ export function buildClaudeArgs(prompt: string, opts: ClaudeArgOptions = {}): st
   if (opts.systemPrompt !== undefined) args.push("--system-prompt", opts.systemPrompt);
   if (opts.jsonSchema !== undefined) args.push("--json-schema", opts.jsonSchema);
   if (opts.outputFormat !== undefined) args.push("--output-format", opts.outputFormat);
+  if (opts.includePartialMessages) args.push("--include-partial-messages");
   args.push("--print", prompt);
   return args;
 }

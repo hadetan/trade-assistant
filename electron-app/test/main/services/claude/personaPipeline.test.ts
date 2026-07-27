@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { runPipeline, type PipelinePrompts } from "../../../../src/main/services/claude/personaPipeline";
+import {
+  runPipeline,
+  runPersonaPipeline,
+  narrativePrompt,
+  type PipelinePrompts,
+} from "../../../../src/main/services/claude/personaPipeline";
 import type { PersonaRunner, PersonaRunSpec } from "../../../../src/main/services/claude/claudeCliProvider";
 import type { AnalysisEnvelope, PersonaFinding, Verdict } from "../../../../src/main/services/analysis/contracts";
 
@@ -105,5 +110,51 @@ describe("runPipeline", () => {
     await expect(runPipeline(envelope, { runPersona, prompts })).rejects.toThrow(
       /synthesis cited algo_ids not present in the envelope/,
     );
+  });
+});
+
+describe("runPersonaPipeline (verdict + findings for the narrative)", () => {
+  it("grants web tools to the three analytical personas but not synthesis", async () => {
+    const webByName: Record<string, boolean | undefined> = {};
+    const runPersona: PersonaRunner = async (spec: PersonaRunSpec<unknown>) => {
+      webByName[spec.name] = spec.allowWebTools;
+      return (spec.name === "synthesis" ? verdict : finding(spec.name as PersonaFinding["persona"])) as never;
+    };
+    await runPersonaPipeline(envelope, { runPersona, prompts });
+    expect(webByName.options_greeks).toBe(true);
+    expect(webByName.technical_quant).toBe(true);
+    expect(webByName.position_risk).toBe(true);
+    expect(webByName.synthesis).toBeFalsy();
+  });
+
+  it("returns both the verdict and the three findings", async () => {
+    const runPersona: PersonaRunner = async (spec: PersonaRunSpec<unknown>) =>
+      (spec.name === "synthesis" ? verdict : finding(spec.name as PersonaFinding["persona"])) as never;
+    const out = await runPersonaPipeline(envelope, { runPersona, prompts });
+    expect(out.verdict).toEqual(verdict);
+    expect(out.findings.map((f) => f.persona).sort()).toEqual(["options_greeks", "position_risk", "technical_quant"]);
+  });
+
+  it("threads intent_lens and researchNotes into the analytical prompts", async () => {
+    const seenPrompts: string[] = [];
+    const runPersona: PersonaRunner = async (spec: PersonaRunSpec<unknown>) => {
+      if (spec.name !== "synthesis") seenPrompts.push(spec.prompt);
+      return (spec.name === "synthesis" ? verdict : finding(spec.name as PersonaFinding["persona"])) as never;
+    };
+    await runPersonaPipeline(envelope, { runPersona, prompts }, { researchNotes: "guidance cut" });
+    for (const p of seenPrompts) {
+      expect(p).toContain("buying"); // envelope.intent_lens
+      expect(p).toContain("guidance cut");
+    }
+  });
+});
+
+describe("narrativePrompt", () => {
+  it("embeds the verdict, the findings, the lens and the untrusted notes as data", () => {
+    const p = narrativePrompt(verdict, [finding("options_greeks")], "selling", "rumoured buyback");
+    expect(p).toContain("bullish"); // verdict.direction
+    expect(p).toContain("options_greeks");
+    expect(p).toContain("selling");
+    expect(p).toContain("rumoured buyback");
   });
 });

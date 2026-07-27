@@ -33,3 +33,41 @@ body {
   list-style: none;
   padding: 0;
 }
+
+.message-markdown {
+  line-height: 1.5;
+}
+
+.message-markdown table {
+  border-collapse: collapse;
+}
+
+.message-markdown th,
+.message-markdown td {
+  border: 1px solid #d1d5db;
+  padding: 0.25rem 0.5rem;
+}
+
+.mermaid {
+  margin: 1rem 0;
+}
+
+.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.mermaid svg .node rect,
+.mermaid svg .node circle,
+.mermaid svg .node polygon {
+  fill: #eef2ff;
+  stroke: #6366f1;
+}
+
+.mermaid svg .edgePath path {
+  stroke: #6366f1;
+}
+
+.mermaid svg text {
+  fill: #111827;
+}

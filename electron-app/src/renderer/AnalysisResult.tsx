@@ -1,4 +1,5 @@
 import type { AnalysisResult } from "../main/ipc/rendererApi";
+import { MessageMarkdown } from "./MessageMarkdown";
 
 export interface AnalysisResultViewProps {
   result: AnalysisResult;
@@ -12,7 +13,8 @@ function formatWeightedVote(vote: number): string {
   return vote.toFixed(2);
 }
 
-export function AnalysisResultView({ result }: AnalysisResultViewProps): JSX.Element {
+export function AnalysisResultView({ result }: AnalysisResultViewProps): JSX.Element | null {
+  if (result.mode !== "engine_only") return null;
   const { response } = result;
   const stats: Array<[string, string | number]> = [
     ["Direction", response.direction],
@@ -24,7 +26,7 @@ export function AnalysisResultView({ result }: AnalysisResultViewProps): JSX.Ele
   ];
   return (
     <section className="analysis-result">
-      <p className="prose">{response.text}</p>
+      <MessageMarkdown text={response.text} />
       <dl className="confluence">
         {stats.map(([label, value]) => (
           <div key={label}>

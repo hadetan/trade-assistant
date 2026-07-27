@@ -1,8 +1,9 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { makeClaudeRunner } from "../../../../src/main/services/claude/claudeCliProvider";
+import { makeClaudeRunner, ClaudeCliProvider } from "../../../../src/main/services/claude/claudeCliProvider";
 import { personaFindingSchema, personaFindingJsonSchema } from "../../../../src/main/services/analysis/contracts";
+import type { AnalysisEnvelope } from "../../../../src/main/services/analysis/contracts";
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -142,5 +143,81 @@ describe("makeClaudeRunner", () => {
     const abortRemoves = removeSpy.mock.calls.filter((call) => call[0] === "abort").length;
     expect(abortAdds).toBeGreaterThan(0);
     expect(abortRemoves).toBe(abortAdds);
+  });
+
+  it("passes allowWebTools through to the spawned argv when the spec sets it", async () => {
+    const argvs: string[][] = [];
+    const spawnFn = (_c: string, args: string[]) => {
+      argvs.push(args);
+      const child = new FakeChild();
+      emitResult(child, validFinding);
+      return child as never;
+    };
+    const run = makeClaudeRunner({ spawnFn });
+    await run({ ...baseSpec(), allowWebTools: true });
+    expect(argvs[0][argvs[0].indexOf("--allowedTools") + 1]).toContain("WebSearch");
+    expect(argvs[0][argvs[0].indexOf("--allowedTools") + 1]).toContain("WebFetch");
+  });
+
+  it("does not grant web tools when the spec omits allowWebTools", async () => {
+    const argvs: string[][] = [];
+    const spawnFn = (_c: string, args: string[]) => {
+      argvs.push(args);
+      const child = new FakeChild();
+      emitResult(child, validFinding);
+      return child as never;
+    };
+    await makeClaudeRunner({ spawnFn })(baseSpec());
+    expect(argvs[0][argvs[0].indexOf("--allowedTools") + 1]).not.toContain("WebSearch");
+  });
+});
+
+const aiEnvelope: AnalysisEnvelope = {
+  trigger: "reactive",
+  instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+  horizon_requested: "positional",
+  intent_lens: "buying",
+  algo_results: [
+    { algo_id: "rsi", symbol: "NSE:INFY", timeframe: "day", horizon: "positional", direction: "Bullish", magnitude: 0.4, confidence: 0.6, evidence: ["RSI 62"], computed_at: "2026-07-24T00:00:00+00:00" },
+  ],
+  confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
+  overlays: {},
+};
+
+describe("ClaudeCliProvider.completeAiAssisted", () => {
+  it("runs the pipeline for a frozen verdict, then streams the narrative tokens", async () => {
+    const verdictOut = { direction: "bullish", conviction: "high", reasoning: "rsi", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP" };
+    const spawnFn = (_c: string, args: string[]) => {
+      const child = new FakeChild();
+      // narrative call is the only stream-json invocation; all others are buffered json
+      if (args.includes("stream-json")) {
+        queueMicrotask(() => {
+          child.stdout.write(`${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Infy " } } })}\n`);
+          child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Infy looks constructive." })}\n`);
+          child.emit("exit", 0, null);
+        });
+      } else {
+        emitResult(child, args.some((a) => a.includes("synthesis")) ? verdictOut : validFinding);
+      }
+      return child as never;
+    };
+    const provider = new ClaudeCliProvider({ spawnFn });
+    const tokens: string[] = [];
+    const result = await provider.completeAiAssisted(aiEnvelope, { onNarrativeToken: (t) => tokens.push(t) });
+    expect(result.verdict.direction).toBe("bullish");
+    expect(result.narrative).toBe("Infy looks constructive.");
+    expect(tokens).toEqual(["Infy "]);
+  });
+
+  it("delegates intake to runIntake through the runner", async () => {
+    const intakeOut = { instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" }, horizon: "positional" };
+    const provider = new ClaudeCliProvider({
+      spawnFn: () => {
+        const child = new FakeChild();
+        emitResult(child, intakeOut);
+        return child as never;
+      },
+    });
+    await expect(provider.intake("infosys swing")).resolves.toMatchObject({ horizon: "positional" });
   });
 });

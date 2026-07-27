@@ -20,9 +20,9 @@ const result: AnalysisResult = {
 };
 
 describe("AnalysisResultView", () => {
-  it("renders the prose and the raw confluence numbers", () => {
+  it("renders the prose through the markdown pipeline and the raw confluence numbers", async () => {
     render(<AnalysisResultView result={result} />);
-    expect(screen.getByText(/Overall read: bullish/)).toBeTruthy();
+    expect(await screen.findByText(/Overall read: bullish/)).toBeTruthy();
     expect(screen.getByText("bullish")).toBeTruthy();
     expect(screen.getByText("0.62")).toBeTruthy();
   });

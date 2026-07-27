@@ -1,9 +1,12 @@
 import { z } from "zod";
 import type { AlgoResultWire, ConfluenceWire } from "../sidecar/sidecarProtocol";
+import type { InstrumentSelection } from "./analysisEnvelope";
+import type { Horizon } from "../../ipc/rendererApi";
 
 export type Direction = "bullish" | "bearish" | "neutral";
 export type Conviction = "high" | "medium" | "low";
 export type PersonaName = "options_greeks" | "technical_quant" | "position_risk";
+export type IntentLens = "buying" | "selling";
 
 export interface PersonaFinding {
   persona: PersonaName;
@@ -19,6 +22,12 @@ export interface Verdict {
   reasoning: string;
   cited_algo_ids: string[];
   verify_before_acting: string;
+}
+
+export interface IntakeResult {
+  instrument: InstrumentSelection;
+  horizon: Horizon;
+  researchNotes?: string;
 }
 
 export interface InstrumentRef {
@@ -54,7 +63,7 @@ export interface AnalysisEnvelope {
   trigger: "reactive" | "proactive_scan";
   instrument: InstrumentRef;
   horizon_requested: "intraday" | "positional" | "auto";
-  intent_lens: "buying" | "selling";
+  intent_lens: IntentLens;
   algo_results: AlgoResultWire[];
   confluence: ConfluenceWire;
   overlays: Overlays;
@@ -86,6 +95,21 @@ export const verdictSchema = z
   })
   .strict();
 
+export const intakeResultSchema = z
+  .object({
+    instrument: z
+      .object({
+        symbol: z.string().min(1),
+        exchange: z.string(),
+        segment: z.string(),
+        instrumentToken: z.string().min(1),
+      })
+      .strict(),
+    horizon: z.enum(["intraday", "positional"]),
+    researchNotes: z.string().optional(),
+  })
+  .strict();
+
 // JSON Schema fed to `claude --json-schema`. Defined once here rather than
 // copy-pasted into each persona file, so the closed direction enum cannot
 // drift between the CLI constraint and the zod validator above.
@@ -112,6 +136,27 @@ export const verdictJsonSchema = {
     reasoning: { type: "string" },
     cited_algo_ids: { type: "array", items: { type: "string" }, minItems: 1 },
     verify_before_acting: { type: "string" },
+  },
+} as const;
+
+export const intakeResultJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["instrument", "horizon"],
+  properties: {
+    instrument: {
+      type: "object",
+      additionalProperties: false,
+      required: ["symbol", "exchange", "segment", "instrumentToken"],
+      properties: {
+        symbol: { type: "string" },
+        exchange: { type: "string" },
+        segment: { type: "string" },
+        instrumentToken: { type: "string" },
+      },
+    },
+    horizon: { type: "string", enum: ["intraday", "positional"] },
+    researchNotes: { type: "string" },
   },
 } as const;
 
