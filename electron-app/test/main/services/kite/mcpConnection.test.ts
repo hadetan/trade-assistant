@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { connectKiteMcp } from "../../../../src/main/services/kite/mcpConnection";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { connectKiteMcpOAuth } from "../../../../src/main/services/kite/mcpConnection";
 
 function fakeClient() {
   return {
@@ -43,5 +46,99 @@ describe("connectKiteMcp", () => {
     const createClient = vi.fn().mockResolvedValue(fakeClient());
     await connectKiteMcp({ apiKey: "K", accessToken: "T", url: "https://example.test/mcp", createClient });
     expect(createClient).toHaveBeenCalledWith({ url: "https://example.test/mcp", headers: { Authorization: "token K:T" } });
+  });
+});
+
+function fakeOAuthClient() {
+  return {
+    connect: vi.fn(),
+    callTool: vi.fn().mockResolvedValue({ ok: true }),
+    listTools: vi.fn().mockResolvedValue({ tools: [{ name: "login" }, { name: "get_ltp" }] }),
+    close: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function oauthHarness() {
+  const client = fakeOAuthClient();
+  // The normal flow: the first connect on a fresh in-memory provider throws
+  // UnauthorizedError (after the browser opens); the retry after finishAuth resolves.
+  client.connect.mockRejectedValueOnce(new UnauthorizedError("auth required")).mockResolvedValueOnce(undefined);
+  const transport = { finishAuth: vi.fn().mockResolvedValue(undefined) };
+  const provider = {} as unknown as OAuthClientProvider;
+  return {
+    client,
+    transport,
+    provider,
+    createProvider: vi.fn().mockReturnValue(provider),
+    createClient: vi.fn().mockReturnValue({ client, transport }),
+    captureCallback: vi.fn().mockResolvedValue({ code: "AUTH_CODE", state: "xyz" }),
+  };
+}
+
+describe("connectKiteMcpOAuth", () => {
+  it("runs challenge -> capture -> finishAuth -> reconnect and adapts the client identically to the header path", async () => {
+    const h = oauthHarness();
+
+    const conn = await connectKiteMcpOAuth({
+      loginPort: 3000,
+      openExternal: vi.fn(),
+      createProvider: h.createProvider,
+      createClient: h.createClient,
+      captureCallback: h.captureCallback,
+    });
+
+    expect(h.createProvider).toHaveBeenCalledWith({ loginPort: 3000, openExternal: expect.any(Function) });
+    expect(h.createClient).toHaveBeenCalledWith({ url: "https://mcp.kite.trade/mcp", provider: h.provider });
+    expect(h.captureCallback).toHaveBeenCalledWith({ port: 3000, signal: expect.any(AbortSignal) });
+    expect(h.transport.finishAuth).toHaveBeenCalledWith("AUTH_CODE");
+    expect(h.client.connect).toHaveBeenCalledTimes(2);
+    expect(h.client.connect).toHaveBeenCalledWith(h.transport);
+
+    await conn.caller.callTool("get_ltp", { instruments: ["NSE:INFY"] });
+    expect(h.client.callTool).toHaveBeenCalledWith({ name: "get_ltp", arguments: { instruments: ["NSE:INFY"] } });
+    expect(await conn.listing.listTools()).toEqual(["login", "get_ltp"]);
+    await conn.close();
+    expect(h.client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows a non-UnauthorizedError from the first connect and never calls finishAuth", async () => {
+    const client = fakeOAuthClient();
+    client.connect.mockRejectedValueOnce(new Error("network down"));
+    const transport = { finishAuth: vi.fn() };
+
+    await expect(
+      connectKiteMcpOAuth({
+        loginPort: 3000,
+        openExternal: vi.fn(),
+        createProvider: () => ({} as unknown as OAuthClientProvider),
+        createClient: () => ({ client, transport }),
+        captureCallback: vi.fn().mockResolvedValue({ code: "unused", state: null }),
+      }),
+    ).rejects.toThrow(/network down/);
+    expect(transport.finishAuth).not.toHaveBeenCalled();
+    expect(client.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("honours a custom url and otherwise defaults to https://mcp.kite.trade/mcp", async () => {
+    const custom = oauthHarness();
+    await connectKiteMcpOAuth({
+      loginPort: 3000,
+      openExternal: vi.fn(),
+      url: "https://example.test/mcp",
+      createProvider: custom.createProvider,
+      createClient: custom.createClient,
+      captureCallback: custom.captureCallback,
+    });
+    expect(custom.createClient).toHaveBeenCalledWith({ url: "https://example.test/mcp", provider: custom.provider });
+
+    const dflt = oauthHarness();
+    await connectKiteMcpOAuth({
+      loginPort: 3000,
+      openExternal: vi.fn(),
+      createProvider: dflt.createProvider,
+      createClient: dflt.createClient,
+      captureCallback: dflt.captureCallback,
+    });
+    expect(dflt.createClient).toHaveBeenCalledWith({ url: "https://mcp.kite.trade/mcp", provider: dflt.provider });
   });
 });
