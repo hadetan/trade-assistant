@@ -49,7 +49,7 @@ Phase 9-A fixes all three: a deliberate uniform model, per-step timeouts (includ
 2. **Per-persona `timeoutMs` on each `PersonaRunSpec`** replacing the shared constant. Proposed defaults (concrete numbers, not yet finally locked): intake 20000, options_greeks / technical_quant / position_risk 45000 each, synthesis 25000, narrative 60000 (down from 180000, justified by the Haiku switch).
 3. **Separate envelope-assembly bounds:** Kite fetch ≈ 15000 ms, Rust compute ≈ 20000 ms — two bounds because one is network I/O and the other local compute. Clear labeled timeout messages, mirroring the existing `persona ${name} timed out after ${ms}ms` pattern.
 4. **All six personas on the same streaming transport** (`stream-json` + `--include-partial-messages`) narrative already uses; the runner generalizes to a richer `onEvent` capturing tool calls (name + args) and tool results (summarized), not just tokens.
-5. **Same-stream, type-discriminated Rust progress protocol.** The user explicitly rejected a separate pipe/fd. Progress lines interleave with the response line on the one stdout stream; the TS side distinguishes them and routes progress to a new `SidecarSupervisor` `"progress"` event.
+5. **Same-stream, type-discriminated, per-algorithm Rust progress protocol.** The user explicitly rejected a separate pipe/fd, and explicitly chose per-algorithm granularity over a coarse whole-request bracket — so a `compute` request emits a request-level `compute` `running`/`done` bracket plus one nested `running`/`done` pair per algorithm (RSI, MACD, …), giving live "which algorithm is running" visibility. `algo-core` stays pure (no I/O) by exposing a progress callback the sidecar binary supplies. Progress lines interleave with the response line on the one stdout stream; the TS side distinguishes them and routes progress to a new `SidecarSupervisor` `"progress"` event.
 6. **One unified IPC channel `analysis:trace`** carrying a `TraceEvent` discriminated union; narrative becomes just another `source`, not special-cased. `banner:push` stays separate and unchanged (session-level status, a different concern).
 7. **New nullable `messages.trace TEXT` column**, same JSON-blob pattern as `structured_payload`; the assistant-turn append persists the full `TraceEvent[]` of the run.
 
@@ -313,10 +313,62 @@ Add a new stdout **line type** interleaved with the existing response line on th
 {"type":"progress","id":<request_id>,"step":"<step>","status":"running"|"done"}
 ```
 
-### P9A§9.1 Rust side (`rust-core/crates/sidecar/`)
+`step` is either a **request-type name** — `"compute"`, `"persist_candles"`, `"add_watchlist_symbol"`, … — for the *request-level* bracket emitted uniformly for every request type, or an **algorithm id** — `"rsi"`, `"macd"`, … (`Algorithm::id()`) — for a *per-algorithm* line nested inside a `compute` request. Both are just strings in the same `step` field; the wire shape is identical either way.
 
-- `protocol.rs`: add a serde-serializable `ProgressLine { r#type: "progress" (const), id: u64, step: String, status: String }` and a helper `encode_progress(id, step, status) -> String`. `step` and `status` are `&'static str` at the call sites.
-- `main.rs`: two helper fns matching on the request variant, called on a `&SidecarRequest` **before** the `match` moves it — `request_id(&request) -> u64` and `request_step(&request) -> &'static str` (`"compute"`, `"persist_candles"`, `"add_watchlist_symbol"`, …, the request-type discriminant). Then bracket the existing `let response = match request { … }`:
+**Two nested layers, because the user chose per-algorithm.** The brainstorm's ask — "show when rust … is running" — was first specified coarsely: one `compute` `running`/`done` pair per request, with no visibility into which of the ~10+ algorithms (RSI, MACD, …) is executing. The user was asked directly whether to keep it coarse (which keeps every stdout write out of the pure `algo-core` crate) or go per-algorithm (which surfaces "RSI done, MACD running" live), and **explicitly chose per-algorithm**. So a `compute` request emits two nested layers:
+
+1. a **request-level** `compute` `running` … `done` bracket (unchanged from the coarse design, emitted uniformly for every request type — parity with the panic sites), and
+2. **per-algorithm** `running`/`done` pairs nested inside that bracket, one pair per applicable algorithm, in registry order.
+
+The pure-logic-vs-I/O separation CLAUDE.md requires is preserved **by construction**: `algo-core` performs no stdout write. It exposes a progress **callback**; the sidecar binary (the I/O layer) supplies the closure that does the actual `writeln!`. `algo-core` stays a pure-compute crate that merely invokes a caller-supplied `FnMut` at each algorithm boundary. That is exactly what lets the design move from "whole-request progress" to "live per-algorithm progress" without pushing any I/O into the pure crate.
+
+### P9A§9.1 Rust side
+
+**`algo-core` — `registry.rs` (the pure layer).** Add a sibling to `run_applicable` that carries a progress callback, and make the existing `run_applicable` a thin, zero-behavior-change wrapper over it. The lookback-precondition filter — the "single enforcement point" the existing doc comment (registry.rs:62-67) guarantees — now lives in exactly **one** function, `run_applicable_with_progress`; `run_applicable` delegates to it with a no-op callback, so the invariant that every `compute()` caller routes through one gate is preserved (and, if anything, tightened — the filter is written in one place, not two):
+
+```rust
+pub fn run_applicable(algos: &[Box<dyn Algorithm>], ctx: &MarketContext) -> Vec<AlgoOutput> {
+    run_applicable_with_progress(algos, ctx, &mut |_, _| {})
+}
+
+// The callback lets algo-core surface live per-algorithm progress without
+// itself doing any I/O: this crate is pure compute (CLAUDE.md's pure-logic-
+// vs-I/O rule), so it only *invokes* a caller-supplied closure at each
+// algorithm boundary. The actual stdout write happens in the sidecar binary's
+// I/O layer (main.rs), never here.
+pub fn run_applicable_with_progress(
+    algos: &[Box<dyn Algorithm>],
+    ctx: &MarketContext,
+    on_progress: &mut dyn FnMut(&str, bool), // (algo_id, is_done)
+) -> Vec<AlgoOutput> {
+    algos
+        .iter()
+        .filter(|algo| algo.required_lookback() <= ctx.closes.len())
+        .map(|algo| {
+            on_progress(algo.id(), false);
+            let output = algo.compute(ctx);
+            on_progress(algo.id(), true);
+            output
+        })
+        .collect()
+}
+```
+
+The three existing `run_applicable` callers that do **not** want progress — `handle_benchmark_compute` (handlers.rs:227), the backtest `engine.rs` (engine.rs:66), and `algo-core`'s own `tests/registry_test.rs` (three calls) — need **zero changes**: `run_applicable` keeps its exact signature and behavior. Only the live-analysis compute path opts into the callback.
+
+**`sidecar` — `handlers.rs`.** Mirror the same wrapper pattern so no test call site moves. Add `handle_request_with_progress(request: ComputeRequest, on_progress: &mut dyn FnMut(&str, bool)) -> ComputeResponse` holding the current body, with its single `run_applicable(&algos, &ctx)` call (handlers.rs:107) upgraded to `run_applicable_with_progress(&algos, &ctx, on_progress)`; make `handle_request` a thin wrapper:
+
+```rust
+pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
+    handle_request_with_progress(request, &mut |_, _| {})
+}
+```
+
+The callback carries only `(algo_id, is_done)` — **not** the request id: the per-algorithm lines are written by the caller in `main.rs`, which already has the request `id` in scope (below), so `handle_request_with_progress` never needs it. `handle_request`'s existing call sites — the four in handlers.rs's own test module (handlers.rs:289, 304, 321, 328) and the one wrapper call in `main.rs` (main.rs:66) — are **untouched**; they call `handle_request`, which now delegates.
+
+**`sidecar` — `protocol.rs`.** Add a serde-serializable `ProgressLine { r#type: "progress" (const), id: u64, step: String, status: String }` and a helper `encode_progress(id: u64, step: &str, status: &str) -> String`. `step` is `&str` (not `&'static str`) so it accepts both the request-type names emitted at the whole-match bracket and the algorithm ids that arrive as `&str` through the per-algorithm callback.
+
+**`sidecar` — `main.rs`.** Keep the request-level bracket exactly as the coarse design specified — two helpers matching on the request variant, called on a `&SidecarRequest` **before** the `match` moves it, `request_id(&request) -> u64` and `request_step(&request) -> &'static str` (`"compute"`, `"persist_candles"`, …), bracketing the whole `match` with a `running`/`done` pair. This is the layer emitted uniformly for **every** request type (parity with the panic sites); do not remove it. The **only** additional change is the `Compute` arm, which threads a per-algorithm closure into `handle_request_with_progress`:
 
 ```rust
 let step = request_step(&request);
@@ -324,7 +376,29 @@ let id = request_id(&request);
 writeln!(stdout, "{}", encode_progress(id, step, "running")).expect("stdout must be writable");
 stdout.flush().expect("stdout must flush");
 
-let response = match request { /* unchanged arms */ };
+let response = match request {
+    SidecarRequest::Compute(compute) => {
+        // Only this arm changes. The nested per-algorithm lines are written by
+        // the closure; `id` is the request id already bound above, so the
+        // closure needs only (algo_id, is_done).
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            handle_request_with_progress(compute, &mut |algo_id, done| {
+                let status = if done { "done" } else { "running" };
+                writeln!(stdout, "{}", encode_progress(id, algo_id, status))
+                    .expect("stdout must be writable");
+                stdout.flush().expect("stdout must flush");
+            })
+        }));
+        match result {
+            Ok(response) => SidecarResponse::Compute(response),
+            Err(_) => {
+                eprintln!("sidecar: compute request {id} panicked; returning an empty response");
+                SidecarResponse::Compute(empty_response(id))
+            }
+        }
+    }
+    /* every other arm unchanged */
+};
 
 writeln!(stdout, "{}", encode_progress(id, step, "done")).expect("stdout must be writable");
 stdout.flush().expect("stdout must flush");
@@ -332,11 +406,15 @@ writeln!(stdout, "{}", encode_response(&response)).expect("stdout must be writab
 stdout.flush().expect("stdout must flush");
 ```
 
-These are **new, non-panic stdout writes**, distinct from the existing panic `eprintln!` sites (`main.rs:70,83,…,215`) which remain on stderr unchanged. Emitting at the `main.rs` handler boundary — rather than per-algorithm inside `run_applicable` — is a deliberate choice: it keeps stdout I/O in the sidecar binary (the I/O layer) and out of the pure `algo-core` crate, respecting the repo's pure-logic-vs-I/O separation rule (CLAUDE.md). This resolves the brainstorm's loose `<algo_name>` phrasing to **the handler/step name** (`"compute"` for the analysis path). `"done"` fires even when a handler hits its `catch_unwind` panic-fallback, because the `match` still yields a response — matching the sidecar's always-answers invariant.
+So a single `compute` request writes, in order, on the one stdout stream: `compute running`, then a `running`/`done` pair per applicable algorithm (registry order), then `compute done`, then the response line — all sharing the request `id`. These are **new, non-panic stdout writes**, distinct from the existing panic `eprintln!` sites (`main.rs:70,83,…,215`) which remain on stderr unchanged. `compute done` (and the response) still fire even when the handler hits its `catch_unwind` panic-fallback, because the `match` still yields a response — matching the sidecar's always-answers invariant; the per-algorithm pairs are emitted only for algorithms that ran before any panic, so a panicking algorithm leaves its own `running` without a matching `done` while the request-level `compute done` still closes the bracket.
 
-Progress is emitted uniformly for every request type (parity with the panic sites); only `compute` progress surfaces as a trace event in this phase (P9A§9.3), because only the compute request's id is registered by the analysis path.
+> Verification item (not a design hole — same treatment as the stream-json envelope item in P9A§8.2): the exact closure-capture / borrow-check shape above — the per-algorithm closure capturing `&mut stdout` inside `AssertUnwindSafe`/`catch_unwind`, between the outer bracket's own `stdout` writes — is sketched but **not yet compiled**. NLL should accept it (the pre-match, in-arm, and post-match borrows of `stdout` are sequential and non-overlapping), but confirm it borrow-checks at implementation time and adjust the capture shape (e.g. route the per-algorithm write through a small local `emit_progress` helper, or a scoped borrow) if the checker disagrees. No observable output depends on the exact capture form.
+
+Progress is emitted uniformly for every request type at the request-level bracket; the `compute` request additionally emits the nested per-algorithm layer. Only `compute` progress surfaces as a trace event in this phase (P9A§9.3), because only the compute request's id is registered by the analysis path — and every line of a compute request (request-level and per-algorithm) carries that one id, so the whole nested stream surfaces together.
 
 ### P9A§9.2 TypeScript side (`sidecarProtocol.ts`, `sidecarSupervisor.ts`)
+
+Unchanged from the coarse design — the per-algorithm layer needs **no** new TypeScript type. `step` was always a `string` and now simply carries either a request-type name or an algorithm id; the same `dispatch` forwards the extra per-algorithm lines untouched.
 
 `sidecarProtocol.ts` adds:
 
@@ -344,7 +422,7 @@ Progress is emitted uniformly for every request type (parity with the panic site
 export interface SidecarProgressWire {
   type: "progress";
   id: number;
-  step: string;
+  step: string; // request-type name ("compute", …) or algorithm id ("rsi", …)
   status: "running" | "done";
 }
 ```
@@ -365,14 +443,25 @@ private dispatch(line: string): void {
 - `send(request, onRequestId?)` invokes `onRequestId?.(id)` synchronously right after allocating `id = this.nextId++` and before the stdin write, so the caller learns its id before any progress line can return. `compute(symbol, timeframe, closes, onRequestId?)` threads it through. All other public methods are unchanged (they may add the param later; not required now).
 - The `"progress"` event joins the existing `"statusChange"` event on the same emitter; no separate emitter.
 
-### P9A§9.3 Correlating sidecar progress to a request
+### P9A§9.3 Correlating sidecar progress to a request (and the started/done question)
 
 `SidecarSupervisor` is a long-lived singleton shared with the proactive scan scheduler, so its `"progress"` stream carries events from computes that are not part of any `analysis:run`. Correlation is therefore by the numeric sidecar `id`, not by "whatever fired while I was subscribed" (which would let a concurrent scan-tick compute bleed into an analysis trace). `runAiAssistedRequest` (P9A§13):
 
 1. maintains `ownedSidecarIds = new Set<number>()`;
 2. subscribes a `(p: SidecarProgressWire) => void` listener to the supervisor's `"progress"` for the duration of the request; the listener ignores any `p.id` not in `ownedSidecarIds`, and for owned ids emits `{ source:"sidecar", kind: p.status === "running" ? "started" : "done", detail: p.step }`;
 3. passes `onComputeId: (id) => ownedSidecarIds.add(id)` into `assembleEnvelope`, which forwards it to `compute`'s `onRequestId` (fired synchronously, so the id is registered before any progress line arrives);
-4. removes the listener and clears the set in a `finally` around `assembleEnvelope`, so a late `done` after a compute timeout (P9A§7) is dropped.
+4. removes the listener and clears the set in a `finally` around `assembleEnvelope`, so any late line after a compute timeout (P9A§7) — the request-level `done` or a trailing per-algorithm `done` — is dropped.
+
+**The listener code is identical to the coarse design** — `detail: p.step` — and needs no change: it now naturally forwards the per-algorithm lines too, because Rust simply emits more `progress` lines under the same owned id. A request-level line carries `detail: "compute"`; a per-algorithm line carries `detail: "rsi"` / `"macd"` / etc.
+
+**Does the renderer need to tell "the whole compute step" apart from "one algorithm within it"? Yes — and `detail` already does it, with no new field or `TraceKind`.** The distinguishing rule is: `detail === "compute"` is the request-level bracket; any other `detail` is a single algorithm. `"compute"` is a reserved request-step name and no algorithm's `Algorithm::id()` collides with it (algorithm ids are indicator names — `"rsi"`, `"macd"`, …). Phase 9-B's UI uses this rule to render the outer compute step with its per-algorithm children; this phase only emits the events and leaves them observable on the devtools console.
+
+**The started/done invariant — explicit resolution (this revision's one open judgment call).** Mapping every per-algorithm `running`→`started` and `done`→`done` means `source:"sidecar"` now emits **more than one** `started`/`done` pair per compute request: one request-level pair (`detail:"compute"`) plus one pair per algorithm (`detail:<algo_id>`). This is intentional and does **not** contradict the two invariants stated elsewhere:
+
+- **P9A§8.3's** invariant — "every **persona** emits exactly one `started` and exactly one terminal event" — is scoped, by its own wording, to *personas* run by the structured runner (intake, options_greeks, technical_quant, position_risk, synthesis, narrative). `source:"sidecar"` is not a persona and is not produced by the structured runner; its events come from this listener. §8.3 never constrained `source:"sidecar"`, so per-algorithm pairs do not touch it. (Re-read §8.3 to confirm: the noun is "persona" throughout.)
+- **P9A§12's** statement — "sidecar emits one `started` and exactly one of `{done, error}`" — is preserved at the granularity §12 reasons about: the **request-level compute bracket** (`detail:"compute"`). That bracket still emits exactly one `compute` `started` and exactly one terminal — `compute` `done` on success, or the `assembleEnvelope` `sidecar compute` `error` on timeout, with the late `compute` `done` (and any trailing per-algorithm `done`) dropped by the `finally` in step 4. The per-algorithm `started`/`done` pairs (`detail:<algo_id>`) are a *nested* layer beneath that bracket; filter `detail === "compute"` to recover §12's single request-level pair. §12's per-step error attribution is therefore unchanged: a sidecar-compute failure still surfaces as exactly one `error` on `source:"sidecar"` (from `assembleEnvelope`), and **no per-algorithm line is ever an `error`** — Rust emits only `running`/`done`, and an algorithm that panics mid-compute simply omits its `done` (the request-level fallback still fires `compute done`), so no per-algorithm `error` event exists.
+
+This mapping is also consistent with P9A§10.2's existing `started`/`done` rows unchanged: for `source:"sidecar"` those rows already specify `detail` = the sidecar `step` string, and an algorithm id is exactly such a step string — the table's `(e.g. "compute")` is an example, not an exhaustive set.
 
 `AiAssistedRequestDeps.sidecar` widens from `Pick<SidecarSupervisor, "compute" | "persistCandles">` to also include `"on" | "off"` so the bridge can subscribe/unsubscribe.
 
@@ -535,7 +624,7 @@ No test code here; this enumerates what must be verified.
 7. **Sidecar progress.** A fake sidecar stdout interleaving `progress` and response lines: `dispatch` routes `progress` to the `"progress"` event and still resolves the response pending for the same id; the bridge listener maps an owned compute id to `sidecar` `started`/`done` and ignores unowned ids (e.g. a concurrent scan-tick compute); a late `done` after a compute timeout is dropped.
 8. **Unified channel + detail table.** `makeTraceSender` publishes on `analysis:trace`; `detail` matches the P9A§10.2 table for every `(source, kind)`; `at` is a valid ISO string; `requestId` matches the run.
 9. **Persistence + migration.** Against a DB whose `messages` table predates the column (simulated old install), the constructor's `ensureColumn` adds `trace` via `ALTER`; `appendMessage({ …, trace })` round-trips through `getSession` as a parsed `TraceEvent[]`; old rows read `trace: null`; a fresh DB gets `trace` via `CREATE`; constructing the store twice does not throw; a failed run persists no assistant row (hence no trace).
-10. **Rust.** A unit/integration test on `main.rs`'s loop (or a thin harness): a `compute` request produces, in order on stdout, a `progress running` line, then a `progress done` line, then the `compute` response line, all for the same id; a handler that panic-falls-back still emits `done`; `request_step` returns the correct discriminant per variant.
+10. **Rust.** (a) An `algo-core` unit test on `run_applicable_with_progress`: given N applicable algorithms it invokes the callback as `(id, false)` immediately before and `(id, true)` immediately after each `compute()`, in registry order, and returns outputs identical to `run_applicable`; the thin `run_applicable` wrapper stays behavior-unchanged, so the three non-progress callers (benchmark, backtest engine, `registry_test.rs`) pass unmodified. (b) A `sidecar` unit/integration test on `main.rs`'s loop (or a thin harness): a `compute` request produces, in order on stdout, `compute running`, then a `running`/`done` pair per applicable algorithm (each algorithm's `running` immediately before its `done`, in registry order), then `compute done`, then the `compute` response line — all for the same id; a handler that panic-falls-back still emits the request-level `compute done` and response (the panicking algorithm's `running` left without a matching `done`); every other request type still emits its single request-level `running`/`done` bracket; `request_step` returns the correct discriminant per variant.
 
 ## P9A§15 Non-goals
 
@@ -563,10 +652,12 @@ No test code here; this enumerates what must be verified.
 | `electron-app/src/main/services/history/historyStore.ts` | `trace` column in CREATE; `ensureColumn` migration; `AppendMessageParams.trace`; `HistoryMessage.trace`; insert/select mapping (P9A§11) |
 | `electron-app/src/main/ipc/rendererApi.ts` | add `TraceSource`/`TraceKind`/`TraceEvent`/`TraceEventInput`/`TraceEmitter` + `onTrace` on `analysis:trace`; keep `NarrativeEvent`/`onNarrative` as a compat adapter over `analysis:trace` (P9A§8.1, §10.1) |
 | `electron-app/src/main/ipc/narrativeBridge.ts` → `traceBridge.ts` | `TRACE_CHANNEL`; `makeTraceSender` (P9A§10.3) |
-| `electron-app/src/main/ipc/analysisBridge.ts` | concrete emitter + accumulation; sidecar progress listener/correlation; `sendNarrative`→`sendTrace`; delete run-level `done`/`error` pushes; persist `trace`; widen `sidecar` Pick with `on`/`off` (P9A§7, §9.3, §11.3, §12, §13) |
+| `electron-app/src/main/ipc/analysisBridge.ts` | concrete emitter + accumulation; sidecar progress listener/correlation (listener code unchanged; now also forwards nested per-algorithm progress, `detail === "compute"` vs algo id distinguishing the two — P9A§9.3); `sendNarrative`→`sendTrace`; delete run-level `done`/`error` pushes; persist `trace`; widen `sidecar` Pick with `on`/`off` (P9A§7, §9.3, §11.3, §12, §13) |
 | `electron-app/src/main/bootstrap.ts` | `makeTraceSender`; `sendTrace` dep (P9A§10.3) |
 | `electron-app/src/main/scanScheduler.ts` | `onNarrativeToken: () => {}` → `onTrace: () => {}` (P9A§13) |
 | `electron-app/src/renderer/*` | **untouched** — the `onNarrative` compat adapter keeps `ChatView.tsx` byte-unchanged (P9A§15) |
+| `rust-core/crates/algo-core/src/registry.rs` | `run_applicable_with_progress(algos, ctx, on_progress)` sibling carrying the per-algorithm callback and the sole lookback filter; `run_applicable` becomes a thin no-op-callback wrapper — the "single enforcement point" now lives in one function and the three non-progress callers are unchanged (P9A§9.1) |
+| `rust-core/crates/sidecar/src/handlers.rs` | `handle_request_with_progress(request, on_progress)` holding the body with `run_applicable_with_progress`; `handle_request` becomes a thin wrapper (its four test call sites + `main.rs`'s call unchanged) (P9A§9.1) |
 | `rust-core/crates/sidecar/src/protocol.rs` | `ProgressLine` + `encode_progress` (P9A§9.1) |
-| `rust-core/crates/sidecar/src/main.rs` | `request_id`/`request_step` helpers; `progress running`/`done` stdout writes bracketing the match (P9A§9.1) |
+| `rust-core/crates/sidecar/src/main.rs` | `request_id`/`request_step` helpers; request-level `progress running`/`done` stdout writes bracketing the match (all request types); `Compute` arm threads a per-algorithm closure into `handle_request_with_progress` writing nested per-algorithm progress lines (P9A§9.1) |
 ```
