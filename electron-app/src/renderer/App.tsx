@@ -5,6 +5,7 @@ import { InstrumentSearch } from "./InstrumentSearch";
 import { AnalysisResultView } from "./AnalysisResult";
 import { ChatView, historyToChatMessages } from "./ChatView";
 import { HomeScreen } from "./HomeScreen";
+import { BenchmarkView } from "./BenchmarkView";
 import { bridge } from "./bridge";
 import type {
   AnalysisMode,
@@ -38,6 +39,7 @@ function deriveEngineOnlyView(detail: SessionDetail | null): { result?: Analysis
 export function App(): JSX.Element {
   const [activeSession, setActiveSession] = useState<ActiveSession | null>(null);
   const [showModePicker, setShowModePicker] = useState(false);
+  const [showBenchmark, setShowBenchmark] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionDetail, setSessionDetail] = useState<SessionDetail | null>(null);
   const [intentLens, setIntentLens] = useState<IntentLens>("buying");
@@ -59,6 +61,13 @@ export function App(): JSX.Element {
   }, []);
 
   const onNewChat = (): void => setShowModePicker(true);
+
+  const onOpenBenchmark = (): void => {
+    setActiveSession(null);
+    setSessionDetail(null);
+    setShowModePicker(false);
+    setShowBenchmark(true);
+  };
 
   const onSelectMode = async (mode: AnalysisMode): Promise<void> => {
     const session = await bridge().createSession(mode);
@@ -82,6 +91,7 @@ export function App(): JSX.Element {
   const onBackToHome = (): void => {
     setActiveSession(null);
     setSessionDetail(null);
+    setShowBenchmark(false);
     void bridge().listSessions().then(setSessions);
   };
 
@@ -114,9 +124,14 @@ export function App(): JSX.Element {
       <div className="status">
         {status ? `sidecar: ${status.sidecar} | kite: ${status.kiteSession}` : "Loading…"}
       </div>
-      {activeSession !== null && (
+      {(activeSession !== null || showBenchmark) && (
         <button type="button" onClick={onBackToHome}>
           Home
+        </button>
+      )}
+      {activeSession === null && !showModePicker && !showBenchmark && (
+        <button type="button" onClick={onOpenBenchmark}>
+          Benchmark
         </button>
       )}
       <ul className="banners">
@@ -127,10 +142,11 @@ export function App(): JSX.Element {
         ))}
       </ul>
 
-      {activeSession === null && !showModePicker && (
+      {activeSession === null && !showModePicker && !showBenchmark && (
         <HomeScreen sessions={sessions} onNewChat={onNewChat} onOpenSession={onOpenSession} />
       )}
       {activeSession === null && showModePicker && <ModePicker onSelect={onSelectMode} />}
+      {activeSession === null && showBenchmark && <BenchmarkView api={bridge()} />}
 
       {activeSession !== null && !authenticated && (
         <>
