@@ -2546,6 +2546,7 @@ name = "sidecar"
 version = "0.1.0"
 dependencies = [
  "algo-core",
+ "backtest",
  "chrono",
  "serde",
  "serde_json",
