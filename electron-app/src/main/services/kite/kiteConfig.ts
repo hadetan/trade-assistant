@@ -6,6 +6,11 @@ export interface KiteConfig {
   loginPort: number;
 }
 
+export interface KiteMcpOnlyConfig {
+  mode: "mcpOnly";
+  loginPort: number;
+}
+
 const DEFAULT_LOGIN_PORT = 3000;
 
 function requireEnv(env: NodeJS.ProcessEnv, name: "KITE_API_KEY" | "KITE_API_SECRET"): string {
