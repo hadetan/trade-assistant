@@ -165,6 +165,5 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /new chat/i }));
     fireEvent.click(await screen.findByRole("button", { name: /ai-assisted/i }));
     expect(await screen.findByLabelText(/ask about an instrument/i)).toBeTruthy();
-    expect(screen.getByText(/claude auth login/i)).toBeTruthy();
   });
 });

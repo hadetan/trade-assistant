@@ -150,9 +150,6 @@ export function App(): JSX.Element {
 
       {activeSession !== null && !authenticated && (
         <>
-          {activeSession.mode === "ai_assisted" && (
-            <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
-          )}
           <button type="button" onClick={onLogin} disabled={loggingIn}>
             {loggingIn ? "Logging in…" : "Login to Kite"}
           </button>
@@ -171,7 +168,6 @@ export function App(): JSX.Element {
             </>
           ) : (
             <>
-              <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
               <ChatView
                 intentLens={intentLens}
                 sessionId={activeSession.id}
