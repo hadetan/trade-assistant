@@ -4,6 +4,7 @@ import path from "node:path";
 import { mainWindowOptions } from "./mainWindow";
 import { settingsWindowOptions } from "./settingsWindow";
 import { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
+import { resolveSidecarBinaryPath } from "./services/sidecar/sidecarBinaryPath";
 import { KiteSessionState, classifyKiteResponse } from "./services/kite/kiteSessionState";
 import { loadKiteConfig } from "./services/kite/kiteConfig";
 import { runKiteLogin } from "./services/kite/kiteLogin";
@@ -54,9 +55,12 @@ export function createApp(): AppRuntime {
   dotenv.config({ path: path.join(app.getAppPath(), ".env") });
   const config = loadKiteConfig();
   const supervisor = new SidecarSupervisor({
-    binaryPath:
-      process.env.SIDECAR_BINARY ??
-      path.join(__dirname, "..", "..", "..", "rust-core", "target", "debug", "sidecar"),
+    binaryPath: resolveSidecarBinaryPath({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      platform: process.platform,
+      envOverride: process.env.SIDECAR_BINARY,
+    }),
     lakeRoot: process.env.TRADE_ASSISTANT_LAKE ?? path.join(app.getPath("userData"), "candle-lake"),
   });
   const sessionState = new KiteSessionState();
