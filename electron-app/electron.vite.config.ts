@@ -43,8 +43,11 @@ export default defineConfig({
         name: "trade-assistant-dev-csp",
         transformIndexHtml(html, ctx) {
           if (!ctx.server) return html;
+          // index.html/settings.html format this meta tag across multiple lines
+          // (http-equiv and content on separate lines), so the gap between them
+          // must tolerate whitespace/newlines, not just a literal single space.
           return html.replace(
-            /(<meta http-equiv="Content-Security-Policy" content=")[^"]*(")/,
+            /(<meta\s+http-equiv="Content-Security-Policy"\s+content=")[^"]*(")/,
             `$1${DEV_CSP}$2`,
           );
         },
