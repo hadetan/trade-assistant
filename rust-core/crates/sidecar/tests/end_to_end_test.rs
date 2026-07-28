@@ -319,6 +319,115 @@ fn benchmark_compute_answers_even_with_no_lake_root() {
 }
 
 #[test]
+fn a_benchmark_compute_with_an_out_of_range_timestamp_between_two_valid_ones_does_not_kill_the_sidecar() {
+    // Regression-style proof (mirrors the thin-history Compute test) that a
+    // genuine handler-level panic -- not a parse rejection -- is isolated for
+    // BenchmarkCompute too. This request parses fine (`ts` is a plain i64
+    // field) and reaches handle_benchmark_compute, but chrono's
+    // `DateTime::from_timestamp` returns None for a `ts` this far outside its
+    // representable range (frontier.rs's context_at converts it via
+    // `.expect("candle ts is a valid Unix epoch")`), so the handler itself
+    // panics deep inside context_at, before run_applicable ever runs.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("sidecar binary must start");
+
+    let valid = r#"{"type":"benchmark_compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#;
+    let panics = r#"{"type":"benchmark_compute","id":2,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":9223372036854775807,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#;
+    let valid_2 = r#"{"type":"benchmark_compute","id":3,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":200,"open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":90}]}"#;
+
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        for line in [valid, panics, valid_2] {
+            writeln!(stdin, "{line}").unwrap();
+        }
+    }
+    drop(child.stdin.take());
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+
+    let mut responses = Vec::new();
+    for _ in 0..3 {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .expect("stdout must be readable");
+        assert!(
+            !line.trim().is_empty(),
+            "expected a response line for every request; the process may have died"
+        );
+        let response: serde_json::Value = serde_json::from_str(line.trim())
+            .expect("each line must be a well-formed JSON response");
+        responses.push(response);
+    }
+
+    let status = child
+        .wait()
+        .expect("sidecar process must be waitable, not killed by a crash");
+    assert!(
+        status.success(),
+        "sidecar should exit cleanly on EOF, not crash: {status:?}"
+    );
+
+    assert_eq!(responses[0]["id"], 1);
+    assert_eq!(responses[0]["type"], "benchmark_compute");
+
+    // The panicking request's fallback is exactly `benchmark_empty_response`:
+    // context_at panics before run_applicable ever runs, so there is no path
+    // to a non-empty result here -- this is the catch_unwind branch's answer,
+    // not a coincidentally-empty legitimate one.
+    assert_eq!(responses[1]["id"], 2);
+    assert_eq!(responses[1]["type"], "benchmark_compute");
+    assert!(responses[1]["algo_results"].as_array().unwrap().is_empty());
+    assert_eq!(responses[1]["confluence"]["bullish_count"], 0);
+    assert_eq!(responses[1]["confluence"]["bearish_count"], 0);
+    assert_eq!(responses[1]["confluence"]["neutral_count"], 0);
+    assert_eq!(responses[1]["confluence"]["weighted_vote"], 0.0);
+
+    assert_eq!(responses[2]["id"], 3);
+    assert_eq!(responses[2]["type"], "benchmark_compute");
+}
+
+#[test]
+fn evaluate_scan_gate_stateless_answers_even_with_no_lake_root_at_all() {
+    // Like benchmark_compute_answers_even_with_no_lake_root above, but for the
+    // other store-free Task-5 variant: EvaluateScanGateStateless takes no
+    // StateStore reference at all (see handle_evaluate_scan_gate_stateless),
+    // so it must still answer when the sidecar is spawned with no --lake-root
+    // flag and therefore has no state_store configured.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("sidecar binary must start");
+
+    let gate = r#"{"type":"evaluate_scan_gate_stateless","id":1,"prev":null,"curr":{"bullish_count":8,"bearish_count":1,"neutral_count":2,"weighted_vote":0.5}}"#;
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{gate}").unwrap();
+    }
+    drop(child.stdin.take());
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("stdout must be readable");
+    child.wait().ok();
+
+    let response: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+    assert_eq!(response["id"], 1);
+    assert_eq!(response["type"], "scan_gate");
+    // No prior snapshot exists (no store at all was ever consulted); the first
+    // read on a symbol always clears the low bar, exactly as in the
+    // with-lake-root flow test above.
+    assert_eq!(response["decision"], "WorthLook");
+    assert!(response["error"].is_null());
+}
+
+#[test]
 fn a_malformed_benchmark_compute_between_two_valid_ones_does_not_kill_the_sidecar() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
         .stdin(Stdio::piped())
