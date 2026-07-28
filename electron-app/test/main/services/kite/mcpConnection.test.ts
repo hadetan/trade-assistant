@@ -59,16 +59,34 @@ function fakeOAuthClient() {
 }
 
 function oauthHarness() {
+  const callOrder: string[] = [];
   const client = fakeOAuthClient();
   // The normal flow: the first connect on a fresh in-memory provider throws
   // UnauthorizedError (after the browser opens); the retry after finishAuth resolves.
-  client.connect.mockRejectedValueOnce(new UnauthorizedError("auth required")).mockResolvedValueOnce(undefined);
-  const transport = { finishAuth: vi.fn().mockResolvedValue(undefined) };
+  // Each mock implementation records its call into `callOrder` so tests can assert
+  // finishAuth genuinely runs between the two connect attempts, not just that
+  // "call 1 rejects, call 2 resolves" independent of sequencing.
+  client.connect
+    .mockImplementationOnce(() => {
+      callOrder.push("connect:1");
+      return Promise.reject(new UnauthorizedError("auth required"));
+    })
+    .mockImplementationOnce(() => {
+      callOrder.push("connect:2");
+      return Promise.resolve(undefined);
+    });
+  const transport = {
+    finishAuth: vi.fn().mockImplementation((code: string) => {
+      callOrder.push(`finishAuth:${code}`);
+      return Promise.resolve(undefined);
+    }),
+  };
   const provider = {} as unknown as OAuthClientProvider;
   return {
     client,
     transport,
     provider,
+    callOrder,
     createProvider: vi.fn().mockReturnValue(provider),
     createClient: vi.fn().mockReturnValue({ client, transport }),
     captureCallback: vi.fn().mockResolvedValue({ code: "AUTH_CODE", state: "xyz" }),
@@ -93,12 +111,36 @@ describe("connectKiteMcpOAuth", () => {
     expect(h.transport.finishAuth).toHaveBeenCalledWith("AUTH_CODE");
     expect(h.client.connect).toHaveBeenCalledTimes(2);
     expect(h.client.connect).toHaveBeenCalledWith(h.transport);
+    expect(h.callOrder).toEqual(["connect:1", "finishAuth:AUTH_CODE", "connect:2"]);
 
     await conn.caller.callTool("get_ltp", { instruments: ["NSE:INFY"] });
     expect(h.client.callTool).toHaveBeenCalledWith({ name: "get_ltp", arguments: { instruments: ["NSE:INFY"] } });
     expect(await conn.listing.listTools()).toEqual(["login", "get_ltp"]);
     await conn.close();
     expect(h.client.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the still-listening callback capture and skips finishAuth when the first connect succeeds outright", async () => {
+    const client = fakeOAuthClient();
+    client.connect.mockResolvedValueOnce(undefined);
+    const transport = { finishAuth: vi.fn() };
+    let capturedSignal: AbortSignal | undefined;
+    const captureCallback = vi.fn().mockImplementation((opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      return new Promise<{ code: string; state: string | null }>(() => {});
+    });
+
+    await connectKiteMcpOAuth({
+      loginPort: 3000,
+      openExternal: vi.fn(),
+      createProvider: () => ({} as unknown as OAuthClientProvider),
+      createClient: () => ({ client, transport }),
+      captureCallback,
+    });
+
+    expect(client.connect).toHaveBeenCalledTimes(1);
+    expect(transport.finishAuth).not.toHaveBeenCalled();
+    expect(capturedSignal?.aborted).toBe(true);
   });
 
   it("rethrows a non-UnauthorizedError from the first connect and never calls finishAuth", async () => {
