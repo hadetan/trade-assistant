@@ -7,7 +7,7 @@ import { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
 import { resolveSidecarBinaryPath } from "./services/sidecar/sidecarBinaryPath";
 import { KiteSessionState, classifyKiteResponse } from "./services/kite/kiteSessionState";
 import { loadKiteConfig } from "./services/kite/kiteConfig";
-import { runKiteLogin } from "./services/kite/kiteLogin";
+import { runKiteLogin, runKiteMcpOnlyLogin } from "./services/kite/kiteLogin";
 import type { KiteSession } from "./services/kite/kiteLogin";
 import { captureRequestToken, exchangeAccessToken } from "./services/kite/kiteOAuth";
 import { ClaudeCliProvider } from "./services/claude/claudeCliProvider";
@@ -108,14 +108,12 @@ export function createApp(): AppRuntime {
     loginInFlight = (async (): Promise<LoginResult> => {
       try {
         const previousSession = session;
-        const newSession = await runKiteLogin({
-          config,
-          captureRequestToken,
-          exchangeAccessToken,
-          postForm,
-          openExternal: (url) => shell.openExternal(url),
-          onKiteResponse: (response) => handleKiteResponse(sessionState, response),
-        });
+        const openExternal = (url: string) => shell.openExternal(url);
+        const onKiteResponse = (response: unknown) => handleKiteResponse(sessionState, response);
+        const newSession =
+          config.mode === "full"
+            ? await runKiteLogin({ config, captureRequestToken, exchangeAccessToken, postForm, openExternal, onKiteResponse })
+            : await runKiteMcpOnlyLogin({ config, openExternal, onKiteResponse });
         // Defense in depth: the "change" listener above already closes a
         // session as soon as it goes stale, but close whatever is still
         // referenced here too so a redundant login() call can never leak it.
