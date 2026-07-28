@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { buildSettingsApi } from "./rendererApi";
+import { buildSettingsApi } from "./settingsApi";
 
 const api = buildSettingsApi((channel, ...args) => ipcRenderer.invoke(channel, ...args));
 

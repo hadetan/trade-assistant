@@ -100,8 +100,12 @@ export function App(): JSX.Element {
     setLoginError(null);
     const loginResult = await bridge().login();
     setLoggingIn(false);
-    if (loginResult.status === "authenticated") setStatus(await bridge().getStatus());
-    else setLoginError(loginResult.message);
+    if (loginResult.status === "authenticated") {
+      setStatus(await bridge().getStatus());
+      setBanners((prev) => prev.filter((banner) => banner.kind !== "kiteLogin"));
+    } else {
+      setLoginError(loginResult.message);
+    }
   };
 
   const onAnalyze = async (instrument: InstrumentSelection, horizon: Horizon): Promise<void> => {
@@ -150,9 +154,6 @@ export function App(): JSX.Element {
 
       {activeSession !== null && !authenticated && (
         <>
-          {activeSession.mode === "ai_assisted" && (
-            <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
-          )}
           <button type="button" onClick={onLogin} disabled={loggingIn}>
             {loggingIn ? "Logging in…" : "Login to Kite"}
           </button>
@@ -171,7 +172,6 @@ export function App(): JSX.Element {
             </>
           ) : (
             <>
-              <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
               <ChatView
                 intentLens={intentLens}
                 sessionId={activeSession.id}

@@ -62,6 +62,33 @@ describe("App", () => {
     expect(await screen.findByText(/kite: authenticated/)).toBeTruthy();
   });
 
+  it("clears the kiteLogin banner once login succeeds", async () => {
+    let bannerHandler: ((banner: { kind: string; message: string }) => void) | undefined;
+    const bridge = installBridge({
+      getStatus: vi
+        .fn()
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null })
+        // The banner's own reactive re-fetch (App.tsx's onBanner handler) consumes
+        // this second value before the login button is ever clicked.
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null })
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      onBanner: vi.fn((handler) => {
+        bannerHandler = handler;
+      }),
+    });
+    render(<App />);
+    await startEngineOnlyChat();
+    await waitFor(() => expect(bannerHandler).toBeTruthy());
+
+    bannerHandler?.({ kind: "kiteLogin", message: "Kite needs login today." });
+    expect(await screen.findByText(/kite needs login today/i)).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: /login to kite/i }));
+    await waitFor(() => expect(bridge.login).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/kite: authenticated/)).toBeTruthy();
+    expect(screen.queryByText(/kite needs login today/i)).toBeNull();
+  });
+
   it("runs an Engine-Only analysis with the session id and chosen intent lens", async () => {
     const bridge = installBridge({
       getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
@@ -165,6 +192,5 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /new chat/i }));
     fireEvent.click(await screen.findByRole("button", { name: /ai-assisted/i }));
     expect(await screen.findByLabelText(/ask about an instrument/i)).toBeTruthy();
-    expect(screen.getByText(/claude auth login/i)).toBeTruthy();
   });
 });

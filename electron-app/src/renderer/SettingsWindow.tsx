@@ -102,7 +102,6 @@ export function SettingsWindow(): JSX.Element {
         <div>Sidecar: {status?.sidecar ?? "…"}</div>
         <div>Kite session: {status?.kiteSession ?? "…"}</div>
         {status?.driftWarning && <div className="warning">{status.driftWarning}</div>}
-        <p className="banner-hint">AI-Assisted needs the claude CLI authenticated — run `claude auth login`.</p>
       </fieldset>
     </section>
   );

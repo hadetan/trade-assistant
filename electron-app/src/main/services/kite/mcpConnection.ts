@@ -5,10 +5,6 @@ import { toToolCaller, toToolListing } from "./mcpClientAdapter";
 import type { SdkCallClient, SdkListClient } from "./mcpClientAdapter";
 import type { McpToolCaller } from "./kiteClient";
 import type { ToolListing } from "./mcpDriftMonitor";
-import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
-import { KiteMcpOAuthProvider } from "./kiteMcpOAuthProvider";
-import { captureOAuthCallback } from "./kiteMcpOAuthCallback";
 
 const DEFAULT_MCP_URL = "https://mcp.kite.trade/mcp";
 
@@ -48,61 +44,27 @@ export async function connectKiteMcp(deps: ConnectKiteMcpDeps): Promise<McpConne
   };
 }
 
-type OAuthCapableSdkClient = SdkLikeClient & { connect(transport: unknown): Promise<void> };
-interface OAuthTransport { finishAuth(code: string): Promise<void>; }
-
-export interface ConnectKiteMcpOAuthDeps {
-  loginPort: number;
-  openExternal: (url: string) => void;
+export interface ConnectKiteMcpAnonymousDeps {
   url?: string;
-  // Injection seams for unit tests; defaults build the real SDK objects.
-  createProvider?: (opts: { loginPort: number; openExternal: (url: string) => void }) => OAuthClientProvider;
-  createClient?: (opts: { url: string; provider: OAuthClientProvider }) => {
-    client: OAuthCapableSdkClient;
-    transport: OAuthTransport;
-  };
-  captureCallback?: (opts: { port: number; signal?: AbortSignal }) => Promise<{ code: string; state: string | null }>;
+  createClient?: (params: { url: string }) => Promise<SdkLikeClient>;
 }
 
-function defaultCreateOAuthProvider(opts: { loginPort: number; openExternal: (url: string) => void }): OAuthClientProvider {
-  return new KiteMcpOAuthProvider(opts);
-}
-
-function defaultCreateOAuthClient(opts: { url: string; provider: OAuthClientProvider }): {
-  client: OAuthCapableSdkClient;
-  transport: OAuthTransport;
-} {
-  const transport = new StreamableHTTPClientTransport(new URL(opts.url), { authProvider: opts.provider });
+async function defaultCreateAnonymousClient(params: { url: string }): Promise<SdkLikeClient> {
+  const transport = new StreamableHTTPClientTransport(new URL(params.url));
   const client = new Client({ name: "trade-assistant", version: app.getVersion() }, {});
-  return { client: client as unknown as OAuthCapableSdkClient, transport: transport as unknown as OAuthTransport };
+  await client.connect(transport);
+  return client as unknown as SdkLikeClient;
 }
 
-export async function connectKiteMcpOAuth(deps: ConnectKiteMcpOAuthDeps): Promise<McpConnection> {
+// mcp.kite.trade accepts an anonymous connect unconditionally (confirmed
+// against the live endpoint: no WWW-Authenticate/401 challenge at the
+// transport level) -- real login happens later, via the "login" tool itself
+// (see kiteMcpLoginFlow.ts), not via the MCP Authorization spec's OAuth
+// discovery/DCR/PKCE flow.
+export async function connectKiteMcpAnonymous(deps: ConnectKiteMcpAnonymousDeps = {}): Promise<McpConnection> {
   const url = deps.url ?? DEFAULT_MCP_URL;
-  const provider = (deps.createProvider ?? defaultCreateOAuthProvider)({
-    loginPort: deps.loginPort,
-    openExternal: deps.openExternal,
-  });
-  const capture = deps.captureCallback ?? captureOAuthCallback;
-  const { client, transport } = (deps.createClient ?? defaultCreateOAuthClient)({ url, provider });
-
-  const abort = new AbortController();
-  const callbackPromise = capture({ port: deps.loginPort, signal: abort.signal });
-  try {
-    await client.connect(transport);
-    // A fresh in-memory provider has no tokens, so connect normally throws
-    // UnauthorizedError after opening the browser. Reaching here means it
-    // authorized with no redirect — no callback will arrive, so stop listening.
-    abort.abort();
-  } catch (error) {
-    if (!(error instanceof UnauthorizedError)) {
-      abort.abort();
-      throw error;
-    }
-    const { code } = await callbackPromise;
-    await transport.finishAuth(code);
-    await client.connect(transport);
-  }
+  const createClient = deps.createClient ?? defaultCreateAnonymousClient;
+  const client = await createClient({ url });
   return {
     caller: toToolCaller(client),
     listing: toToolListing(client),

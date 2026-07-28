@@ -1,10 +1,12 @@
 import type { KiteFullConfig, KiteMcpOnlyConfig } from "./kiteConfig";
 import { captureRequestToken, exchangeAccessToken } from "./kiteOAuth";
 import { KiteClient } from "./kiteClient";
-import { connectKiteMcp, connectKiteMcpOAuth } from "./mcpConnection";
-import type { ConnectKiteMcpDeps, ConnectKiteMcpOAuthDeps, McpConnection } from "./mcpConnection";
+import { connectKiteMcp, connectKiteMcpAnonymous } from "./mcpConnection";
+import type { ConnectKiteMcpDeps, ConnectKiteMcpAnonymousDeps, McpConnection } from "./mcpConnection";
 import { checkKiteToolDrift } from "./mcpDriftMonitor";
 import type { DriftResult, ToolListing } from "./mcpDriftMonitor";
+import { extractKiteLoginUrl, pollForKiteLogin } from "./kiteMcpLoginFlow";
+import type { PollForKiteLoginDeps } from "./kiteMcpLoginFlow";
 
 export interface KiteLoginDeps {
   config: KiteFullConfig;
@@ -59,25 +61,46 @@ export async function runKiteLogin(deps: KiteLoginDeps): Promise<KiteSession> {
 export interface KiteMcpOnlyLoginDeps {
   config: KiteMcpOnlyConfig;
   openExternal: (url: string) => void;
-  connectMcp?: (d: ConnectKiteMcpOAuthDeps) => Promise<McpConnection>;
+  connectMcp?: (d: ConnectKiteMcpAnonymousDeps) => Promise<McpConnection>;
   checkDrift?: (listing: ToolListing) => Promise<DriftResult>;
   onKiteResponse?: (response: unknown) => void;
+  verifyLogin?: PollForKiteLoginDeps["verifyLogin"];
+  delayFn?: PollForKiteLoginDeps["delayFn"];
+  pollIntervalMs?: number;
+  pollTimeoutMs?: number;
 }
 
 export async function runKiteMcpOnlyLogin(deps: KiteMcpOnlyLoginDeps): Promise<KiteSession> {
-  const connectMcp = deps.connectMcp ?? connectKiteMcpOAuth;
+  const connectMcp = deps.connectMcp ?? connectKiteMcpAnonymous;
   const checkDrift = deps.checkDrift ?? checkKiteToolDrift;
-  const { loginPort } = deps.config;
 
-  const connection = await connectMcp({ loginPort, openExternal: deps.openExternal });
+  const connection = await connectMcp({});
   try {
     const kite = new KiteClient(connection.caller, { onResponse: deps.onKiteResponse });
+    // Kite's MCP server has no transport-level auth challenge (see
+    // mcpConnection.ts's connectKiteMcpAnonymous) -- calling "login" is the
+    // real mechanism: it returns a URL for the user to complete Zerodha login
+    // in their browser, tied server-side to this same connection.
+    const loginResponse = await kite.login();
+    const loginUrl = extractKiteLoginUrl(loginResponse);
+    deps.openExternal(loginUrl);
+    // Do not mark this session authenticated until a real call actually
+    // succeeds -- the server gives no synchronous "login complete" signal, so
+    // this is the only way to avoid returning a session that looks fine but
+    // fails on the first real use.
+    await pollForKiteLogin({
+      kite,
+      verifyLogin: deps.verifyLogin,
+      delayFn: deps.delayFn,
+      pollIntervalMs: deps.pollIntervalMs,
+      pollTimeoutMs: deps.pollTimeoutMs,
+    });
     const drift = await checkDrift(connection.listing);
     return { kite, connection, drift, close: connection.close };
   } catch (error) {
-    // Mirrors runKiteLogin: checkDrift is a real tools/list network call; if it
-    // fails after connectMcp already opened the connection, close it here so the
-    // caller only sees the rejection, never a leaked open connection.
+    // Mirrors runKiteLogin: if anything above fails after connectMcp already
+    // opened the connection, close it here so the caller only sees the
+    // rejection, never a leaked open connection.
     await connection.close().catch(() => {});
     throw error;
   }
