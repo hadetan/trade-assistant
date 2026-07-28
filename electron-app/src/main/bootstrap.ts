@@ -14,6 +14,7 @@ import { registerStatusBridge } from "./ipc/appBridge";
 import { registerAnalysisBridge } from "./ipc/analysisBridge";
 import { registerHistoryBridge } from "./ipc/historyBridge";
 import { registerSettingsBridge } from "./ipc/settingsBridge";
+import { registerBenchmarkBridge } from "./ipc/benchmarkBridge";
 import { makeNarrativeSender } from "./ipc/narrativeBridge";
 import { HistoryStore } from "./services/history/historyStore";
 import { ScanScheduler } from "./scanScheduler";
@@ -237,6 +238,7 @@ export function createApp(): AppRuntime {
   });
   registerHistoryBridge({ ipcMain, history });
   registerSettingsBridge({ ipcMain, history, scanScheduler, sidecar: supervisor, getStatus: currentStatus });
+  registerBenchmarkBridge({ ipcMain, sidecar: supervisor });
 
   return {
     start: () => {

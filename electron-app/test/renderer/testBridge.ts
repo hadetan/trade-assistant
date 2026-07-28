@@ -18,6 +18,22 @@ export function installBridge(overrides: Partial<RendererApi> = {}): RendererApi
     }),
     listSessions: vi.fn().mockResolvedValue([]),
     getSession: vi.fn().mockResolvedValue({ id: "session-1", response_mode: "engine_only", messages: [] }),
+    listLakeSymbols: vi.fn().mockResolvedValue([]),
+    runBenchmark: vi.fn().mockResolvedValue({
+      params: {
+        symbol: "NSE:INFY",
+        timeframe: "day",
+        source: "bhavcopy",
+        horizon: "positional",
+        cadence: { mode: "session_close" },
+        lookaheadBars: 5,
+        fromTs: 0,
+        toTs: 0,
+      },
+      candles: [],
+      decisionPoints: [],
+    }),
+    copyBenchmarkResult: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
   (window as unknown as { tradeAssistant: RendererApi }).tradeAssistant = bridge;
