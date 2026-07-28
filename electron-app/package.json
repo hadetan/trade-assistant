@@ -14,7 +14,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "pretest": "npm rebuild better-sqlite3",
-    "postinstall": "electron-rebuild -f -w better-sqlite3"
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "build:sidecar": "node scripts/buildSidecar.mjs",
+    "package:mac": "npm run build:sidecar && electron-vite build && electron-builder --mac",
+    "package:win": "npm run build:sidecar && electron-vite build && electron-builder --win"
   },
   "devDependencies": {
     "@electron/rebuild": "^3.7.0",
@@ -28,6 +31,7 @@
     "@types/react-dom": "^18.3.7",
     "@vitejs/plugin-react": "^4.7.0",
     "electron": "33.2.0",
+    "electron-builder": "^25.1.8",
     "electron-vite": "2.3.0",
     "jsdom": "^29.1.1",
     "typescript": "5.7.2",
