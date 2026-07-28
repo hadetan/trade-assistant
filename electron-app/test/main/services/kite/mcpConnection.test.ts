@@ -161,6 +161,30 @@ describe("connectKiteMcpOAuth", () => {
     expect(client.connect).toHaveBeenCalledTimes(1);
   });
 
+  it("aborts the still-listening callback capture when the first connect rejects with a non-UnauthorizedError", async () => {
+    const client = fakeOAuthClient();
+    const error = new Error("network down");
+    client.connect.mockRejectedValueOnce(error);
+    const transport = { finishAuth: vi.fn() };
+    let capturedSignal: AbortSignal | undefined;
+    const captureCallback = vi.fn().mockImplementation((opts: { signal?: AbortSignal }) => {
+      capturedSignal = opts.signal;
+      return new Promise<{ code: string; state: string | null }>(() => {});
+    });
+
+    await expect(
+      connectKiteMcpOAuth({
+        loginPort: 3000,
+        openExternal: vi.fn(),
+        createProvider: () => ({} as unknown as OAuthClientProvider),
+        createClient: () => ({ client, transport }),
+        captureCallback,
+      }),
+    ).rejects.toBe(error);
+
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
   it("honours a custom url and otherwise defaults to https://mcp.kite.trade/mcp", async () => {
     const custom = oauthHarness();
     await connectKiteMcpOAuth({
