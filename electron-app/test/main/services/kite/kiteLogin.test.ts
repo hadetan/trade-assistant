@@ -130,8 +130,24 @@ describe("runKiteMcpOnlyLogin", () => {
   it("closes the connection exactly once and rethrows when checkDrift fails after connect", async () => {
     const { deps, connection } = mcpOnlyDeps();
     deps.checkDrift = vi.fn().mockRejectedValue(new Error("tools/list failed"));
+    const callOrder: string[] = [];
+    connection.close = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          setTimeout(() => {
+            callOrder.push("close-resolved");
+            resolve(undefined);
+          }, 0);
+        }),
+    );
 
     await expect(runKiteMcpOnlyLogin(deps)).rejects.toThrow(/tools\/list failed/);
+    callOrder.push("rejected");
+
     expect(connection.close).toHaveBeenCalledTimes(1);
+    // Proves the implementation awaits close() before rethrowing: if the
+    // await were dropped, the rejection would race ahead of the delayed
+    // close and this order would come out reversed (or incomplete).
+    expect(callOrder).toEqual(["close-resolved", "rejected"]);
   });
 });
