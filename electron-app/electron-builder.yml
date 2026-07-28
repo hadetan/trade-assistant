@@ -1,0 +1,21 @@
+appId: com.tradeassistant.app
+productName: Trade Assistant
+directories:
+  buildResources: resources
+files:
+  - out/**
+  - resources/icons/**
+extraResources:
+  - from: resources/sidecar-bin
+    to: sidecar-bin
+    filter:
+      - "**/*"
+asarUnpack: []
+mac:
+  target:
+    - dmg
+    - zip
+win:
+  target:
+    - nsis
+    - zip
