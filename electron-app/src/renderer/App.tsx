@@ -100,8 +100,12 @@ export function App(): JSX.Element {
     setLoginError(null);
     const loginResult = await bridge().login();
     setLoggingIn(false);
-    if (loginResult.status === "authenticated") setStatus(await bridge().getStatus());
-    else setLoginError(loginResult.message);
+    if (loginResult.status === "authenticated") {
+      setStatus(await bridge().getStatus());
+      setBanners((prev) => prev.filter((banner) => banner.kind !== "kiteLogin"));
+    } else {
+      setLoginError(loginResult.message);
+    }
   };
 
   const onAnalyze = async (instrument: InstrumentSelection, horizon: Horizon): Promise<void> => {
