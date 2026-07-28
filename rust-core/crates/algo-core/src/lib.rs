@@ -1,4 +1,5 @@
 mod algorithm;
+pub mod benchmark_classify;
 pub mod confluence;
 mod forecast;
 mod indicators;
