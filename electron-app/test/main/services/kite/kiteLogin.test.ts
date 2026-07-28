@@ -80,8 +80,16 @@ describe("runKiteLogin", () => {
   });
 });
 
+const LOGIN_TOOL_RESPONSE = {
+  content: [{ type: "text", text: "click here: https://mcp.kite.trade/authorize?session_id=abc%7C123" }],
+};
+
 function mcpOnlyDeps() {
   const connection = fakeConnection();
+  connection.caller.callTool = vi.fn().mockImplementation((name: string) => {
+    if (name === "login") return Promise.resolve(LOGIN_TOOL_RESPONSE);
+    return Promise.resolve({ ok: true });
+  });
   return {
     connection,
     deps: {
@@ -89,17 +97,24 @@ function mcpOnlyDeps() {
       openExternal: vi.fn(),
       connectMcp: vi.fn().mockResolvedValue(connection),
       checkDrift: vi.fn().mockResolvedValue({ added: [], removed: [], hasDrift: false }),
+      verifyLogin: vi.fn().mockResolvedValue(true),
+      delayFn: vi.fn().mockResolvedValue(undefined),
+      pollIntervalMs: 10,
+      pollTimeoutMs: 100,
     },
   };
 }
 
 describe("runKiteMcpOnlyLogin", () => {
-  it("connects via OAuth then drift-checks and returns a KiteClient session delegating to the fake caller", async () => {
+  it("connects anonymously, calls login, opens the returned URL, polls until verified, then drift-checks and returns a KiteClient session", async () => {
     const { deps, connection } = mcpOnlyDeps();
 
     const session = await runKiteMcpOnlyLogin(deps);
 
-    expect(deps.connectMcp).toHaveBeenCalledWith({ loginPort: 3000, openExternal: deps.openExternal });
+    expect(deps.connectMcp).toHaveBeenCalledWith({});
+    expect(connection.caller.callTool).toHaveBeenCalledWith("login", {});
+    expect(deps.openExternal).toHaveBeenCalledWith("https://mcp.kite.trade/authorize?session_id=abc%7C123");
+    expect(deps.verifyLogin).toHaveBeenCalled();
     expect(deps.checkDrift).toHaveBeenCalledWith(connection.listing);
     expect(session.connection).toBe(connection);
     expect(session.drift.hasDrift).toBe(false);
@@ -118,10 +133,12 @@ describe("runKiteMcpOnlyLogin", () => {
 
   it("wires onKiteResponse through to the session's KiteClient", async () => {
     const { deps, connection } = mcpOnlyDeps();
-    connection.caller.callTool = vi.fn().mockResolvedValue({ data: { user_id: "AB1234" } });
     const onKiteResponse = vi.fn();
 
     const session = await runKiteMcpOnlyLogin({ ...deps, onKiteResponse });
+    // The login() call during setup already went through onKiteResponse; this
+    // just confirms subsequent calls on the returned session do too.
+    connection.caller.callTool = vi.fn().mockResolvedValue({ data: { user_id: "AB1234" } });
     await session.kite.getProfile();
 
     expect(onKiteResponse).toHaveBeenCalledWith({ data: { user_id: "AB1234" } });
@@ -149,5 +166,27 @@ describe("runKiteMcpOnlyLogin", () => {
     // await were dropped, the rejection would race ahead of the delayed
     // close and this order would come out reversed (or incomplete).
     expect(callOrder).toEqual(["close-resolved", "rejected"]);
+  });
+
+  it("rejects and closes the connection when the login response has no extractable URL", async () => {
+    const { deps, connection } = mcpOnlyDeps();
+    connection.caller.callTool = vi.fn().mockResolvedValue({ content: [{ text: "no link here" }] });
+
+    await expect(runKiteMcpOnlyLogin(deps)).rejects.toThrow(/did not include a login URL/);
+    expect(connection.close).toHaveBeenCalledTimes(1);
+    expect(deps.openExternal).not.toHaveBeenCalled();
+  });
+
+  it("opens the login URL but rejects and closes the connection when login is never detected as complete (the never-pass-through-on-failure case)", async () => {
+    const { deps, connection } = mcpOnlyDeps();
+    deps.verifyLogin = vi.fn().mockResolvedValue(false);
+
+    await expect(runKiteMcpOnlyLogin(deps)).rejects.toThrow(/Kite login/i);
+    // The URL was genuinely opened (the user had a real chance to log in) --
+    // only the never-confirmed verification fails, proving the session is
+    // never marked authenticated on an unconfirmed login.
+    expect(deps.openExternal).toHaveBeenCalledWith("https://mcp.kite.trade/authorize?session_id=abc%7C123");
+    expect(deps.checkDrift).not.toHaveBeenCalled();
+    expect(connection.close).toHaveBeenCalledTimes(1);
   });
 });
