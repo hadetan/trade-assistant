@@ -56,7 +56,7 @@ pub fn empty_response(id: u64) -> ComputeResponse {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandleWire {
     pub ts: i64,
     pub open: f64,
@@ -127,6 +127,86 @@ pub struct ScanGateResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ListLakeSymbolsRequest {
+    pub id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReadLakeCandlesRequest {
+    pub id: u64,
+    pub symbol: String,
+    pub timeframe: String,
+    pub source: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BenchmarkComputeRequest {
+    pub id: u64,
+    pub symbol: String,
+    pub timeframe: String,
+    /// "intraday" | "positional".
+    pub horizon: String,
+    /// The visible window series[0..=frontier], ascending by ts.
+    pub candles: Vec<CandleWire>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EvaluateScanGateStatelessRequest {
+    pub id: u64,
+    pub prev: Option<ConfluenceWire>,
+    pub curr: ConfluenceWire,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LakeSymbolWire {
+    pub symbol: String,
+    pub timeframe: String,
+    pub source: String,
+    pub from_ts: i64,
+    pub to_ts: i64,
+    pub candle_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LakeSymbolsResponse {
+    pub id: u64,
+    pub entries: Vec<LakeSymbolWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LakeCandlesResponse {
+    pub id: u64,
+    pub candles: Vec<CandleWire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BenchmarkComputeResponse {
+    pub id: u64,
+    pub algo_results: Vec<AlgoResultWire>,
+    pub confluence: ConfluenceWire,
+}
+
+/// The "nothing ran / panicked" benchmark_compute answer for `id`: no algorithm
+/// results, entirely zeroed confluence. Mirrors `empty_response`'s role for
+/// `Compute` -- the client blocks on `id`, so it is still owed one line.
+pub fn benchmark_empty_response(id: u64) -> BenchmarkComputeResponse {
+    BenchmarkComputeResponse {
+        id,
+        algo_results: Vec::new(),
+        confluence: ConfluenceWire {
+            bullish_count: 0,
+            bearish_count: 0,
+            neutral_count: 0,
+            weighted_vote: 0.0,
+        },
+    }
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SidecarRequest {
     Compute(ComputeRequest),
@@ -135,6 +215,10 @@ pub enum SidecarRequest {
     RemoveWatchlistSymbol(RemoveWatchlistSymbolRequest),
     ListWatchlist(ListWatchlistRequest),
     EvaluateScanGate(EvaluateScanGateRequest),
+    ListLakeSymbols(ListLakeSymbolsRequest),
+    ReadLakeCandles(ReadLakeCandlesRequest),
+    BenchmarkCompute(BenchmarkComputeRequest),
+    EvaluateScanGateStateless(EvaluateScanGateStatelessRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -144,6 +228,9 @@ pub enum SidecarResponse {
     PersistCandles(PersistCandlesResponse),
     Watchlist(WatchlistResponse),
     ScanGate(ScanGateResponse),
+    LakeSymbols(LakeSymbolsResponse),
+    LakeCandles(LakeCandlesResponse),
+    BenchmarkCompute(BenchmarkComputeResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {

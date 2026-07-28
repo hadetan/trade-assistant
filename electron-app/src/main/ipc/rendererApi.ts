@@ -28,6 +28,20 @@ export interface BannerEvent {
 }
 
 export type Horizon = "intraday" | "positional";
+
+export type { BenchmarkCadence, Outcome, DecisionPoint, BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
+import type { BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
+
+export interface LakeSymbolEntry {
+  symbol: string;
+  timeframe: string;
+  source: string;
+  fromTs: number;
+  toTs: number;
+  candleCount: number;
+  horizon: Horizon; // derived from timeframe in the bridge
+}
+
 export type AnalysisMode = "engine_only" | "ai_assisted";
 
 export type AnalysisRunParams =
@@ -72,6 +86,9 @@ export interface RendererApi {
   createSession(mode: AnalysisMode): Promise<SessionSummary>;
   listSessions(): Promise<SessionSummary[]>;
   getSession(id: string): Promise<SessionDetail>;
+  listLakeSymbols(): Promise<LakeSymbolEntry[]>;
+  runBenchmark(params: BenchmarkRunParams): Promise<BenchmarkResult>;
+  copyBenchmarkResult(text: string): Promise<void>;
 }
 
 export function buildRendererApi(
@@ -88,6 +105,9 @@ export function buildRendererApi(
     createSession: (mode) => invoke("history:createSession", { mode }) as Promise<SessionSummary>,
     listSessions: () => invoke("history:listSessions") as Promise<SessionSummary[]>,
     getSession: (id) => invoke("history:getSession", { id }) as Promise<SessionDetail>,
+    listLakeSymbols: () => invoke("benchmark:listLakeSymbols") as Promise<LakeSymbolEntry[]>,
+    runBenchmark: (params) => invoke("benchmark:runBenchmark", params) as Promise<BenchmarkResult>,
+    copyBenchmarkResult: (text) => invoke("benchmark:copyToClipboard", text) as Promise<void>,
   };
 }
 

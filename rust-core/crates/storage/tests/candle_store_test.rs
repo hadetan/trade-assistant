@@ -1,4 +1,4 @@
-use storage::{Candle, CandleStore};
+use storage::{Candle, CandleStore, LakeSymbolEntry};
 use tempfile::tempdir;
 
 #[test]
@@ -168,4 +168,58 @@ fn sources_are_partitioned_separately_for_the_same_symbol() {
 
     assert_eq!(store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap()[0].close, 1.0);
     assert_eq!(store.read_sourced_candles("NSE:INFY", "day", "kaggle").unwrap()[0].close, 9.0);
+}
+
+#[test]
+fn list_symbols_on_an_empty_lake_returns_empty() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    assert_eq!(store.list_symbols().unwrap(), Vec::<LakeSymbolEntry>::new());
+}
+
+#[test]
+fn list_symbols_groups_multi_source_multi_symbol_correctly() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    let c = |ts: i64| Candle { ts, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 };
+
+    store.write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[c(100)]).unwrap();
+    store.write_sourced_candles("NSE:TCS", "day", "bhavcopy", &[c(100)]).unwrap();
+    store.write_sourced_candles("NSE:INFY", "minute", "kaggle", &[c(100)]).unwrap();
+
+    let entries = store.list_symbols().unwrap();
+    // Sorted by (symbol, timeframe, source); the "NSE:INFY" colon survives the
+    // round trip, proving the manifest -- not the lossy filename -- drives identity.
+    assert_eq!(entries.len(), 3);
+    assert_eq!((entries[0].symbol.as_str(), entries[0].timeframe.as_str(), entries[0].source.as_str()), ("NSE:INFY", "day", "bhavcopy"));
+    assert_eq!((entries[1].symbol.as_str(), entries[1].timeframe.as_str(), entries[1].source.as_str()), ("NSE:INFY", "minute", "kaggle"));
+    assert_eq!((entries[2].symbol.as_str(), entries[2].timeframe.as_str(), entries[2].source.as_str()), ("NSE:TCS", "day", "bhavcopy"));
+}
+
+#[test]
+fn list_symbols_reports_correct_ts_bounds_and_count() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    let c = |ts: i64| Candle { ts, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 };
+    store.write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[c(100), c(200), c(300)]).unwrap();
+
+    let entries = store.list_symbols().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].from_ts, 100);
+    assert_eq!(entries[0].to_ts, 300);
+    assert_eq!(entries[0].candle_count, 3);
+}
+
+#[test]
+fn re_ingesting_the_same_partition_does_not_duplicate_its_manifest_entry() {
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    let c = |ts: i64| Candle { ts, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 };
+
+    store.write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[c(100), c(200)]).unwrap();
+    store.write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[c(300)]).unwrap();
+
+    let entries = store.list_symbols().unwrap();
+    assert_eq!(entries.len(), 1, "re-ingesting the same partition appends its identity exactly once");
+    assert_eq!(entries[0].candle_count, 3, "count reflects the merged total");
 }

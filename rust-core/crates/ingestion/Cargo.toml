@@ -3,6 +3,10 @@ name = "ingestion"
 version = "0.1.0"
 edition.workspace = true
 
+[[bin]]
+name = "ingest"
+path = "src/bin/ingest.rs"
+
 [dependencies]
 storage = { path = "../storage" }
 chrono = "0.4"

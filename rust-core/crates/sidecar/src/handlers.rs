@@ -1,14 +1,18 @@
 use crate::protocol::{
-    AddWatchlistSymbolRequest, AlgoResultWire, ComputeRequest, ComputeResponse, ConfluenceWire,
-    EvaluateScanGateRequest, ListWatchlistRequest, PersistCandlesRequest, PersistCandlesResponse,
-    RemoveWatchlistSymbolRequest, ScanGateResponse, WatchlistResponse,
+    benchmark_empty_response, AddWatchlistSymbolRequest, AlgoResultWire, BenchmarkComputeRequest,
+    BenchmarkComputeResponse, CandleWire, ComputeRequest, ComputeResponse, ConfluenceWire,
+    EvaluateScanGateRequest, EvaluateScanGateStatelessRequest, LakeCandlesResponse, LakeSymbolWire,
+    LakeSymbolsResponse, ListLakeSymbolsRequest, ListWatchlistRequest, PersistCandlesRequest,
+    PersistCandlesResponse, ReadLakeCandlesRequest, RemoveWatchlistSymbolRequest, ScanGateResponse,
+    WatchlistResponse,
 };
 use algo_core::confluence::{compute_confluence, ScorecardSummary};
 use algo_core::scan_gate::{evaluate_scan_gate, GateThresholds};
-use algo_core::{registry::{self, run_applicable}, Horizon, MarketContext, Timeframe};
+use algo_core::{registry::{self, run_applicable}, AlgoOutput, Horizon, MarketContext, Timeframe};
+use backtest::frontier::context_at;
 use chrono::Utc;
 use std::collections::HashMap;
-use storage::{Candle, CandleStore, ConfluenceSnapshot, StateStore};
+use storage::{Candle, CandleStore, ConfluenceSnapshot, LakeSymbolEntry, StateStore};
 
 fn timeframe_to_wire(timeframe: Timeframe) -> &'static str {
     match timeframe {
@@ -23,6 +27,61 @@ fn horizon_to_wire(horizon: Horizon) -> &'static str {
     match horizon {
         Horizon::Intraday => "intraday",
         Horizon::Positional => "positional",
+    }
+}
+
+fn algo_output_to_wire(output: &AlgoOutput) -> AlgoResultWire {
+    AlgoResultWire {
+        algo_id: output.algo_id.to_string(),
+        symbol: output.symbol.clone(),
+        timeframe: timeframe_to_wire(output.timeframe).to_string(),
+        horizon: horizon_to_wire(output.horizon).to_string(),
+        direction: format!("{:?}", output.direction),
+        magnitude: output.magnitude,
+        confidence: output.confidence,
+        evidence: output.evidence.clone(),
+        computed_at: output.computed_at.to_rfc3339(),
+    }
+}
+
+fn confluence_to_wire(summary: &ScorecardSummary) -> ConfluenceWire {
+    ConfluenceWire {
+        bullish_count: summary.bullish_count,
+        bearish_count: summary.bearish_count,
+        neutral_count: summary.neutral_count,
+        weighted_vote: summary.weighted_vote,
+    }
+}
+
+fn candle_to_wire(c: &Candle) -> CandleWire {
+    CandleWire { ts: c.ts, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume }
+}
+
+fn lake_entry_to_wire(e: &LakeSymbolEntry) -> LakeSymbolWire {
+    LakeSymbolWire {
+        symbol: e.symbol.clone(),
+        timeframe: e.timeframe.clone(),
+        source: e.source.clone(),
+        from_ts: e.from_ts,
+        to_ts: e.to_ts,
+        candle_count: e.candle_count,
+    }
+}
+
+fn parse_timeframe(s: &str) -> Timeframe {
+    match s {
+        "minute" => Timeframe::Minute,
+        "5minute" => Timeframe::FiveMinute,
+        "15minute" => Timeframe::FifteenMinute,
+        _ => Timeframe::Day,
+    }
+}
+
+fn parse_horizon(s: &str) -> Horizon {
+    if s == "intraday" {
+        Horizon::Intraday
+    } else {
+        Horizon::Positional
     }
 }
 
@@ -52,30 +111,12 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
     let weights: HashMap<&str, f64> = HashMap::new();
     let confluence = compute_confluence(&outputs, &weights);
 
-    let algo_results = outputs
-        .iter()
-        .map(|output| AlgoResultWire {
-            algo_id: output.algo_id.to_string(),
-            symbol: output.symbol.clone(),
-            timeframe: timeframe_to_wire(output.timeframe).to_string(),
-            horizon: horizon_to_wire(output.horizon).to_string(),
-            direction: format!("{:?}", output.direction),
-            magnitude: output.magnitude,
-            confidence: output.confidence,
-            evidence: output.evidence.clone(),
-            computed_at: output.computed_at.to_rfc3339(),
-        })
-        .collect();
+    let algo_results = outputs.iter().map(algo_output_to_wire).collect();
 
     ComputeResponse {
         id: request.id,
         algo_results,
-        confluence: ConfluenceWire {
-            bullish_count: confluence.bullish_count,
-            bearish_count: confluence.bearish_count,
-            neutral_count: confluence.neutral_count,
-            weighted_vote: confluence.weighted_vote,
-        },
+        confluence: confluence_to_wire(&confluence),
     }
 }
 
@@ -161,6 +202,64 @@ pub fn handle_evaluate_scan_gate(store: &StateStore, request: EvaluateScanGateRe
         Ok(()) => ScanGateResponse { id: request.id, decision: format!("{decision:?}"), error: None },
         Err(e) => ScanGateResponse { id: request.id, decision: format!("{decision:?}"), error: Some(e.to_string()) },
     }
+}
+
+pub fn handle_benchmark_compute(request: BenchmarkComputeRequest) -> BenchmarkComputeResponse {
+    let candles: Vec<Candle> = request.candles.iter().map(|c| Candle {
+        ts: c.ts,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        volume: c.volume,
+    }).collect();
+    if candles.is_empty() {
+        return benchmark_empty_response(request.id);
+    }
+    let timeframe = parse_timeframe(&request.timeframe);
+    let horizon = parse_horizon(&request.horizon);
+    // Full OHLCV context at the last visible bar -- richer than the live
+    // Compute handler's closes-only from_closes path (which is left unchanged).
+    // Anti-lookahead holds: context_at's as_of is the frontier bar's own ts, and
+    // only series[0..=frontier] is in the window.
+    let ctx = context_at(&candles, candles.len() - 1, &request.symbol, timeframe, horizon);
+    let algos = registry::all_for_binary();
+    let outputs = run_applicable(&algos, &ctx);
+    let weights: HashMap<&str, f64> = HashMap::new();
+    let confluence = compute_confluence(&outputs, &weights);
+    BenchmarkComputeResponse {
+        id: request.id,
+        algo_results: outputs.iter().map(algo_output_to_wire).collect(),
+        confluence: confluence_to_wire(&confluence),
+    }
+}
+
+pub fn handle_read_lake_candles(store: &CandleStore, request: ReadLakeCandlesRequest) -> LakeCandlesResponse {
+    // Wraps read_sourced_candles (not read_candles): all lake data lives in
+    // sourced partitions, so a source-less read would return an empty
+    // non-sourced partition. The request carries `source` so the renderer
+    // round-trips the exact partition list_symbols reported.
+    match store.read_sourced_candles(&request.symbol, &request.timeframe, &request.source) {
+        Ok(candles) => LakeCandlesResponse { id: request.id, candles: candles.iter().map(candle_to_wire).collect(), error: None },
+        Err(e) => LakeCandlesResponse { id: request.id, candles: Vec::new(), error: Some(e.to_string()) },
+    }
+}
+
+pub fn handle_list_lake_symbols(store: &CandleStore, request: ListLakeSymbolsRequest) -> LakeSymbolsResponse {
+    match store.list_symbols() {
+        Ok(entries) => LakeSymbolsResponse { id: request.id, entries: entries.iter().map(lake_entry_to_wire).collect(), error: None },
+        Err(e) => LakeSymbolsResponse { id: request.id, entries: Vec::new(), error: Some(e.to_string()) },
+    }
+}
+
+pub fn handle_evaluate_scan_gate_stateless(request: EvaluateScanGateStatelessRequest) -> ScanGateResponse {
+    let curr = wire_to_scorecard(&request.curr);
+    let prev = request.prev.as_ref().map(wire_to_scorecard);
+    // ZERO StateStore I/O: a pure wrapper over evaluate_scan_gate. Takes no
+    // store, so it can never touch scan_snapshots -- a benchmark run can never
+    // corrupt the live proactive scanner's per-symbol gate memory.
+    let decision = evaluate_scan_gate(prev.as_ref(), &curr, &GateThresholds::default());
+    ScanGateResponse { id: request.id, decision: format!("{decision:?}"), error: None }
 }
 
 #[cfg(test)]
@@ -343,5 +442,113 @@ mod tests {
             EvaluateScanGateRequest { id: 6, symbol: "NSE:INFY".to_string(), confluence: confluence_wire(5, 2, 10, 0.12) },
         );
         assert_eq!(second.decision, "NoChange");
+    }
+
+    fn candle_store() -> (tempfile::TempDir, CandleStore) {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    fn ohlcv_window(len: usize) -> Vec<CandleWire> {
+        // Rising close AND rising volume: a full-OHLCV context lets volume-based
+        // algorithms produce a directional signal; a closes-only from_closes
+        // context (empty volumes) would no-op them all to Neutral.
+        (0..len)
+            .map(|i| {
+                let base = 100.0 + i as f64;
+                CandleWire {
+                    ts: 1_700_000_000 + i as i64 * 86_400,
+                    open: base,
+                    high: base + 2.0,
+                    low: base - 1.0,
+                    close: base + 1.0,
+                    volume: 1_000 + i as i64 * 100,
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn handle_benchmark_compute_reaches_run_applicable_with_full_ohlcv() {
+        let response = handle_benchmark_compute(BenchmarkComputeRequest {
+            id: 30,
+            symbol: "NSE:INFY".to_string(),
+            timeframe: "day".to_string(),
+            horizon: "positional".to_string(),
+            candles: ohlcv_window(60),
+        });
+        assert_eq!(response.id, 30);
+        // At least one volume/OHLCV-reading algorithm must produce a directional
+        // signal -- the proof that context_at's full OHLCV, not from_closes,
+        // reached run_applicable.
+        let volume_based = ["obv", "mfi", "cmf", "vwap", "accumulation_distribution", "volume_profile"];
+        assert!(
+            response.algo_results.iter().any(|r| volume_based.contains(&r.algo_id.as_str()) && r.direction != "Neutral"),
+            "a volume/OHLCV-based algorithm must be directional under full OHLCV; got {:?}",
+            response.algo_results.iter().map(|r| (r.algo_id.clone(), r.direction.clone())).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn handle_benchmark_compute_on_empty_candles_returns_a_zeroed_response() {
+        let response = handle_benchmark_compute(BenchmarkComputeRequest {
+            id: 31,
+            symbol: "NSE:INFY".to_string(),
+            timeframe: "day".to_string(),
+            horizon: "positional".to_string(),
+            candles: Vec::new(),
+        });
+        assert_eq!(response.id, 31);
+        assert!(response.algo_results.is_empty());
+        assert_eq!(response.confluence.neutral_count, 0);
+    }
+
+    #[test]
+    fn handle_read_lake_candles_reads_back_a_written_sourced_partition() {
+        let (_dir, store) = candle_store();
+        store
+            .write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[Candle { ts: 100, open: 1.0, high: 2.0, low: 0.5, close: 1.5, volume: 10 }])
+            .unwrap();
+        let response = handle_read_lake_candles(
+            &store,
+            ReadLakeCandlesRequest { id: 32, symbol: "NSE:INFY".to_string(), timeframe: "day".to_string(), source: "bhavcopy".to_string() },
+        );
+        assert_eq!(response.candles.len(), 1);
+        assert_eq!(response.candles[0].close, 1.5);
+        assert!(response.error.is_none());
+    }
+
+    #[test]
+    fn handle_list_lake_symbols_returns_one_entry_per_written_partition() {
+        let (_dir, store) = candle_store();
+        store.write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }]).unwrap();
+        store.write_sourced_candles("NSE:TCS", "day", "bhavcopy", &[Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }]).unwrap();
+        let response = handle_list_lake_symbols(&store, ListLakeSymbolsRequest { id: 33 });
+        assert_eq!(response.id, 33);
+        assert_eq!(response.entries.len(), 2);
+    }
+
+    #[test]
+    fn handle_evaluate_scan_gate_stateless_matches_the_persistent_gate_and_writes_nothing() {
+        // Identical first-ever input -> same decision as the persistent handler.
+        let stateless = handle_evaluate_scan_gate_stateless(EvaluateScanGateStatelessRequest {
+            id: 34,
+            prev: None,
+            curr: confluence_wire(5, 2, 10, 0.12),
+        });
+        assert_eq!(stateless.decision, "WorthLook");
+
+        // Zero StateStore writes: run the stateless handler, then open a fresh
+        // StateStore and confirm scan_snapshots never got a row (it can't -- the
+        // handler holds no store reference).
+        let (_dir, state) = state_store();
+        let _ = handle_evaluate_scan_gate_stateless(EvaluateScanGateStatelessRequest {
+            id: 35,
+            prev: None,
+            curr: confluence_wire(5, 2, 10, 0.12),
+        });
+        assert!(state.get_last_snapshot("NSE:INFY").unwrap().is_none());
     }
 }

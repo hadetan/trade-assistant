@@ -2,9 +2,12 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { Readable, Writable } from "node:stream";
 import {
+  BenchmarkComputeResponseWire,
   CandleWire,
   ComputeResponseWire,
   ConfluenceWire,
+  LakeCandlesResponseWire,
+  LakeSymbolsResponseWire,
   PersistCandlesResponseWire,
   ScanGateResponseWire,
   SidecarRequestWire,
@@ -103,6 +106,22 @@ export class SidecarSupervisor extends EventEmitter {
 
   evaluateScanGate(symbol: string, confluence: ConfluenceWire): Promise<ScanGateResponseWire> {
     return this.send({ type: "evaluate_scan_gate", id: this.nextId, symbol, confluence }) as Promise<ScanGateResponseWire>;
+  }
+
+  listLakeSymbols(): Promise<LakeSymbolsResponseWire> {
+    return this.send({ type: "list_lake_symbols", id: this.nextId }) as Promise<LakeSymbolsResponseWire>;
+  }
+
+  readLakeCandles(symbol: string, timeframe: string, source: string): Promise<LakeCandlesResponseWire> {
+    return this.send({ type: "read_lake_candles", id: this.nextId, symbol, timeframe, source }) as Promise<LakeCandlesResponseWire>;
+  }
+
+  benchmarkCompute(symbol: string, timeframe: string, horizon: string, candles: CandleWire[]): Promise<BenchmarkComputeResponseWire> {
+    return this.send({ type: "benchmark_compute", id: this.nextId, symbol, timeframe, horizon, candles }) as Promise<BenchmarkComputeResponseWire>;
+  }
+
+  evaluateScanGateStateless(prev: ConfluenceWire | null, curr: ConfluenceWire): Promise<ScanGateResponseWire> {
+    return this.send({ type: "evaluate_scan_gate_stateless", id: this.nextId, prev, curr }) as Promise<ScanGateResponseWire>;
   }
 
   private send(request: SidecarRequestWire): Promise<SidecarResponseWire> {

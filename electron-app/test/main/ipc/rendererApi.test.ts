@@ -2,17 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
-  it("exposes exactly the nine bridge methods and never leaks the raw transport", () => {
+  it("exposes exactly the twelve bridge methods and never leaks the raw transport", () => {
     const api = buildRendererApi(vi.fn().mockResolvedValue({}), vi.fn());
     expect(Object.keys(api).sort()).toEqual([
+      "copyBenchmarkResult",
       "createSession",
       "getSession",
       "getStatus",
+      "listLakeSymbols",
       "listSessions",
       "login",
       "onBanner",
       "onNarrative",
       "runAnalysis",
+      "runBenchmark",
       "searchInstruments",
     ]);
     expect((api as Record<string, unknown>).ipcRenderer).toBeUndefined();

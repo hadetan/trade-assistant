@@ -192,4 +192,69 @@ describe("SidecarSupervisor", () => {
       supervisor.evaluateScanGate("NSE:INFY", { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 }),
     ).rejects.toThrow(/sidecar request 1 timed out after 20ms/);
   });
+
+  it("resolves listLakeSymbols with a lake_symbols response carrying the matching id", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.listLakeSymbols();
+    await requestsSeen;
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "lake_symbols", id: 1, entries: [{ symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", from_ts: 1, to_ts: 2, candle_count: 3 }] })}\n`,
+    );
+    const response = await pending;
+    expect(response.type).toBe("lake_symbols");
+    expect(response.entries[0].symbol).toBe("NSE:INFY");
+  });
+
+  it("resolves readLakeCandles with the sourced series", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.readLakeCandles("NSE:INFY", "day", "bhavcopy");
+    await requestsSeen;
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "lake_candles", id: 1, candles: [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }] })}\n`,
+    );
+    expect((await pending).candles).toHaveLength(1);
+  });
+
+  it("resolves benchmarkCompute with algo_results and confluence", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [
+      { ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+    ]);
+    await requestsSeen;
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "benchmark_compute", id: 1, algo_results: [], confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 } })}\n`,
+    );
+    expect((await pending).confluence.bullish_count).toBe(1);
+  });
+
+  it("resolves evaluateScanGateStateless with a scan_gate decision", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.evaluateScanGateStateless(null, {
+      bullish_count: 5,
+      bearish_count: 2,
+      neutral_count: 10,
+      weighted_vote: 0.12,
+    });
+    await requestsSeen;
+    children[0].stdout.write(`${JSON.stringify({ type: "scan_gate", id: 1, decision: "WorthLook" })}\n`);
+    expect((await pending).decision).toBe("WorthLook");
+  });
+
+  it("rejects benchmarkCompute on timeout exactly like compute (shared send path)", async () => {
+    const children: FakeChild[] = [];
+    const spawnFn = (_command: string, _args: string[]) => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as ReturnType<typeof spawnFn>;
+    };
+    const supervisor = new SidecarSupervisor({ binaryPath: "/fake/sidecar", lakeRoot: "/fake/lake", spawnFn, requestTimeoutMs: 20 });
+    supervisor.start();
+    await expect(
+      supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]),
+    ).rejects.toThrow(/sidecar request 1 timed out after 20ms/);
+  });
 });
