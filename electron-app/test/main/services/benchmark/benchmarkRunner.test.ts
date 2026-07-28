@@ -217,4 +217,19 @@ describe("runBenchmark frontier walk", () => {
     expect(result.decisionPoints).toHaveLength(2); // the first two frontiers survived
     consoleError.mockRestore();
   });
+
+  it("propagates an initial readLakeCandles rejection instead of resolving empty", async () => {
+    const benchmarkCompute = vi.fn();
+    const evaluateScanGateStateless = vi.fn();
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        readLakeCandles: vi.fn().mockRejectedValue(new Error("lake read failed")),
+        benchmarkCompute,
+        evaluateScanGateStateless,
+      },
+    };
+    await expect(runBenchmark(deps, baseParams())).rejects.toThrow("lake read failed");
+    expect(benchmarkCompute).not.toHaveBeenCalled();
+    expect(evaluateScanGateStateless).not.toHaveBeenCalled();
+  });
 });
