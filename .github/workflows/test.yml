@@ -1,0 +1,43 @@
+name: test
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust-core
+
+      - name: cargo test --workspace
+        working-directory: rust-core
+        run: cargo test --workspace
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: electron-app/package-lock.json
+
+      - name: npm ci
+        working-directory: electron-app
+        run: npm ci
+
+      - name: typecheck
+        working-directory: electron-app
+        run: npm run typecheck
+
+      - name: test
+        working-directory: electron-app
+        run: npm test
