@@ -215,6 +215,10 @@ pub enum SidecarRequest {
     RemoveWatchlistSymbol(RemoveWatchlistSymbolRequest),
     ListWatchlist(ListWatchlistRequest),
     EvaluateScanGate(EvaluateScanGateRequest),
+    ListLakeSymbols(ListLakeSymbolsRequest),
+    ReadLakeCandles(ReadLakeCandlesRequest),
+    BenchmarkCompute(BenchmarkComputeRequest),
+    EvaluateScanGateStateless(EvaluateScanGateStatelessRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -224,6 +228,9 @@ pub enum SidecarResponse {
     PersistCandles(PersistCandlesResponse),
     Watchlist(WatchlistResponse),
     ScanGate(ScanGateResponse),
+    LakeSymbols(LakeSymbolsResponse),
+    LakeCandles(LakeCandlesResponse),
+    BenchmarkCompute(BenchmarkComputeResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {

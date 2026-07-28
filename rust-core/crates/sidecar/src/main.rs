@@ -1,9 +1,11 @@
 use sidecar::handlers::{
-    handle_add_watchlist_symbol, handle_evaluate_scan_gate, handle_list_watchlist, handle_persist,
-    handle_remove_watchlist_symbol, handle_request,
+    handle_add_watchlist_symbol, handle_benchmark_compute, handle_evaluate_scan_gate,
+    handle_evaluate_scan_gate_stateless, handle_list_lake_symbols, handle_list_watchlist,
+    handle_persist, handle_read_lake_candles, handle_remove_watchlist_symbol, handle_request,
 };
 use sidecar::protocol::{
-    empty_response, encode_response, parse_request, PersistCandlesResponse, ScanGateResponse,
+    benchmark_empty_response, empty_response, encode_response, parse_request,
+    LakeCandlesResponse, LakeSymbolsResponse, PersistCandlesResponse, ScanGateResponse,
     SidecarRequest, SidecarResponse, WatchlistResponse,
 };
 use std::io::{self, BufRead, Write};
@@ -156,6 +158,63 @@ fn main() {
                         }
                     }
                     None => SidecarResponse::ScanGate(ScanGateResponse { id, decision: "NoChange".to_string(), error: Some("no --lake-root configured".to_string()) }),
+                }
+            }
+            SidecarRequest::ListLakeSymbols(request) => {
+                let id = request.id;
+                match store.as_ref() {
+                    Some(store) => {
+                        let result = panic::catch_unwind(AssertUnwindSafe(|| handle_list_lake_symbols(store, request)));
+                        match result {
+                            Ok(response) => SidecarResponse::LakeSymbols(response),
+                            Err(_) => {
+                                eprintln!("sidecar: list_lake_symbols request {id} panicked");
+                                SidecarResponse::LakeSymbols(LakeSymbolsResponse { id, entries: Vec::new(), error: Some("list_lake_symbols panicked".to_string()) })
+                            }
+                        }
+                    }
+                    None => SidecarResponse::LakeSymbols(LakeSymbolsResponse { id, entries: Vec::new(), error: Some("no --lake-root configured".to_string()) }),
+                }
+            }
+            SidecarRequest::ReadLakeCandles(request) => {
+                let id = request.id;
+                match store.as_ref() {
+                    Some(store) => {
+                        let result = panic::catch_unwind(AssertUnwindSafe(|| handle_read_lake_candles(store, request)));
+                        match result {
+                            Ok(response) => SidecarResponse::LakeCandles(response),
+                            Err(_) => {
+                                eprintln!("sidecar: read_lake_candles request {id} panicked");
+                                SidecarResponse::LakeCandles(LakeCandlesResponse { id, candles: Vec::new(), error: Some("read_lake_candles panicked".to_string()) })
+                            }
+                        }
+                    }
+                    None => SidecarResponse::LakeCandles(LakeCandlesResponse { id, candles: Vec::new(), error: Some("no --lake-root configured".to_string()) }),
+                }
+            }
+            SidecarRequest::BenchmarkCompute(request) => {
+                // Needs no store: it always answers, computing purely from the
+                // request's candles. A panic falls back to a zeroed response.
+                let id = request.id;
+                let result = panic::catch_unwind(AssertUnwindSafe(|| handle_benchmark_compute(request)));
+                match result {
+                    Ok(response) => SidecarResponse::BenchmarkCompute(response),
+                    Err(_) => {
+                        eprintln!("sidecar: benchmark_compute request {id} panicked; returning a zeroed response");
+                        SidecarResponse::BenchmarkCompute(benchmark_empty_response(id))
+                    }
+                }
+            }
+            SidecarRequest::EvaluateScanGateStateless(request) => {
+                // Needs no store (pure): it always answers.
+                let id = request.id;
+                let result = panic::catch_unwind(AssertUnwindSafe(|| handle_evaluate_scan_gate_stateless(request)));
+                match result {
+                    Ok(response) => SidecarResponse::ScanGate(response),
+                    Err(_) => {
+                        eprintln!("sidecar: evaluate_scan_gate_stateless request {id} panicked");
+                        SidecarResponse::ScanGate(ScanGateResponse { id, decision: "NoChange".to_string(), error: Some("evaluate_scan_gate_stateless panicked".to_string()) })
+                    }
                 }
             }
         };

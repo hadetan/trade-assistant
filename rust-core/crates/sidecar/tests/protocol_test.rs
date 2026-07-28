@@ -295,3 +295,89 @@ fn benchmark_compute_response_serializes_and_empty_helper_is_zeroed() {
     .unwrap();
     assert!(json.contains("\"id\":22"));
 }
+
+#[test]
+fn parses_a_tagged_list_lake_symbols_request() {
+    match parse_request(r#"{"type":"list_lake_symbols","id":20}"#).unwrap() {
+        SidecarRequest::ListLakeSymbols(request) => assert_eq!(request.id, 20),
+        _ => panic!("expected a list_lake_symbols request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_read_lake_candles_request() {
+    match parse_request(r#"{"type":"read_lake_candles","id":21,"symbol":"NSE:INFY","timeframe":"day","source":"bhavcopy"}"#).unwrap() {
+        SidecarRequest::ReadLakeCandles(request) => {
+            assert_eq!(request.id, 21);
+            assert_eq!(request.source, "bhavcopy");
+        }
+        _ => panic!("expected a read_lake_candles request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_benchmark_compute_request() {
+    match parse_request(
+        r#"{"type":"benchmark_compute","id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#,
+    )
+    .unwrap()
+    {
+        SidecarRequest::BenchmarkCompute(request) => {
+            assert_eq!(request.id, 22);
+            assert_eq!(request.candles.len(), 1);
+        }
+        _ => panic!("expected a benchmark_compute request"),
+    }
+}
+
+#[test]
+fn parses_a_tagged_evaluate_scan_gate_stateless_request() {
+    match parse_request(
+        r#"{"type":"evaluate_scan_gate_stateless","id":23,"prev":null,"curr":{"bullish_count":5,"bearish_count":2,"neutral_count":10,"weighted_vote":0.12}}"#,
+    )
+    .unwrap()
+    {
+        SidecarRequest::EvaluateScanGateStateless(request) => {
+            assert_eq!(request.id, 23);
+            assert!(request.prev.is_none());
+        }
+        _ => panic!("expected an evaluate_scan_gate_stateless request"),
+    }
+}
+
+#[test]
+fn encodes_a_tagged_lake_symbols_response() {
+    let line = encode_response(&SidecarResponse::LakeSymbols(LakeSymbolsResponse {
+        id: 20,
+        entries: vec![LakeSymbolWire {
+            symbol: "NSE:INFY".to_string(),
+            timeframe: "day".to_string(),
+            source: "bhavcopy".to_string(),
+            from_ts: 1_690_000_000,
+            to_ts: 1_710_000_000,
+            candle_count: 240,
+        }],
+        error: None,
+    }));
+    assert!(!line.contains('\n'));
+    assert!(line.contains("\"type\":\"lake_symbols\""));
+    assert!(line.contains("\"candle_count\":240"));
+}
+
+#[test]
+fn encodes_a_tagged_lake_candles_response() {
+    let line = encode_response(&SidecarResponse::LakeCandles(LakeCandlesResponse {
+        id: 21,
+        candles: vec![CandleWire { ts: 1_710_000_000, open: 1.0, high: 2.0, low: 0.5, close: 1.5, volume: 100 }],
+        error: None,
+    }));
+    assert!(line.contains("\"type\":\"lake_candles\""));
+    assert!(line.contains("\"volume\":100"));
+}
+
+#[test]
+fn encodes_a_tagged_benchmark_compute_response() {
+    let line = encode_response(&SidecarResponse::BenchmarkCompute(benchmark_empty_response(22)));
+    assert!(line.contains("\"type\":\"benchmark_compute\""));
+    assert!(line.contains("\"id\":22"));
+}
