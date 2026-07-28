@@ -1,4 +1,4 @@
-import type { KiteConfig, KiteMcpOnlyConfig } from "./kiteConfig";
+import type { KiteFullConfig, KiteMcpOnlyConfig } from "./kiteConfig";
 import { captureRequestToken, exchangeAccessToken } from "./kiteOAuth";
 import { KiteClient } from "./kiteClient";
 import { connectKiteMcp, connectKiteMcpOAuth } from "./mcpConnection";
@@ -7,7 +7,7 @@ import { checkKiteToolDrift } from "./mcpDriftMonitor";
 import type { DriftResult, ToolListing } from "./mcpDriftMonitor";
 
 export interface KiteLoginDeps {
-  config: KiteConfig;
+  config: KiteFullConfig;
   captureRequestToken: typeof captureRequestToken;
   exchangeAccessToken: typeof exchangeAccessToken;
   postForm: (url: string, form: Record<string, string>) => Promise<unknown>;
