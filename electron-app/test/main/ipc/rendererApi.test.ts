@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
-  it("exposes exactly the thirteen bridge methods and never leaks the raw transport", () => {
+  it("exposes exactly the twelve bridge methods and never leaks the raw transport", () => {
     const api = buildRendererApi(vi.fn().mockResolvedValue({}), vi.fn());
     expect(Object.keys(api).sort()).toEqual([
       "copyBenchmarkResult",
@@ -13,7 +13,6 @@ describe("buildRendererApi", () => {
       "listSessions",
       "login",
       "onBanner",
-      "onNarrative",
       "onTrace",
       "runAnalysis",
       "runBenchmark",
@@ -63,27 +62,12 @@ describe("buildRendererApi", () => {
   });
 });
 
-describe("buildRendererApi narrative wiring", () => {
-  it("subscribes onTrace and the onNarrative adapter to analysis:trace", () => {
+describe("buildRendererApi trace wiring", () => {
+  it("subscribes onTrace to analysis:trace", () => {
     const subscribe = vi.fn();
-    const api = buildRendererApi(vi.fn(), subscribe);
-    api.onTrace(vi.fn());
-    expect(subscribe).toHaveBeenLastCalledWith("analysis:trace", expect.any(Function));
-    const narrHandler = vi.fn();
-    api.onNarrative(narrHandler);
-    const adapter = subscribe.mock.calls.at(-1)![1] as (p: unknown) => void;
-    adapter({ requestId: "r1", source: "narrative", kind: "token", detail: "hi", at: "t" });
-    adapter({ requestId: "r1", source: "intake", kind: "started", at: "t" }); // ignored
-    expect(narrHandler).toHaveBeenCalledTimes(1);
-    expect(narrHandler).toHaveBeenCalledWith({ requestId: "r1", chunk: "hi" });
-
-    adapter({ requestId: "r1", source: "narrative", kind: "done", at: "t" });
-    expect(narrHandler).toHaveBeenLastCalledWith({ requestId: "r1", done: true });
-
-    adapter({ requestId: "r1", source: "narrative", kind: "error", detail: "boom", at: "t" });
-    expect(narrHandler).toHaveBeenLastCalledWith({ requestId: "r1", error: "boom" });
-
-    expect(narrHandler).toHaveBeenCalledTimes(3);
+    const handler = vi.fn();
+    buildRendererApi(vi.fn(), subscribe).onTrace(handler);
+    expect(subscribe).toHaveBeenCalledWith("analysis:trace", handler);
   });
 
   it("routes an ai_assisted run through analysis:run", async () => {
@@ -113,4 +97,3 @@ describe("buildRendererApi history wiring", () => {
     expect(invoke).toHaveBeenCalledWith("history:getSession", { id: "s1" });
   });
 });
-

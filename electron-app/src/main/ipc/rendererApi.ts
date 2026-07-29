@@ -90,19 +90,11 @@ export interface TraceEvent {
 export type TraceEventInput = Pick<TraceEvent, "source" | "kind"> & { detail?: string };
 export type TraceEmitter = (event: TraceEventInput) => void;
 
-export interface NarrativeEvent {
-  requestId: string;
-  chunk?: string;
-  done?: boolean;
-  error?: string;
-}
-
 export type LoginResult = { status: "authenticated" } | { status: "error"; message: string };
 
 export interface RendererApi {
   getStatus(): Promise<AppStatus>;
   onBanner(handler: (banner: BannerEvent) => void): void;
-  onNarrative(handler: (event: NarrativeEvent) => void): void;
   onTrace(handler: (event: TraceEvent) => void): void;
   login(): Promise<LoginResult>;
   searchInstruments(query: string): Promise<unknown>;
@@ -123,14 +115,6 @@ export function buildRendererApi(
     getStatus: () => invoke("status:get") as Promise<AppStatus>,
     onBanner: (handler) => subscribe("banner:push", handler as (payload: unknown) => void),
     onTrace: (handler) => subscribe("analysis:trace", handler as (p: unknown) => void),
-    onNarrative: (handler) =>
-      subscribe("analysis:trace", (payload) => {
-        const e = payload as TraceEvent;
-        if (e.source !== "narrative") return;
-        if (e.kind === "token") handler({ requestId: e.requestId, chunk: e.detail });
-        else if (e.kind === "done") handler({ requestId: e.requestId, done: true });
-        else if (e.kind === "error") handler({ requestId: e.requestId, error: e.detail });
-      }),
     login: () => invoke("kite:login") as Promise<LoginResult>,
     searchInstruments: (query) => invoke("kite:searchInstruments", { query }),
     runAnalysis: (params) => invoke("analysis:run", params) as Promise<AnalysisResult>,
