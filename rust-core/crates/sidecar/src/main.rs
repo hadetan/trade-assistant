@@ -99,6 +99,9 @@ fn main() {
         let response = match request {
             SidecarRequest::Compute(compute) => {
                 let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    // A panic here leaves this algo's "running" callback without a matching
+                    // "done" -- catch_unwind still recovers and the request-level "done" bracket
+                    // below still closes, so that (or the response arriving) is the reliable signal.
                     handle_request_with_progress(compute, &mut |algo_id, done| {
                         let status = if done { "done" } else { "running" };
                         writeln!(stdout, "{}", encode_progress(id, algo_id, status)).expect("stdout must be writable");
