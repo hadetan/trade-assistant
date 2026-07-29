@@ -33,11 +33,12 @@ const validFinding = {
 
 function baseSpec() {
   return {
-    name: "technical_quant",
+    name: "technical_quant" as const,
     systemPrompt: "sys",
     jsonSchema: personaFindingJsonSchema,
     schema: personaFindingSchema,
     prompt: "user prompt",
+    timeoutMs: 120000,
   };
 }
 
@@ -85,16 +86,21 @@ describe("makeClaudeRunner", () => {
     );
   });
 
-  it("kills the child and rejects on timeout", async () => {
-    const children: FakeChild[] = [];
+  it("trips each spec's own timeoutMs and names the persona", async () => {
     const spawnFn = () => {
-      const child = new FakeChild();
-      children.push(child);
-      return child as never; // never emits a result
+      const c = new FakeChild();
+      return c as never; // never emits
     };
-    const run = makeClaudeRunner({ spawnFn, personaTimeoutMs: 15 });
-    await expect(run(baseSpec())).rejects.toThrow(/persona technical_quant timed out after 15ms/);
-    expect(children[0].killed).toBe(true);
+    const run = makeClaudeRunner({ spawnFn });
+    await expect(run({ ...baseSpec(), timeoutMs: 15 })).rejects.toThrow(/persona technical_quant timed out after 15ms/);
+  });
+
+  it("exposes the P9A§6 default timeout table", async () => {
+    const { PERSONA_TIMEOUTS_MS } = await import("../../../../src/main/services/claude/claudeCliProvider");
+    expect(PERSONA_TIMEOUTS_MS).toEqual({
+      sidecar: 20000, intake: 20000, options_greeks: 45000, technical_quant: 45000,
+      position_risk: 45000, synthesis: 25000, narrative: 60000,
+    });
   });
 
   it("kills the child and rejects when the caller aborts", async () => {

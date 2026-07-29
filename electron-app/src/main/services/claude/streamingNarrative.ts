@@ -8,6 +8,7 @@ export interface NarrativeStreamSpec {
   systemPrompt: string;
   prompt: string;
   onToken: (text: string) => void;
+  timeoutMs: number;
   signal?: AbortSignal;
   claudeSessionId?: string;
   resumeSession?: boolean;
@@ -15,10 +16,7 @@ export interface NarrativeStreamSpec {
 
 export interface NarrativeStreamerOptions {
   spawnFn?: SpawnFn;
-  timeoutMs?: number;
 }
-
-const DEFAULT_NARRATIVE_TIMEOUT_MS = 180000;
 
 interface StreamLine {
   type: string;
@@ -31,7 +29,6 @@ export function makeNarrativeStreamer(
   options: NarrativeStreamerOptions = {},
 ): (spec: NarrativeStreamSpec) => Promise<string> {
   const spawnFn = options.spawnFn ?? ((command, args) => spawn(command, args));
-  const timeoutMs = options.timeoutMs ?? DEFAULT_NARRATIVE_TIMEOUT_MS;
 
   return (spec: NarrativeStreamSpec): Promise<string> => {
     if (spec.signal?.aborted) return Promise.reject(new Error("narrative aborted"));
@@ -75,7 +72,7 @@ export function makeNarrativeStreamer(
         resolve(text);
       };
 
-      timer = setTimeout(() => fail(new Error(`narrative timed out after ${timeoutMs}ms`)), timeoutMs);
+      timer = setTimeout(() => fail(new Error(`narrative timed out after ${spec.timeoutMs}ms`)), spec.timeoutMs);
       onAbort = () => fail(new Error("narrative aborted"));
       spec.signal?.addEventListener("abort", onAbort);
 

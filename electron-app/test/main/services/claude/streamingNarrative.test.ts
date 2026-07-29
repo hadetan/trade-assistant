@@ -20,7 +20,7 @@ function delta(text: string): string {
   });
 }
 
-const baseSpec = (onToken: (t: string) => void) => ({ systemPrompt: "sys", prompt: "explain", onToken });
+const baseSpec = (onToken: (t: string) => void) => ({ systemPrompt: "sys", prompt: "explain", onToken, timeoutMs: 180000 });
 
 describe("makeNarrativeStreamer", () => {
   it("fires onToken per text_delta in order and resolves with the terminal result text", async () => {
@@ -93,9 +93,9 @@ describe("makeNarrativeStreamer", () => {
     await expect(pending).rejects.toThrow(/exited with code 1/);
   });
 
-  it("rejects and kills the child on timeout", async () => {
+  it("rejects and kills the child on its spec timeoutMs", async () => {
     const child = new FakeChild();
-    const pending = makeNarrativeStreamer({ spawnFn: () => child as never, timeoutMs: 15 })(baseSpec(() => {}));
+    const pending = makeNarrativeStreamer({ spawnFn: () => child as never })({ ...baseSpec(() => {}), timeoutMs: 15 });
     await expect(pending).rejects.toThrow(/timed out after 15ms/);
     expect(child.killed).toBe(true);
   });

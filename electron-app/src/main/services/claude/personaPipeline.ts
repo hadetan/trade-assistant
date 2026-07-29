@@ -8,7 +8,7 @@ import {
   type PersonaName,
   type Verdict,
 } from "../analysis/contracts";
-import type { PersonaRunner } from "./claudeCliProvider";
+import { PERSONA_TIMEOUTS_MS, type PersonaRunner } from "./claudeCliProvider";
 
 export interface PersonaPrompt {
   systemPrompt: string;
@@ -96,6 +96,7 @@ export async function runPersonaPipeline(
           jsonSchema: persona.prompt.outputSchema,
           schema: personaFindingSchema,
           prompt: persona.userPrompt,
+          timeoutMs: PERSONA_TIMEOUTS_MS[persona.name],
           signal: controller.signal,
           allowWebTools: true,
         }),
@@ -112,6 +113,7 @@ export async function runPersonaPipeline(
     jsonSchema: deps.prompts.synthesis.outputSchema,
     schema: verdictSchema,
     prompt: synthesisUserPrompt(envelope, findings),
+    timeoutMs: PERSONA_TIMEOUTS_MS.synthesis,
   });
 
   if (!citedIdsWithinEnvelope(verdict.cited_algo_ids, envelope)) {

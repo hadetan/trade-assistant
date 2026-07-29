@@ -12,15 +12,17 @@ import { technicalQuant } from "./systemPrompts/technicalQuant";
 import { positionRisk } from "./systemPrompts/positionRisk";
 import { synthesis } from "./systemPrompts/synthesis";
 import { narrative } from "./systemPrompts/narrative";
+import type { TraceSource } from "../../ipc/rendererApi";
 
 type SpawnFn = (command: string, args: string[]) => ChildProcess;
 
 export interface PersonaRunSpec<T> {
-  name: string;
+  name: TraceSource;
   systemPrompt: string;
   jsonSchema: object;
   schema: ZodType<T>;
   prompt: string;
+  timeoutMs: number;
   signal?: AbortSignal;
   allowWebTools?: boolean;
 }
@@ -29,10 +31,17 @@ export type PersonaRunner = <T>(spec: PersonaRunSpec<T>) => Promise<T>;
 
 export interface ClaudeRunnerOptions {
   spawnFn?: SpawnFn;
-  personaTimeoutMs?: number;
 }
 
-const DEFAULT_PERSONA_TIMEOUT_MS = 120000;
+export const PERSONA_TIMEOUTS_MS: Record<TraceSource, number> = {
+  sidecar: 20000, // used by P9A§7's compute bound, kept here for co-location
+  intake: 20000,
+  options_greeks: 45000,
+  technical_quant: 45000,
+  position_risk: 45000,
+  synthesis: 25000,
+  narrative: 60000,
+};
 
 function readResult(child: ChildProcess): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -60,7 +69,6 @@ function readResult(child: ChildProcess): Promise<unknown> {
 // through spawnClaude (Task 7), so the allowlist/denylist cannot be bypassed.
 export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunner {
   const spawnFn = options.spawnFn ?? ((command, args) => spawn(command, args));
-  const personaTimeoutMs = options.personaTimeoutMs ?? DEFAULT_PERSONA_TIMEOUT_MS;
 
   return async <T>(spec: PersonaRunSpec<T>): Promise<T> => {
     const attempt = async (prompt: string): Promise<{ ok: true; value: T } | { ok: false; error: string }> => {
@@ -84,9 +92,9 @@ export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunn
       // swallow the timeout/abort rejection.
       const guard = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          reject(new Error(`persona ${spec.name} timed out after ${personaTimeoutMs}ms`));
+          reject(new Error(`persona ${spec.name} timed out after ${spec.timeoutMs}ms`));
           child.kill();
-        }, personaTimeoutMs);
+        }, spec.timeoutMs);
         onAbort = () => {
           reject(new Error(`persona ${spec.name} aborted`));
           child.kill();
@@ -125,8 +133,6 @@ const DEFAULT_PROMPTS: PipelinePrompts = {
 
 export interface ClaudeCliProviderOptions {
   spawnFn?: SpawnFn;
-  personaTimeoutMs?: number;
-  narrativeTimeoutMs?: number;
   streamNarrative?: (spec: NarrativeStreamSpec) => Promise<string>;
 }
 
@@ -135,9 +141,8 @@ export class ClaudeCliProvider implements Provider, AiAssistedProvider {
   private readonly streamNarrative: (spec: NarrativeStreamSpec) => Promise<string>;
 
   constructor(options: ClaudeCliProviderOptions = {}) {
-    this.runPersona = makeClaudeRunner({ spawnFn: options.spawnFn, personaTimeoutMs: options.personaTimeoutMs });
-    this.streamNarrative =
-      options.streamNarrative ?? makeNarrativeStreamer({ spawnFn: options.spawnFn, timeoutMs: options.narrativeTimeoutMs });
+    this.runPersona = makeClaudeRunner({ spawnFn: options.spawnFn });
+    this.streamNarrative = options.streamNarrative ?? makeNarrativeStreamer({ spawnFn: options.spawnFn });
   }
 
   complete(envelope: AnalysisEnvelope): Promise<Verdict> {
@@ -158,6 +163,7 @@ export class ClaudeCliProvider implements Provider, AiAssistedProvider {
       systemPrompt: narrative.systemPrompt,
       prompt: narrativePrompt(verdict, findings, envelope.intent_lens, opts.researchNotes),
       onToken: opts.onNarrativeToken,
+      timeoutMs: PERSONA_TIMEOUTS_MS.narrative,
       signal: opts.signal,
       claudeSessionId: opts.claudeSessionId,
       resumeSession: opts.resumeSession,
