@@ -20,14 +20,42 @@ function delta(text: string): string {
   });
 }
 
-const baseSpec = (onToken: (t: string) => void) => ({ systemPrompt: "sys", prompt: "explain", onToken });
+const baseSpec = (onTrace: (e: { source: string; kind: string; detail?: string }) => void) =>
+  ({ systemPrompt: "sys", prompt: "explain", onTrace, timeoutMs: 180000 });
 
 describe("makeNarrativeStreamer", () => {
-  it("fires onToken per text_delta in order and resolves with the terminal result text", async () => {
+  it("emits started, a token per delta, and done on success, and returns the final text", async () => {
+    const events: Array<{ kind: string; detail?: string }> = [];
+    const child = new FakeChild();
+    const run = makeNarrativeStreamer({ spawnFn: () => child as never });
+    const pending = run(baseSpec((e) => events.push(e)));
+    child.stdout.write(`${delta("Bank")}\n${delta(" Nifty")}\n`);
+    child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Bank Nifty" })}\n`);
+    child.emit("exit", 0, null);
+    await expect(pending).resolves.toBe("Bank Nifty");
+    expect(events.map((e) => e.kind)).toEqual(["started", "token", "token", "done"]);
+    expect(events.filter((e) => e.kind === "token").map((e) => e.detail)).toEqual(["Bank", " Nifty"]);
+  });
+
+  it("emits started then error (before reject) on a non-zero exit", async () => {
+    const events: Array<{ kind: string; detail?: string }> = [];
+    const child = new FakeChild();
+    const pending = makeNarrativeStreamer({ spawnFn: () => child as never })(baseSpec((e) => events.push(e)));
+    child.emit("exit", 1, null);
+    await expect(pending).rejects.toThrow(/exited with code 1/);
+    expect(events[0].kind).toBe("started");
+    expect(events.at(-1)).toMatchObject({ kind: "error" });
+  });
+
+  it("fires a token trace event per text_delta in order and resolves with the terminal result text", async () => {
     const tokens: string[] = [];
     const child = new FakeChild();
     const run = makeNarrativeStreamer({ spawnFn: () => child as never });
-    const pending = run(baseSpec((t) => tokens.push(t)));
+    const pending = run(
+      baseSpec((e) => {
+        if (e.kind === "token" && e.detail !== undefined) tokens.push(e.detail);
+      }),
+    );
     child.stdout.write(`${JSON.stringify({ type: "system", subtype: "init" })}\n`);
     child.stdout.write(`${delta("Bank")}\n${delta(" Nifty")}\n`);
     child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Bank Nifty full text" })}\n`);
@@ -40,7 +68,11 @@ describe("makeNarrativeStreamer", () => {
     const tokens: string[] = [];
     const child = new FakeChild();
     const run = makeNarrativeStreamer({ spawnFn: () => child as never });
-    const pending = run(baseSpec((t) => tokens.push(t)));
+    const pending = run(
+      baseSpec((e) => {
+        if (e.kind === "token" && e.detail !== undefined) tokens.push(e.detail);
+      }),
+    );
     const line = delta("Hello");
     child.stdout.write(line.slice(0, 20));
     child.stdout.write(`${line.slice(20)}\n${JSON.stringify({ type: "result", subtype: "success", result: "Hello" })}\n`);
@@ -53,7 +85,11 @@ describe("makeNarrativeStreamer", () => {
     const tokens: string[] = [];
     const child = new FakeChild();
     const run = makeNarrativeStreamer({ spawnFn: () => child as never });
-    const pending = run(baseSpec((t) => tokens.push(t)));
+    const pending = run(
+      baseSpec((e) => {
+        if (e.kind === "token" && e.detail !== undefined) tokens.push(e.detail);
+      }),
+    );
     child.stdout.write(`${delta("Bank")}\nnot valid json\n${delta(" Nifty")}\n`);
     child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Bank Nifty" })}\n`);
     child.emit("exit", 0, null);
@@ -61,14 +97,15 @@ describe("makeNarrativeStreamer", () => {
     expect(tokens).toEqual(["Bank", " Nifty"]);
   });
 
-  it("swallows a throwing onToken and still processes subsequent tokens and the terminal result", async () => {
+  it("swallows a throwing onTrace token handler and still processes subsequent tokens and the terminal result", async () => {
     const tokens: string[] = [];
     const child = new FakeChild();
     const run = makeNarrativeStreamer({ spawnFn: () => child as never });
     const pending = run(
-      baseSpec((t) => {
-        tokens.push(t);
-        if (t === "Bank") throw new Error("onToken boom");
+      baseSpec((e) => {
+        if (e.kind !== "token" || e.detail === undefined) return;
+        tokens.push(e.detail);
+        if (e.detail === "Bank") throw new Error("onTrace boom");
       }),
     );
     child.stdout.write(`${delta("Bank")}\n${delta(" Nifty")}\n`);
@@ -86,16 +123,9 @@ describe("makeNarrativeStreamer", () => {
     await expect(pending).rejects.toThrow(/without a terminal result/);
   });
 
-  it("rejects on a non-zero exit", async () => {
+  it("rejects and kills the child on its spec timeoutMs", async () => {
     const child = new FakeChild();
-    const pending = makeNarrativeStreamer({ spawnFn: () => child as never })(baseSpec(() => {}));
-    child.emit("exit", 1, null);
-    await expect(pending).rejects.toThrow(/exited with code 1/);
-  });
-
-  it("rejects and kills the child on timeout", async () => {
-    const child = new FakeChild();
-    const pending = makeNarrativeStreamer({ spawnFn: () => child as never, timeoutMs: 15 })(baseSpec(() => {}));
+    const pending = makeNarrativeStreamer({ spawnFn: () => child as never })({ ...baseSpec(() => {}), timeoutMs: 15 });
     await expect(pending).rejects.toThrow(/timed out after 15ms/);
     expect(child.killed).toBe(true);
   });

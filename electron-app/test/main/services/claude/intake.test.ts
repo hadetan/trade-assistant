@@ -38,4 +38,15 @@ describe("runIntake", () => {
     };
     await expect(runIntake({ runPersona }, "q")).rejects.toThrow(/failed to produce valid structured output/);
   });
+
+  it("threads onTrace onto the intake spec", async () => {
+    let captured: PersonaRunSpec<unknown> | undefined;
+    const runPersona: PersonaRunner = vi.fn(async (spec) => {
+      captured = spec;
+      return validIntake as never;
+    });
+    const onTrace = vi.fn();
+    await runIntake({ runPersona }, "q", { onTrace });
+    expect(captured?.onTrace).toBe(onTrace);
+  });
 });

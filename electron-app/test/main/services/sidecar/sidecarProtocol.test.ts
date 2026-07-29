@@ -6,6 +6,7 @@ import type {
   LakeCandlesResponseWire,
   LakeSymbolsResponseWire,
   ScanGateResponseWire,
+  SidecarProgressWire,
   WatchlistResponseWire,
 } from "../../../../src/main/services/sidecar/sidecarProtocol";
 
@@ -113,5 +114,16 @@ describe("benchmark + lake wire shapes", () => {
       '{"type":"benchmark_compute","id":22,"algo_results":[],"confluence":{"bullish_count":3,"bearish_count":1,"neutral_count":8,"weighted_vote":0.18}}',
     ) as BenchmarkComputeResponseWire;
     expect(bench.confluence.weighted_vote).toBe(0.18);
+  });
+});
+
+describe("SidecarProgressWire", () => {
+  it("decodes a progress line carrying a request-step or an algorithm id in the same step field", () => {
+    const req = JSON.parse('{"type":"progress","id":3,"step":"compute","status":"running"}') as SidecarProgressWire;
+    expect(req.type).toBe("progress");
+    expect(req.step).toBe("compute");
+    expect(req.status).toBe("running");
+    const algo = JSON.parse('{"type":"progress","id":3,"step":"rsi","status":"done"}') as SidecarProgressWire;
+    expect(algo.step).toBe("rsi");
   });
 });

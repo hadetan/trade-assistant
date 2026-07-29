@@ -36,8 +36,7 @@ describe("ClaudeCliProvider.complete (end-to-end, scripted subprocess)", () => {
       const child = new FakeChild();
       const structuredOutput = isSynthesis(args) ? verdict : finding;
       queueMicrotask(() => {
-        child.stdout.write(JSON.stringify({ result: "ok", structured_output: structuredOutput }));
-        child.stdout.end();
+        child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(structuredOutput) })}\n`);
         child.emit("exit", 0, null);
       });
       return child as never;

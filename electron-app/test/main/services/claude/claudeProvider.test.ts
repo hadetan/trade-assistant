@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "../../../../src/main/services/kite/kiteClient";
 import { KITE_READ_TOOL_ALLOWLIST, KITE_WRITE_TOOL_DENYLIST, buildClaudeArgs, spawnClaude } from "../../../../src/main/services/claude/claudeProvider";
 import { WEB_TOOL_NAMES, WEB_TOOL_ALLOWLIST } from "../../../../src/main/services/claude/claudeProvider";
+import { PERSONA_MODEL } from "../../../../src/main/services/claude/claudeProvider";
 
 describe("claude subprocess scaffolding", () => {
   it("allowlists exactly KiteClient's own read tool set and nothing else", () => {
@@ -28,6 +29,8 @@ describe("claude subprocess scaffolding", () => {
       "--disallowedTools",
       KITE_WRITE_TOOL_DENYLIST,
       "--strict-mcp-config",
+      "--model",
+      "claude-haiku-4-5-20251001",
       "--print",
       "analyze INFY",
     ]);
@@ -112,6 +115,8 @@ describe("web-tool allowlist extension (additive, closed set)", () => {
       "--disallowedTools",
       KITE_WRITE_TOOL_DENYLIST,
       "--strict-mcp-config",
+      "--model",
+      "claude-haiku-4-5-20251001",
       "--print",
       "analyze INFY",
     ]);
@@ -183,5 +188,57 @@ describe("session continuity flags (--session-id vs --resume)", () => {
       expect(args[4]).toBe("--strict-mcp-config");
       expect(args.slice(-2)).toEqual(["--print", "p"]);
     }
+  });
+});
+
+describe("--verbose derivation for stream-json (CLI requirement)", () => {
+  it("adds --verbose whenever stream-json output is requested", () => {
+    const args = buildClaudeArgs("p", { outputFormat: "stream-json" });
+    expect(args).toContain("--verbose");
+  });
+
+  it("does not add --verbose for buffered json output or when outputFormat is omitted", () => {
+    expect(buildClaudeArgs("p", { outputFormat: "json" })).not.toContain("--verbose");
+    expect(buildClaudeArgs("p", {})).not.toContain("--verbose");
+    expect(buildClaudeArgs("p")).not.toContain("--verbose");
+  });
+
+  it("leaves the safety flags and --model byte-identical whether or not --verbose is emitted", () => {
+    const jsonArgs = buildClaudeArgs("p", { outputFormat: "json" });
+    const streamArgs = buildClaudeArgs("p", { outputFormat: "stream-json" });
+    const safetyPrefix = [
+      "--allowedTools",
+      KITE_READ_TOOL_ALLOWLIST,
+      "--disallowedTools",
+      KITE_WRITE_TOOL_DENYLIST,
+      "--strict-mcp-config",
+      "--model",
+      PERSONA_MODEL,
+    ];
+    expect(jsonArgs.slice(0, 7)).toEqual(safetyPrefix);
+    expect(streamArgs.slice(0, 7)).toEqual(safetyPrefix);
+  });
+});
+
+describe("uniform model flag", () => {
+  it("defaults --model to Haiku 4.5 right after the three safety flags", () => {
+    expect(PERSONA_MODEL).toBe("claude-haiku-4-5-20251001");
+    const args = buildClaudeArgs("analyze INFY");
+    expect(args.slice(0, 6)).toEqual([
+      "--allowedTools", KITE_READ_TOOL_ALLOWLIST,
+      "--disallowedTools", KITE_WRITE_TOOL_DENYLIST,
+      "--strict-mcp-config",
+      "--model",
+    ]);
+    expect(args[args.indexOf("--model") + 1]).toBe("claude-haiku-4-5-20251001");
+    expect(args.slice(-2)).toEqual(["--print", "analyze INFY"]);
+  });
+
+  it("honours a test-only model override without touching the tool flags", () => {
+    const args = buildClaudeArgs("p", { model: "some-other-model" });
+    expect(args[args.indexOf("--model") + 1]).toBe("some-other-model");
+    expect(args[0]).toBe("--allowedTools");
+    expect(args[2]).toBe("--disallowedTools");
+    expect(args[3]).toBe(KITE_WRITE_TOOL_DENYLIST);
   });
 });

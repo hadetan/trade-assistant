@@ -8,7 +8,10 @@ use crate::protocol::{
 };
 use algo_core::confluence::{compute_confluence, ScorecardSummary};
 use algo_core::scan_gate::{evaluate_scan_gate, GateThresholds};
-use algo_core::{registry::{self, run_applicable}, AlgoOutput, Horizon, MarketContext, Timeframe};
+use algo_core::{
+    registry::{self, run_applicable, run_applicable_with_progress},
+    AlgoOutput, Horizon, MarketContext, Timeframe,
+};
 use backtest::frontier::context_at;
 use chrono::Utc;
 use std::collections::HashMap;
@@ -86,6 +89,13 @@ fn parse_horizon(s: &str) -> Horizon {
 }
 
 pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
+    handle_request_with_progress(request, &mut |_, _| {})
+}
+
+pub fn handle_request_with_progress(
+    request: ComputeRequest,
+    on_progress: &mut dyn FnMut(&str, bool),
+) -> ComputeResponse {
     let timeframe = match request.timeframe.as_str() {
         "minute" => Timeframe::Minute,
         "5minute" => Timeframe::FiveMinute,
@@ -98,13 +108,13 @@ pub fn handle_request(request: ComputeRequest) -> ComputeResponse {
     let ctx = MarketContext::from_closes(request.symbol.clone(), timeframe, Horizon::Positional, request.closes, Utc::now());
 
     // Route every compute() call through the one shared lookback gate
-    // (algo_core::registry::run_applicable) so the sidecar and the backtest
-    // engine cannot drift on the insufficient-history contract.
+    // (algo_core::registry::run_applicable_with_progress) so the sidecar and
+    // the backtest engine cannot drift on the insufficient-history contract.
     //
     // registry::all_for_binary() is the release-safe algo list (see its doc
     // comment in registry.rs); the sidecar must not use registry::all() alone.
     let algos = registry::all_for_binary();
-    let outputs = run_applicable(&algos, &ctx);
+    let outputs = run_applicable_with_progress(&algos, &ctx, on_progress);
 
     // Phase 1 uses equal weights for every algorithm; a later phase's
     // backtest engine supplies real rolling-hit-rate weights here instead.
@@ -321,6 +331,21 @@ mod tests {
         let response = handle_request(request(1, closes_seq(21)));
 
         assert_eq!(response.algo_results.len(), 30);
+    }
+
+    #[test]
+    fn handle_request_with_progress_brackets_each_algorithm_running_then_done_in_registry_order() {
+        let mut events: Vec<(String, bool)> = Vec::new();
+        let response = handle_request_with_progress(request(1, closes_seq(21)), &mut |id, done| {
+            events.push((id.to_string(), done))
+        });
+        // one running/done pair per produced algo_result, in the same order
+        let expected: Vec<(String, bool)> = response
+            .algo_results
+            .iter()
+            .flat_map(|r| vec![(r.algo_id.clone(), false), (r.algo_id.clone(), true)])
+            .collect();
+        assert_eq!(events, expected);
     }
 
     #[test]

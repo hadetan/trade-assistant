@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import type { Database as DatabaseHandle } from "better-sqlite3";
-import type { AnalysisMode } from "../../ipc/rendererApi";
+import type { AnalysisMode, TraceEvent } from "../../ipc/rendererApi";
 
 export type MessageRole = "user" | "assistant";
 
@@ -17,6 +17,7 @@ export interface HistoryMessage {
   role: MessageRole;
   rendered_text: string;
   structured_payload: unknown;
+  trace: TraceEvent[] | null;
   created_at: string;
 }
 
@@ -31,6 +32,7 @@ export interface AppendMessageParams {
   role: MessageRole;
   renderedText: string;
   structuredPayload?: unknown;
+  trace?: TraceEvent[];
 }
 
 export interface HistoryStoreOptions {
@@ -81,6 +83,7 @@ export class HistoryStore {
          role TEXT NOT NULL,
          rendered_text TEXT NOT NULL,
          structured_payload TEXT,
+         trace TEXT,
          created_at TEXT NOT NULL
        );
        CREATE INDEX IF NOT EXISTS messages_session_id_idx ON messages(session_id);
@@ -92,10 +95,11 @@ export class HistoryStore {
        );
        INSERT OR IGNORE INTO scan_config (id, enabled, interval_minutes) VALUES (1, 0, 15);`,
     );
+    this.ensureColumn("messages", "trace", "TEXT");
 
     const insertMessage = this.db.prepare(
-      `INSERT INTO messages (id, session_id, role, rendered_text, structured_payload, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (id, session_id, role, rendered_text, structured_payload, trace, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
     const bumpSession = this.db.prepare("UPDATE sessions SET last_active_at = ? WHERE id = ?");
     this.appendMessageTxn = this.db.transaction((params: AppendMessageParams, timestamp: string) => {
@@ -105,10 +109,18 @@ export class HistoryStore {
         params.role,
         params.renderedText,
         params.structuredPayload === undefined ? null : JSON.stringify(params.structuredPayload),
+        params.trace === undefined ? null : JSON.stringify(params.trace),
         timestamp,
       );
       bumpSession.run(timestamp, params.sessionId);
     });
+  }
+
+  private ensureColumn(table: string, column: string, type: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === column)) {
+      this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
   }
 
   createSession(mode: AnalysisMode): SessionSummary {
@@ -154,13 +166,14 @@ export class HistoryStore {
     if (!session) return null;
     const rows = this.db
       .prepare(
-        `SELECT role, rendered_text, structured_payload, created_at FROM messages
+        `SELECT role, rendered_text, structured_payload, trace, created_at FROM messages
          WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`,
       )
       .all(id) as Array<{
       role: MessageRole;
       rendered_text: string;
       structured_payload: string | null;
+      trace: string | null;
       created_at: string;
     }>;
     return {
@@ -170,6 +183,7 @@ export class HistoryStore {
         role: row.role,
         rendered_text: row.rendered_text,
         structured_payload: row.structured_payload === null ? null : JSON.parse(row.structured_payload),
+        trace: row.trace === null ? null : (JSON.parse(row.trace) as TraceEvent[]),
         created_at: row.created_at,
       })),
     };

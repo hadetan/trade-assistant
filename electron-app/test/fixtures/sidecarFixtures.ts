@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { vi } from "vitest";
 import type { CandleWire } from "../../src/main/services/sidecar/sidecarProtocol";
 
@@ -34,12 +35,13 @@ export function computeResponse() {
 }
 
 export function mockSidecar() {
-  return {
+  const bus = new EventEmitter();
+  return Object.assign(bus, {
     persistCandles: vi.fn(async (_s: string, _t: string, candles: CandleWire[]) => ({
       type: "persist_candles" as const,
       id: 1,
       written: candles.length,
     })),
     compute: vi.fn(async () => computeResponse()),
-  };
+  });
 }

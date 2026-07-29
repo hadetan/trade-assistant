@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
-  it("exposes exactly the twelve bridge methods and never leaks the raw transport", () => {
+  it("exposes exactly the thirteen bridge methods and never leaks the raw transport", () => {
     const api = buildRendererApi(vi.fn().mockResolvedValue({}), vi.fn());
     expect(Object.keys(api).sort()).toEqual([
       "copyBenchmarkResult",
@@ -14,6 +14,7 @@ describe("buildRendererApi", () => {
       "login",
       "onBanner",
       "onNarrative",
+      "onTrace",
       "runAnalysis",
       "runBenchmark",
       "searchInstruments",
@@ -63,12 +64,26 @@ describe("buildRendererApi", () => {
 });
 
 describe("buildRendererApi narrative wiring", () => {
-  it("subscribes onNarrative to the analysis:narrative push channel", () => {
+  it("subscribes onTrace and the onNarrative adapter to analysis:trace", () => {
     const subscribe = vi.fn();
     const api = buildRendererApi(vi.fn(), subscribe);
-    const handler = vi.fn();
-    api.onNarrative(handler);
-    expect(subscribe).toHaveBeenCalledWith("analysis:narrative", handler);
+    api.onTrace(vi.fn());
+    expect(subscribe).toHaveBeenLastCalledWith("analysis:trace", expect.any(Function));
+    const narrHandler = vi.fn();
+    api.onNarrative(narrHandler);
+    const adapter = subscribe.mock.calls.at(-1)![1] as (p: unknown) => void;
+    adapter({ requestId: "r1", source: "narrative", kind: "token", detail: "hi", at: "t" });
+    adapter({ requestId: "r1", source: "intake", kind: "started", at: "t" }); // ignored
+    expect(narrHandler).toHaveBeenCalledTimes(1);
+    expect(narrHandler).toHaveBeenCalledWith({ requestId: "r1", chunk: "hi" });
+
+    adapter({ requestId: "r1", source: "narrative", kind: "done", at: "t" });
+    expect(narrHandler).toHaveBeenLastCalledWith({ requestId: "r1", done: true });
+
+    adapter({ requestId: "r1", source: "narrative", kind: "error", detail: "boom", at: "t" });
+    expect(narrHandler).toHaveBeenLastCalledWith({ requestId: "r1", error: "boom" });
+
+    expect(narrHandler).toHaveBeenCalledTimes(3);
   });
 
   it("routes an ai_assisted run through analysis:run", async () => {

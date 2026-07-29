@@ -39,18 +39,17 @@ function makeScriptedSpawn(streamArgvs: string[][], jsonArgvs: string[][]) {
     const child = new FakeChild();
     const system = args[args.indexOf("--system-prompt") + 1] ?? "";
     queueMicrotask(() => {
-      if (args.includes("stream-json")) {
-        streamArgvs.push(args);
-        child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Infy is constructive." })}\n`);
+      if (args.includes("--json-schema")) {
+        jsonArgvs.push(args);
+        let structured: unknown = findingOut;
+        if (system.includes("intake")) structured = intakeOut;
+        else if (system.includes("synthesis")) structured = verdictOut;
+        child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(structured) })}\n`);
         child.emit("exit", 0, null);
         return;
       }
-      jsonArgvs.push(args);
-      let structured: unknown = findingOut;
-      if (system.includes("intake")) structured = intakeOut;
-      else if (system.includes("synthesis")) structured = verdictOut;
-      child.stdout.write(`${JSON.stringify({ result: "ok", structured_output: structured })}`);
-      child.stdout.end();
+      streamArgvs.push(args);
+      child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Infy is constructive." })}\n`);
       child.emit("exit", 0, null);
     });
     return child as never;

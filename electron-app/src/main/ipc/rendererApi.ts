@@ -66,6 +66,30 @@ export type AnalysisResult =
       confluence: ConfluenceWire;
     };
 
+export type TraceSource =
+  | "sidecar"
+  | "intake"
+  | "options_greeks"
+  | "technical_quant"
+  | "position_risk"
+  | "synthesis"
+  | "narrative";
+
+export type TraceKind = "started" | "toolCall" | "toolResult" | "token" | "done" | "error";
+
+export interface TraceEvent {
+  requestId: string;
+  source: TraceSource;
+  kind: TraceKind;
+  detail?: string;
+  at: string; // ISO 8601, stamped at emission time
+}
+
+// Main-process-only helper types (never sent over IPC): producers emit
+// unstamped inputs; the concrete emitter adds requestId + at.
+export type TraceEventInput = Pick<TraceEvent, "source" | "kind"> & { detail?: string };
+export type TraceEmitter = (event: TraceEventInput) => void;
+
 export interface NarrativeEvent {
   requestId: string;
   chunk?: string;
@@ -79,6 +103,7 @@ export interface RendererApi {
   getStatus(): Promise<AppStatus>;
   onBanner(handler: (banner: BannerEvent) => void): void;
   onNarrative(handler: (event: NarrativeEvent) => void): void;
+  onTrace(handler: (event: TraceEvent) => void): void;
   login(): Promise<LoginResult>;
   searchInstruments(query: string): Promise<unknown>;
   runAnalysis(params: AnalysisRunParams): Promise<AnalysisResult>;
@@ -97,7 +122,15 @@ export function buildRendererApi(
   return {
     getStatus: () => invoke("status:get") as Promise<AppStatus>,
     onBanner: (handler) => subscribe("banner:push", handler as (payload: unknown) => void),
-    onNarrative: (handler) => subscribe("analysis:narrative", handler as (payload: unknown) => void),
+    onTrace: (handler) => subscribe("analysis:trace", handler as (p: unknown) => void),
+    onNarrative: (handler) =>
+      subscribe("analysis:trace", (payload) => {
+        const e = payload as TraceEvent;
+        if (e.source !== "narrative") return;
+        if (e.kind === "token") handler({ requestId: e.requestId, chunk: e.detail });
+        else if (e.kind === "done") handler({ requestId: e.requestId, done: true });
+        else if (e.kind === "error") handler({ requestId: e.requestId, error: e.detail });
+      }),
     login: () => invoke("kite:login") as Promise<LoginResult>,
     searchInstruments: (query) => invoke("kite:searchInstruments", { query }),
     runAnalysis: (params) => invoke("analysis:run", params) as Promise<AnalysisResult>,

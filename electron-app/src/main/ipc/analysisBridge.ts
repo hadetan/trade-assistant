@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { IpcMain } from "electron";
-import type { AnalysisRunParams, AnalysisResult, LoginResult, NarrativeEvent } from "./rendererApi";
+import type { AnalysisRunParams, AnalysisResult, LoginResult, TraceEmitter, TraceEvent } from "./rendererApi";
 import type { KiteClient } from "../services/kite/kiteClient";
 import type { KiteSession } from "../services/kite/kiteLogin";
 import type { SidecarSupervisor } from "../services/sidecar/sidecarSupervisor";
+import type { SidecarProgressWire } from "../services/sidecar/sidecarProtocol";
 import type { AiAssistedProvider } from "../services/claude/provider";
 import type { HistoryStore } from "../services/history/historyStore";
 import { assembleEnvelope } from "../services/analysis/analysisEnvelope";
@@ -72,7 +73,7 @@ export async function runAnalysisRequest(
 
 export interface AiAssistedRequestDeps {
   kite: KiteClient;
-  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
+  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles" | "on" | "off">;
   provider: AiAssistedProvider;
   history: Pick<HistoryStore, "appendMessage" | "getClaudeSessionId" | "setClaudeSessionId">;
   now?: () => Date;
@@ -81,9 +82,22 @@ export interface AiAssistedRequestDeps {
 export async function runAiAssistedRequest(
   deps: AiAssistedRequestDeps,
   params: Extract<AnalysisRunParams, { mode: "ai_assisted" }>,
-  sendNarrative: (event: NarrativeEvent) => void,
+  sendTrace: (event: TraceEvent) => void,
 ): Promise<AnalysisResult> {
   const now = deps.now?.() ?? new Date();
+  const traceEvents: TraceEvent[] = [];
+  const emit: TraceEmitter = (input) => {
+    const event: TraceEvent = { requestId: params.requestId, at: (deps.now?.() ?? new Date()).toISOString(), ...input };
+    traceEvents.push(event);
+    sendTrace(event);
+  };
+
+  const ownedSidecarIds = new Set<number>();
+  const onProgress = (p: SidecarProgressWire): void => {
+    if (!ownedSidecarIds.has(p.id)) return;
+    emit({ source: "sidecar", kind: p.status === "running" ? "started" : "done", detail: p.step });
+  };
+
   try {
     deps.history.appendMessage({
       sessionId: params.sessionId,
@@ -91,25 +105,36 @@ export async function runAiAssistedRequest(
       renderedText: params.query,
       structuredPayload: params,
     });
-    const intake = await deps.provider.intake(params.query);
+    const intake = await deps.provider.intake(params.query, { onTrace: emit });
     const { timeframe, from, to } = horizonToFetchParams(intake.horizon, now);
-    const envelope = await assembleEnvelope(
-      { kite: deps.kite, sidecar: deps.sidecar },
-      {
-        trigger: "reactive",
-        instrument: intake.instrument,
-        timeframe,
-        horizon_requested: intake.horizon,
-        intent_lens: params.intent_lens,
-        from,
-        to,
-      },
-    );
+
+    deps.sidecar.on("progress", onProgress);
+    let envelope;
+    try {
+      envelope = await assembleEnvelope(
+        { kite: deps.kite, sidecar: deps.sidecar },
+        {
+          trigger: "reactive",
+          instrument: intake.instrument,
+          timeframe,
+          horizon_requested: intake.horizon,
+          intent_lens: params.intent_lens,
+          from,
+          to,
+          onComputeId: (id) => ownedSidecarIds.add(id),
+          onTrace: emit,
+        },
+      );
+    } finally {
+      deps.sidecar.off("progress", onProgress);
+      ownedSidecarIds.clear();
+    }
+
     const existingClaudeSessionId = deps.history.getClaudeSessionId(params.sessionId);
     const claudeSessionId = existingClaudeSessionId ?? randomUUID();
     const { verdict, narrative } = await deps.provider.completeAiAssisted(envelope, {
       researchNotes: intake.researchNotes,
-      onNarrativeToken: (chunk) => sendNarrative({ requestId: params.requestId, chunk }),
+      onTrace: emit,
       claudeSessionId,
       resumeSession: existingClaudeSessionId !== null,
     });
@@ -118,7 +143,6 @@ export async function runAiAssistedRequest(
     if (existingClaudeSessionId === null) {
       deps.history.setClaudeSessionId(params.sessionId, claudeSessionId);
     }
-    sendNarrative({ requestId: params.requestId, done: true });
     const result: AnalysisResult = {
       mode: "ai_assisted",
       instrument: envelope.instrument,
@@ -134,10 +158,13 @@ export async function runAiAssistedRequest(
       role: "assistant",
       renderedText: narrative,
       structuredPayload: result,
+      trace: traceEvents,
     });
     return result;
   } catch (error) {
-    sendNarrative({ requestId: params.requestId, error: (error as Error).message });
+    // No generic run-level trace push here: every step with a TraceSource
+    // (sidecar compute, each persona, the narrative streamer) already
+    // emitted its own attributed error before this rethrow (P9A§12).
     throw error;
   }
 }
@@ -146,10 +173,10 @@ export interface AnalysisBridgeDeps {
   ipcMain: Pick<IpcMain, "handle">;
   login: () => Promise<LoginResult>;
   getSession: () => KiteSession | null;
-  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
+  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles" | "on" | "off">;
   provider: AiAssistedProvider;
   history: Pick<HistoryStore, "appendMessage" | "getClaudeSessionId" | "setClaudeSessionId">;
-  sendNarrative: (event: NarrativeEvent) => void;
+  sendTrace: (event: TraceEvent) => void;
   markNeedsLogin: () => void;
   now?: () => Date;
 }
@@ -184,7 +211,7 @@ export function registerAnalysisBridge(deps: AnalysisBridgeDeps): void {
         runAiAssistedRequest(
           { kite, sidecar: deps.sidecar, provider: deps.provider, history: deps.history, now: deps.now },
           params,
-          deps.sendNarrative,
+          deps.sendTrace,
         ),
       );
     }

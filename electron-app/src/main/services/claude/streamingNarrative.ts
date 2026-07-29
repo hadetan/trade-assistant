@@ -1,13 +1,17 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { spawnClaude } from "./claudeProvider";
+import { consumeStreamJson } from "./streamJsonConsumer";
+import { summarizeForTrace } from "./traceDetail";
+import type { TraceEmitter } from "../../ipc/rendererApi";
 
 type SpawnFn = (command: string, args: string[]) => ChildProcess;
 
 export interface NarrativeStreamSpec {
   systemPrompt: string;
   prompt: string;
-  onToken: (text: string) => void;
+  onTrace: TraceEmitter;
+  timeoutMs: number;
   signal?: AbortSignal;
   claudeSessionId?: string;
   resumeSession?: boolean;
@@ -15,23 +19,12 @@ export interface NarrativeStreamSpec {
 
 export interface NarrativeStreamerOptions {
   spawnFn?: SpawnFn;
-  timeoutMs?: number;
-}
-
-const DEFAULT_NARRATIVE_TIMEOUT_MS = 180000;
-
-interface StreamLine {
-  type: string;
-  subtype?: string;
-  result?: string;
-  event?: { type?: string; delta?: { type?: string; text?: string } };
 }
 
 export function makeNarrativeStreamer(
   options: NarrativeStreamerOptions = {},
 ): (spec: NarrativeStreamSpec) => Promise<string> {
   const spawnFn = options.spawnFn ?? ((command, args) => spawn(command, args));
-  const timeoutMs = options.timeoutMs ?? DEFAULT_NARRATIVE_TIMEOUT_MS;
 
   return (spec: NarrativeStreamSpec): Promise<string> => {
     if (spec.signal?.aborted) return Promise.reject(new Error("narrative aborted"));
@@ -49,8 +42,6 @@ export function makeNarrativeStreamer(
     );
 
     return new Promise<string>((resolve, reject) => {
-      let buffer = "";
-      let finalText: string | undefined;
       let settled = false;
       let timer: NodeJS.Timeout | undefined;
       let onAbort: (() => void) | undefined;
@@ -65,6 +56,10 @@ export function makeNarrativeStreamer(
         if (settled) return;
         settled = true;
         cleanup();
+        // Lives inside fail so it fires exactly once before the reject,
+        // regardless of the failure source — timeout, abort, non-zero
+        // exit, missing terminal, or a stream_json result failure.
+        spec.onTrace({ source: "narrative", kind: "error", detail: error.message });
         reject(error);
         child.kill();
       };
@@ -72,63 +67,28 @@ export function makeNarrativeStreamer(
         if (settled) return;
         settled = true;
         cleanup();
+        spec.onTrace({ source: "narrative", kind: "done" });
         resolve(text);
       };
 
-      timer = setTimeout(() => fail(new Error(`narrative timed out after ${timeoutMs}ms`)), timeoutMs);
+      spec.onTrace({ source: "narrative", kind: "started" });
+      timer = setTimeout(() => fail(new Error(`narrative timed out after ${spec.timeoutMs}ms`)), spec.timeoutMs);
       onAbort = () => fail(new Error("narrative aborted"));
       spec.signal?.addEventListener("abort", onAbort);
 
-      const handleLine = (raw: string): void => {
-        const trimmed = raw.trim();
-        if (trimmed.length === 0) return;
-        let line: StreamLine;
-        try {
-          line = JSON.parse(trimmed) as StreamLine;
-        } catch (error) {
-          console.error(`narrative: failed to parse stream line: ${(error as Error).message}`, trimmed);
-          return;
-        }
-        if (
-          line.type === "stream_event" &&
-          line.event?.type === "content_block_delta" &&
-          line.event.delta?.type === "text_delta" &&
-          typeof line.event.delta.text === "string"
-        ) {
-          try {
-            spec.onToken(line.event.delta.text);
-          } catch (error) {
-            console.error(`narrative: onToken threw: ${(error as Error).message}`);
-          }
-          return;
-        }
-        if (line.type === "result") {
-          if (line.subtype === "success" && typeof line.result === "string") finalText = line.result;
-          else fail(new Error(`narrative result was not successful: ${line.subtype ?? "unknown"}`));
-        }
-      };
-
-      child.stdout?.on("data", (chunk: Buffer) => {
-        buffer += chunk.toString();
-        let newline = buffer.indexOf("\n");
-        while (newline !== -1) {
-          handleLine(buffer.slice(0, newline));
-          buffer = buffer.slice(newline + 1);
-          newline = buffer.indexOf("\n");
-        }
-      });
-      child.on("error", (error: Error) => fail(error));
-      child.on("exit", (code: number | null) => {
-        if (buffer.trim().length > 0) handleLine(buffer);
-        if (code !== 0 && code !== null) {
-          fail(new Error(`claude exited with code ${code}`));
-          return;
-        }
-        if (finalText === undefined) {
-          fail(new Error("narrative stream ended without a terminal result"));
-          return;
-        }
-        succeed(finalText);
+      // ChildProcess.on's overloads don't structurally satisfy consumeStreamJson's
+      // narrowed (event, cb: (...args: never[]) => void) signature; streamJsonConsumer.ts
+      // casts its own internal `on` calls the same way, so this mirrors that precedent.
+      consumeStreamJson(child as never, {
+        onToken: (text) => {
+          if (!settled) spec.onTrace({ source: "narrative", kind: "token", detail: text });
+        },
+        onToolCall: (name, input) =>
+          spec.onTrace({ source: "narrative", kind: "toolCall", detail: `${name} ${summarizeForTrace(JSON.stringify(input ?? {}))}` }),
+        onToolResult: (name, resultText) =>
+          spec.onTrace({ source: "narrative", kind: "toolResult", detail: `${name} → ${summarizeForTrace(resultText)}` }),
+        onResult: (finalText) => succeed(finalText),
+        onFailure: (error) => fail(error),
       });
     });
   };

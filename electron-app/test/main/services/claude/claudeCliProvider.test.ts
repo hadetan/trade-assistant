@@ -15,10 +15,11 @@ class FakeChild extends EventEmitter {
   }
 }
 
-function emitResult(child: FakeChild, structuredOutput: unknown, exitCode = 0) {
+function emitStructured(child: FakeChild, structuredOutput: unknown, exitCode = 0) {
   queueMicrotask(() => {
-    child.stdout.write(`${JSON.stringify({ result: "ok", structured_output: structuredOutput })}`);
-    child.stdout.end();
+    child.stdout.write(`${JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name: "search_instruments", input: { q: "infy" } }] } })}\n`);
+    child.stdout.write(`${JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "NSE:INFY" }] } })}\n`);
+    child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(structuredOutput) })}\n`);
     child.emit("exit", exitCode, null);
   });
 }
@@ -33,11 +34,12 @@ const validFinding = {
 
 function baseSpec() {
   return {
-    name: "technical_quant",
+    name: "technical_quant" as const,
     systemPrompt: "sys",
     jsonSchema: personaFindingJsonSchema,
     schema: personaFindingSchema,
     prompt: "user prompt",
+    timeoutMs: 120000,
   };
 }
 
@@ -47,7 +49,7 @@ describe("makeClaudeRunner", () => {
     const spawnFn = () => {
       const child = new FakeChild();
       children.push(child);
-      emitResult(child, validFinding);
+      emitStructured(child, validFinding);
       return child as never;
     };
     const run = makeClaudeRunner({ spawnFn });
@@ -63,7 +65,7 @@ describe("makeClaudeRunner", () => {
       prompts.push(args[args.length - 1]);
       const child = new FakeChild();
       children.push(child);
-      emitResult(child, children.length === 1 ? { direction: "buy" } : validFinding);
+      emitStructured(child, children.length === 1 ? { direction: "buy" } : validFinding);
       return child as never;
     };
     const run = makeClaudeRunner({ spawnFn });
@@ -76,7 +78,7 @@ describe("makeClaudeRunner", () => {
   it("throws after a second schema failure", async () => {
     const spawnFn = () => {
       const child = new FakeChild();
-      emitResult(child, { direction: "buy" });
+      emitStructured(child, { direction: "buy" });
       return child as never;
     };
     const run = makeClaudeRunner({ spawnFn });
@@ -85,16 +87,24 @@ describe("makeClaudeRunner", () => {
     );
   });
 
-  it("kills the child and rejects on timeout", async () => {
+  it("trips each spec's own timeoutMs and names the persona", async () => {
     const children: FakeChild[] = [];
     const spawnFn = () => {
-      const child = new FakeChild();
-      children.push(child);
-      return child as never; // never emits a result
+      const c = new FakeChild();
+      children.push(c);
+      return c as never; // never emits
     };
-    const run = makeClaudeRunner({ spawnFn, personaTimeoutMs: 15 });
-    await expect(run(baseSpec())).rejects.toThrow(/persona technical_quant timed out after 15ms/);
+    const run = makeClaudeRunner({ spawnFn });
+    await expect(run({ ...baseSpec(), timeoutMs: 15 })).rejects.toThrow(/persona technical_quant timed out after 15ms/);
     expect(children[0].killed).toBe(true);
+  });
+
+  it("exposes the P9A§6 default timeout table", async () => {
+    const { PERSONA_TIMEOUTS_MS } = await import("../../../../src/main/services/claude/claudeCliProvider");
+    expect(PERSONA_TIMEOUTS_MS).toEqual({
+      sidecar: 20000, intake: 20000, options_greeks: 45000, technical_quant: 45000,
+      position_risk: 45000, synthesis: 25000, narrative: 60000,
+    });
   });
 
   it("kills the child and rejects when the caller aborts", async () => {
@@ -131,7 +141,7 @@ describe("makeClaudeRunner", () => {
   it("removes its abort listener once the attempt settles", async () => {
     const spawnFn = () => {
       const child = new FakeChild();
-      emitResult(child, validFinding);
+      emitStructured(child, validFinding);
       return child as never;
     };
     const controller = new AbortController();
@@ -150,7 +160,7 @@ describe("makeClaudeRunner", () => {
     const spawnFn = (_c: string, args: string[]) => {
       argvs.push(args);
       const child = new FakeChild();
-      emitResult(child, validFinding);
+      emitStructured(child, validFinding);
       return child as never;
     };
     const run = makeClaudeRunner({ spawnFn });
@@ -164,11 +174,41 @@ describe("makeClaudeRunner", () => {
     const spawnFn = (_c: string, args: string[]) => {
       argvs.push(args);
       const child = new FakeChild();
-      emitResult(child, validFinding);
+      emitStructured(child, validFinding);
       return child as never;
     };
     await makeClaudeRunner({ spawnFn })(baseSpec());
     expect(argvs[0][argvs[0].indexOf("--allowedTools") + 1]).not.toContain("WebSearch");
+  });
+
+  it("emits exactly one started, the tool events, and one done for a first-try success (no token)", async () => {
+    const events: Array<{ source: string; kind: string; detail?: string }> = [];
+    const spawnFn = () => { const c = new FakeChild(); emitStructured(c, validFinding); return c as never; };
+    await makeClaudeRunner({ spawnFn })({ ...baseSpec(), onTrace: (e) => events.push(e) });
+    expect(events.map((e) => e.kind)).toEqual(["started", "toolCall", "toolResult", "done"]);
+    expect(events[1].detail).toBe(`search_instruments ${JSON.stringify({ q: "infy" })}`);
+    expect(events[2].detail).toBe("search_instruments → NSE:INFY");
+    expect(events.every((e) => e.source === "technical_quant")).toBe(true);
+    expect(events.some((e) => e.kind === "token")).toBe(false);
+  });
+
+  it("emits a single started across a corrective retry and one done", async () => {
+    const events: string[] = [];
+    let n = 0;
+    const spawnFn = () => { const c = new FakeChild(); emitStructured(c, ++n === 1 ? { direction: "buy" } : validFinding); return c as never; };
+    await makeClaudeRunner({ spawnFn })({ ...baseSpec(), onTrace: (e) => events.push(e.kind) });
+    expect(events.filter((k) => k === "started")).toHaveLength(1);
+    expect(events.filter((k) => k === "done")).toHaveLength(1);
+  });
+
+  it("emits started then error (no done) on timeout, with the same message it rejects with", async () => {
+    const events: Array<{ kind: string; detail?: string }> = [];
+    const spawnFn = () => new FakeChild() as never; // never emits
+    const run = makeClaudeRunner({ spawnFn });
+    await expect(run({ ...baseSpec(), timeoutMs: 15, onTrace: (e) => events.push(e) }))
+      .rejects.toThrow(/persona technical_quant timed out after 15ms/);
+    expect(events.map((e) => e.kind)).toEqual(["started", "error"]);
+    expect(events[1].detail).toBe("persona technical_quant timed out after 15ms");
   });
 });
 
@@ -189,24 +229,48 @@ describe("ClaudeCliProvider.completeAiAssisted", () => {
     const verdictOut = { direction: "bullish", conviction: "high", reasoning: "rsi", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP" };
     const spawnFn = (_c: string, args: string[]) => {
       const child = new FakeChild();
-      // narrative call is the only stream-json invocation; all others are buffered json
-      if (args.includes("stream-json")) {
+      // All six persona kinds stream-json now; only structured personas carry --json-schema.
+      if (args.includes("--json-schema")) {
+        emitStructured(child, args.some((a) => a.includes("synthesis")) ? verdictOut : validFinding);
+      } else {
         queueMicrotask(() => {
           child.stdout.write(`${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Infy " } } })}\n`);
           child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Infy looks constructive." })}\n`);
           child.emit("exit", 0, null);
         });
-      } else {
-        emitResult(child, args.some((a) => a.includes("synthesis")) ? verdictOut : validFinding);
       }
       return child as never;
     };
     const provider = new ClaudeCliProvider({ spawnFn });
-    const tokens: string[] = [];
-    const result = await provider.completeAiAssisted(aiEnvelope, { onNarrativeToken: (t) => tokens.push(t) });
+    const events: Array<{ source: string; kind: string; detail?: string }> = [];
+    const result = await provider.completeAiAssisted(aiEnvelope, { onTrace: (e) => events.push(e) });
     expect(result.verdict.direction).toBe("bullish");
     expect(result.narrative).toBe("Infy looks constructive.");
-    expect(tokens).toEqual(["Infy "]);
+    expect(events.filter((e) => e.source === "narrative" && e.kind === "token").map((e) => e.detail)).toEqual(["Infy "]);
+  });
+
+  it("forwards onTrace to every persona and to the narrative streamer", async () => {
+    const verdictOut = { direction: "bullish", conviction: "high", reasoning: "rsi", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP" };
+    const spawnFn = (_c: string, args: string[]) => {
+      const child = new FakeChild();
+      if (!args.includes("--json-schema")) {
+        queueMicrotask(() => {
+          child.stdout.write(`${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Infy " } } })}\n`);
+          child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Infy." })}\n`);
+          child.emit("exit", 0, null);
+        });
+      } else {
+        emitStructured(child, args.some((a) => a.includes("synthesis")) ? verdictOut : validFinding);
+      }
+      return child as never;
+    };
+    const events: Array<{ source: string; kind: string }> = [];
+    await new ClaudeCliProvider({ spawnFn }).completeAiAssisted(aiEnvelope, {
+      onTrace: (e) => events.push(e), claudeSessionId: "u", resumeSession: false,
+    });
+    expect(events.some((e) => e.source === "technical_quant" && e.kind === "started")).toBe(true);
+    expect(events.some((e) => e.source === "synthesis" && e.kind === "done")).toBe(true);
+    expect(events.some((e) => e.source === "narrative" && e.kind === "token")).toBe(true);
   });
 
   it("delegates intake to runIntake through the runner", async () => {
@@ -214,7 +278,7 @@ describe("ClaudeCliProvider.completeAiAssisted", () => {
     const provider = new ClaudeCliProvider({
       spawnFn: () => {
         const child = new FakeChild();
-        emitResult(child, intakeOut);
+        emitStructured(child, intakeOut);
         return child as never;
       },
     });
@@ -227,21 +291,21 @@ describe("ClaudeCliProvider.completeAiAssisted", () => {
     const jsonArgvs: string[][] = [];
     const spawnFn = (_c: string, args: string[]) => {
       const child = new FakeChild();
-      if (args.includes("stream-json")) {
+      if (args.includes("--json-schema")) {
+        jsonArgvs.push(args);
+        emitStructured(child, args.some((a) => a.includes("synthesis")) ? verdictOut : validFinding);
+      } else {
         streamArgvs.push(args);
         queueMicrotask(() => {
           child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "narrative text" })}\n`);
           child.emit("exit", 0, null);
         });
-      } else {
-        jsonArgvs.push(args);
-        emitResult(child, args.some((a) => a.includes("synthesis")) ? verdictOut : validFinding);
       }
       return child as never;
     };
     const provider = new ClaudeCliProvider({ spawnFn });
     await provider.completeAiAssisted(aiEnvelope, {
-      onNarrativeToken: () => {},
+      onTrace: () => {},
       claudeSessionId: "uuid-xyz",
       resumeSession: true,
     });

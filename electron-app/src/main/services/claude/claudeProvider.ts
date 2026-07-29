@@ -28,6 +28,8 @@ export const WEB_TOOL_ALLOWLIST = WEB_TOOL_NAMES.join(",");
 // denylist. Nothing today needs extra flags here -- when something does,
 // add it as its own named parameter with its own explicit validation, not a
 // passthrough array.
+export const PERSONA_MODEL = "claude-haiku-4-5-20251001";
+
 export interface ClaudeArgOptions {
   systemPrompt?: string;
   jsonSchema?: string;
@@ -36,6 +38,7 @@ export interface ClaudeArgOptions {
   includePartialMessages?: boolean;
   claudeSessionId?: string;
   resumeSession?: boolean;
+  model?: string; // test-override only; defaults to PERSONA_MODEL
 }
 
 export function buildClaudeArgs(prompt: string, opts: ClaudeArgOptions = {}): string[] {
@@ -48,10 +51,16 @@ export function buildClaudeArgs(prompt: string, opts: ClaudeArgOptions = {}): st
     "--disallowedTools",
     KITE_WRITE_TOOL_DENYLIST,
     "--strict-mcp-config",
+    "--model",
+    opts.model ?? PERSONA_MODEL,
   ];
   if (opts.systemPrompt !== undefined) args.push("--system-prompt", opts.systemPrompt);
   if (opts.jsonSchema !== undefined) args.push("--json-schema", opts.jsonSchema);
   if (opts.outputFormat !== undefined) args.push("--output-format", opts.outputFormat);
+  // The CLI rejects --print + --output-format stream-json unless --verbose is
+  // also present, so this is derived from outputFormat rather than a
+  // separate option callers would have to remember to set.
+  if (opts.outputFormat === "stream-json") args.push("--verbose");
   if (opts.includePartialMessages) args.push("--include-partial-messages");
   if (opts.claudeSessionId !== undefined) {
     args.push(opts.resumeSession ? "--resume" : "--session-id", opts.claudeSessionId);

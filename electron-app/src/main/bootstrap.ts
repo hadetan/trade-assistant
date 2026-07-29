@@ -16,7 +16,7 @@ import { registerAnalysisBridge } from "./ipc/analysisBridge";
 import { registerHistoryBridge } from "./ipc/historyBridge";
 import { registerSettingsBridge } from "./ipc/settingsBridge";
 import { registerBenchmarkBridge } from "./ipc/benchmarkBridge";
-import { makeNarrativeSender } from "./ipc/narrativeBridge";
+import { makeTraceSender } from "./ipc/traceBridge";
 import { HistoryStore } from "./services/history/historyStore";
 import { ScanScheduler } from "./scanScheduler";
 import { createTray } from "./tray";
@@ -235,7 +235,7 @@ export function createApp(): AppRuntime {
     sidecar: supervisor,
     provider,
     history,
-    sendNarrative: makeNarrativeSender(sendToRenderer),
+    sendTrace: makeTraceSender(sendToRenderer),
     markNeedsLogin: () => sessionState.markNeedsLogin(),
   });
   registerHistoryBridge({ ipcMain, history });

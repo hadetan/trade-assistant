@@ -87,6 +87,13 @@ export interface BenchmarkComputeResponseWire {
   confluence: ConfluenceWire;
 }
 
+export interface SidecarProgressWire {
+  type: "progress";
+  id: number;
+  step: string; // request-type name ("compute", …) or algorithm id ("rsi", …)
+  status: "running" | "done";
+}
+
 export type SidecarResponseWire =
   | ComputeResponseWire
   | PersistCandlesResponseWire

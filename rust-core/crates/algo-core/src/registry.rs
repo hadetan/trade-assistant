@@ -59,16 +59,35 @@ pub fn all_for_binary() -> Vec<Box<dyn Algorithm>> {
     algos
 }
 
+pub fn run_applicable(algos: &[Box<dyn Algorithm>], ctx: &MarketContext) -> Vec<AlgoOutput> {
+    run_applicable_with_progress(algos, ctx, &mut |_, _| {})
+}
+
+/// The callback lets algo-core surface live per-algorithm progress without
+/// itself doing any I/O: this crate is pure compute (CLAUDE.md's pure-logic-
+/// vs-I/O rule), so it only *invokes* a caller-supplied closure at each
+/// algorithm boundary. The actual stdout write happens in the sidecar binary's
+/// I/O layer (main.rs), never here.
+///
 /// The single enforcement point for `Algorithm::compute`'s history precondition.
 /// An algorithm whose `required_lookback()` exceeds `ctx.closes.len()` has no
 /// opinion to offer and would panic on its own slice arithmetic if called, so it
 /// is skipped. Every `compute()` caller (the sidecar handler and the backtest
 /// engine) MUST route through this function rather than calling `compute()`
 /// directly, so the precondition is checked in exactly one place.
-pub fn run_applicable(algos: &[Box<dyn Algorithm>], ctx: &MarketContext) -> Vec<AlgoOutput> {
+pub fn run_applicable_with_progress(
+    algos: &[Box<dyn Algorithm>],
+    ctx: &MarketContext,
+    on_progress: &mut dyn FnMut(&str, bool), // (algo_id, is_done)
+) -> Vec<AlgoOutput> {
     algos
         .iter()
         .filter(|algo| algo.required_lookback() <= ctx.closes.len())
-        .map(|algo| algo.compute(ctx))
+        .map(|algo| {
+            on_progress(algo.id(), false);
+            let output = algo.compute(ctx);
+            on_progress(algo.id(), true);
+            output
+        })
         .collect()
 }

@@ -24,14 +24,16 @@ const intakeOut = {
 const findingOut = { persona: "technical_quant", direction: "bullish", conviction: "high", findings: ["rsi>50"], cited_algo_ids: ["rsi"] };
 const verdictOut = { direction: "bullish", conviction: "high", reasoning: "rsi confluence", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP in Kite" };
 
-// One scripted subprocess for the whole pipeline: branch on argv. The narrative
-// call is the only stream-json invocation; the persona system prompts carry
-// their own names so we can key the buffered replies off them.
+// One scripted subprocess for the whole pipeline: branch on argv. All six
+// persona kinds stream-json now, so narrative is distinguished from
+// structured personas by the absence of --json-schema, not by output format;
+// the persona system prompts carry their own names so we can key the
+// structured replies off them.
 function scriptedSpawn(_command: string, args: string[]): never {
   const child = new FakeChild();
   const system = args[args.indexOf("--system-prompt") + 1] ?? "";
   queueMicrotask(() => {
-    if (args.includes("stream-json")) {
+    if (!args.includes("--json-schema")) {
       child.stdout.write(`${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Infy " } } })}\n`);
       child.stdout.write(`${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "is constructive." } } })}\n`);
       child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Infy is constructive." })}\n`);
@@ -41,8 +43,7 @@ function scriptedSpawn(_command: string, args: string[]): never {
     let structured: unknown = findingOut;
     if (system.includes("intake")) structured = intakeOut;
     else if (system.includes("synthesis")) structured = verdictOut;
-    child.stdout.write(`${JSON.stringify({ result: "ok", structured_output: structured })}`);
-    child.stdout.end();
+    child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(structured) })}\n`);
     child.emit("exit", 0, null);
   });
   return child as never;
@@ -68,12 +69,37 @@ describe("AI-assisted pipeline (fully mocked subprocess)", () => {
     expect(result.intent_lens).toBe("buying");
     expect(result.algo_results[0].algo_id).toBe("rsi");
     expect(result.confluence.bullish_count).toBe(1);
-    expect(events).toEqual([
-      { requestId: "rZ", chunk: "Infy " },
-      { requestId: "rZ", chunk: "is constructive." },
-      { requestId: "rZ", done: true },
-    ]);
+
+    const trace = events.map((e) => e as { source: string; kind: string; detail?: string });
+    const indexOf = (source: string, kind: string) => trace.findIndex((e) => e.source === source && e.kind === kind);
+
+    const intakeStarted = indexOf("intake", "started");
+    const synthesisStarted = indexOf("synthesis", "started");
+    const synthesisDone = indexOf("synthesis", "done");
+    const narrativeToken = indexOf("narrative", "token");
+    const narrativeDone = indexOf("narrative", "done");
+
+    expect(intakeStarted).toBe(0);
+    expect(synthesisDone).toBeGreaterThan(synthesisStarted);
+    expect(narrativeToken).toBeGreaterThan(synthesisDone);
+    expect(narrativeDone).toBeGreaterThan(narrativeToken);
+
+    // The three analytical personas run in parallel (Promise.all), so their
+    // relative order isn't guaranteed — assert membership, not sequence,
+    // while still confirming they all fall between intake and synthesis.
+    const analyticalPersonas = ["options_greeks", "technical_quant", "position_risk"];
+    for (const persona of analyticalPersonas) {
+      const started = indexOf(persona, "started");
+      const done = indexOf(persona, "done");
+      expect(started).toBeGreaterThan(intakeStarted);
+      expect(done).toBeGreaterThan(started);
+      expect(synthesisStarted).toBeGreaterThan(done);
+    }
+
     expect(history.appendMessage).toHaveBeenCalledTimes(2);
     expect(history.setClaudeSessionId).toHaveBeenCalledTimes(1);
+    const assistantMessage = history.appendMessage.mock.calls.find((c) => c[0].role === "assistant")![0] as { trace: unknown };
+    expect(Array.isArray(assistantMessage.trace)).toBe(true);
+    expect((assistantMessage.trace as unknown[]).length).toBeGreaterThan(0);
   });
 });

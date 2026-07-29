@@ -10,6 +10,7 @@ import {
   LakeSymbolsResponseWire,
   PersistCandlesResponseWire,
   ScanGateResponseWire,
+  SidecarProgressWire,
   SidecarRequestWire,
   SidecarResponseWire,
   WatchlistResponseWire,
@@ -72,8 +73,16 @@ export class SidecarSupervisor extends EventEmitter {
     this.child = null;
   }
 
-  compute(symbol: string, timeframe: string, closes: number[]): Promise<ComputeResponseWire> {
-    return this.send({ type: "compute", id: this.nextId, symbol, timeframe, closes }) as Promise<ComputeResponseWire>;
+  compute(
+    symbol: string,
+    timeframe: string,
+    closes: number[],
+    onRequestId?: (id: number) => void,
+  ): Promise<ComputeResponseWire> {
+    return this.send(
+      { type: "compute", id: this.nextId, symbol, timeframe, closes },
+      onRequestId,
+    ) as Promise<ComputeResponseWire>;
   }
 
   persistCandles(
@@ -124,8 +133,9 @@ export class SidecarSupervisor extends EventEmitter {
     return this.send({ type: "evaluate_scan_gate_stateless", id: this.nextId, prev, curr }) as Promise<ScanGateResponseWire>;
   }
 
-  private send(request: SidecarRequestWire): Promise<SidecarResponseWire> {
+  private send(request: SidecarRequestWire, onRequestId?: (id: number) => void): Promise<SidecarResponseWire> {
     const id = this.nextId++;
+    onRequestId?.(id);
     request.id = id;
     return new Promise<SidecarResponseWire>((resolve, reject) => {
       if (!this.child) {
@@ -163,18 +173,22 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   private dispatch(line: string): void {
-    let response: SidecarResponseWire;
+    let parsed: SidecarProgressWire | SidecarResponseWire;
     try {
-      response = JSON.parse(line) as SidecarResponseWire;
+      parsed = JSON.parse(line) as SidecarProgressWire | SidecarResponseWire;
     } catch (error) {
       console.error(`sidecar: failed to parse response line: ${(error as Error).message}`, line);
       return;
     }
-    const waiting = this.pending.get(response.id);
+    if (parsed.type === "progress") {
+      this.emit("progress", parsed);
+      return;
+    }
+    const waiting = this.pending.get(parsed.id);
     if (!waiting) return;
-    this.pending.delete(response.id);
+    this.pending.delete(parsed.id);
     clearTimeout(waiting.timer);
-    waiting.resolve(response);
+    waiting.resolve(parsed);
   }
 
   private onExit(code: number | null): void {
