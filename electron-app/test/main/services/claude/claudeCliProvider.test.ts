@@ -87,12 +87,15 @@ describe("makeClaudeRunner", () => {
   });
 
   it("trips each spec's own timeoutMs and names the persona", async () => {
+    const children: FakeChild[] = [];
     const spawnFn = () => {
       const c = new FakeChild();
+      children.push(c);
       return c as never; // never emits
     };
     const run = makeClaudeRunner({ spawnFn });
     await expect(run({ ...baseSpec(), timeoutMs: 15 })).rejects.toThrow(/persona technical_quant timed out after 15ms/);
+    expect(children[0].killed).toBe(true);
   });
 
   it("exposes the P9A§6 default timeout table", async () => {
