@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   horizonToFetchParams,
@@ -8,7 +9,7 @@ import {
 import { KiteClient } from "../../../src/main/services/kite/kiteClient";
 import type { KiteSession } from "../../../src/main/services/kite/kiteLogin";
 import type { AiAssistedProvider } from "../../../src/main/services/claude/provider";
-import { historicalResponse, mockSidecar } from "../../fixtures/sidecarFixtures";
+import { computeResponse, historicalResponse, mockSidecar } from "../../fixtures/sidecarFixtures";
 
 function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedProvider {
   return {
@@ -20,6 +21,7 @@ function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedPr
     completeAiAssisted: vi.fn(async (_env, opts) => {
       opts.onTrace({ source: "narrative", kind: "token", detail: "Infy " });
       opts.onTrace({ source: "narrative", kind: "token", detail: "is constructive." });
+      opts.onTrace({ source: "narrative", kind: "done" });
       return {
         verdict: { direction: "bullish", conviction: "high", reasoning: "rsi", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP" },
         narrative: "Infy is constructive.",
@@ -27,6 +29,18 @@ function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedPr
     }),
     ...overrides,
   };
+}
+
+function sidecarWithProgress() {
+  const bus = new EventEmitter();
+  const compute = vi.fn(async (_s: string, _t: string, _c: number[], onRequestId?: (id: number) => void) => {
+    onRequestId?.(42);
+    return computeResponse();
+  });
+  return Object.assign(bus, {
+    compute,
+    persistCandles: vi.fn(async (_s: string, _t: string, candles: unknown[]) => ({ type: "persist_candles" as const, id: 1, written: candles.length })),
+  });
 }
 
 function fakeHistory(overrides: Partial<{
@@ -182,7 +196,52 @@ describe("runAiAssistedRequest", () => {
     expect(history.setClaudeSessionId).not.toHaveBeenCalled();
     expect(history.appendMessage).toHaveBeenCalledTimes(1);
     expect(history.appendMessage.mock.calls[0][0]).toMatchObject({ role: "user" });
-    expect(sends).toContainEqual({ requestId: "r7", source: "narrative", kind: "error", detail: "claude down", at: expect.any(String) });
+    // The bridge itself no longer stamps a generic error; this fake provider
+    // rejects without ever touching onTrace, so nothing is sent.
+    expect(sends).toEqual([]);
+  });
+
+  it("maps an owned compute id's progress to sidecar started/done and ignores unowned ids", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const sidecar = sidecarWithProgress();
+    const sends: Array<{ source: string; kind: string; detail?: string }> = [];
+    // emit an unowned id BEFORE the owned compute registers 42, and owned ones after
+    sidecar.compute.mockImplementationOnce(async (_s, _t, _c, onRequestId?: (id: number) => void) => {
+      (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 999, step: "compute", status: "running" }); // unowned → ignored
+      onRequestId?.(42);
+      (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 42, step: "compute", status: "running" });
+      (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 42, step: "rsi", status: "running" });
+      (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 42, step: "rsi", status: "done" });
+      (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 42, step: "compute", status: "done" });
+      return computeResponse();
+    });
+    await runAiAssistedRequest({ kite, sidecar: sidecar as never, provider: fakeProvider(), history: fakeHistory() }, aiParams, (e) => sends.push(e as never));
+    const sidecarEvents = sends.filter((e) => e.source === "sidecar");
+    expect(sidecarEvents).toEqual([
+      { source: "sidecar", kind: "started", detail: "compute", requestId: "r7", at: expect.any(String) },
+      { source: "sidecar", kind: "started", detail: "rsi", requestId: "r7", at: expect.any(String) },
+      { source: "sidecar", kind: "done", detail: "rsi", requestId: "r7", at: expect.any(String) },
+      { source: "sidecar", kind: "done", detail: "compute", requestId: "r7", at: expect.any(String) },
+    ]);
+  });
+
+  it("persists the accumulated trace on success and removes the progress listener afterwards", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const sidecar = sidecarWithProgress();
+    const history = fakeHistory();
+    await runAiAssistedRequest({ kite, sidecar: sidecar as never, provider: fakeProvider(), history }, aiParams, () => {});
+    const assistant = history.appendMessage.mock.calls.find((c) => c[0].role === "assistant")![0];
+    expect(Array.isArray(assistant.trace)).toBe(true);
+    expect((sidecar as unknown as EventEmitter).listenerCount("progress")).toBe(0);
+  });
+
+  it("does not push a generic run-level error event; each step attributes its own", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const provider = fakeProvider({ completeAiAssisted: vi.fn().mockRejectedValue(new Error("boom")) });
+    const sends: Array<{ source: string; kind: string }> = [];
+    await expect(runAiAssistedRequest({ kite, sidecar: sidecarWithProgress() as never, provider, history: fakeHistory() }, aiParams, (e) => sends.push(e as never))).rejects.toThrow(/boom/);
+    // No narrative done, and no generic run-level error stamped by the bridge itself.
+    expect(sends.some((e) => e.source === "narrative" && e.kind === "done")).toBe(false);
   });
 });
 

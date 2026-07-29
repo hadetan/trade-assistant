@@ -69,21 +69,37 @@ describe("AI-assisted pipeline (fully mocked subprocess)", () => {
     expect(result.intent_lens).toBe("buying");
     expect(result.algo_results[0].algo_id).toBe("rsi");
     expect(result.confluence.bullish_count).toBe(1);
-    const narrative = events
-      .map((e) => e as { source: string; kind: string; detail?: string })
-      .filter((e) => e.source === "narrative");
-    // onTrace now forwards the narrative streamer's own started/done straight through
-    // (no more token-only shim), and analysisBridge still pushes its own run-level
-    // done on top — the duplicate done is a known interim artifact until a later
-    // task collapses the two into one accumulated stream.
-    expect(narrative).toEqual([
-      { source: "narrative", kind: "started", requestId: "rZ", at: expect.any(String) },
-      { source: "narrative", kind: "token", detail: "Infy ", requestId: "rZ", at: expect.any(String) },
-      { source: "narrative", kind: "token", detail: "is constructive.", requestId: "rZ", at: expect.any(String) },
-      { source: "narrative", kind: "done", requestId: "rZ", at: expect.any(String) },
-      { source: "narrative", kind: "done", requestId: "rZ", at: expect.any(String) },
-    ]);
+
+    const trace = events.map((e) => e as { source: string; kind: string; detail?: string });
+    const indexOf = (source: string, kind: string) => trace.findIndex((e) => e.source === source && e.kind === kind);
+
+    const intakeStarted = indexOf("intake", "started");
+    const synthesisStarted = indexOf("synthesis", "started");
+    const synthesisDone = indexOf("synthesis", "done");
+    const narrativeToken = indexOf("narrative", "token");
+    const narrativeDone = indexOf("narrative", "done");
+
+    expect(intakeStarted).toBe(0);
+    expect(synthesisDone).toBeGreaterThan(synthesisStarted);
+    expect(narrativeToken).toBeGreaterThan(synthesisDone);
+    expect(narrativeDone).toBeGreaterThan(narrativeToken);
+
+    // The three analytical personas run in parallel (Promise.all), so their
+    // relative order isn't guaranteed — assert membership, not sequence,
+    // while still confirming they all fall between intake and synthesis.
+    const analyticalPersonas = ["options_greeks", "technical_quant", "position_risk"];
+    for (const persona of analyticalPersonas) {
+      const started = indexOf(persona, "started");
+      const done = indexOf(persona, "done");
+      expect(started).toBeGreaterThan(intakeStarted);
+      expect(done).toBeGreaterThan(started);
+      expect(synthesisStarted).toBeGreaterThan(done);
+    }
+
     expect(history.appendMessage).toHaveBeenCalledTimes(2);
     expect(history.setClaudeSessionId).toHaveBeenCalledTimes(1);
+    const assistantMessage = history.appendMessage.mock.calls.find((c) => c[0].role === "assistant")![0] as { trace: unknown };
+    expect(Array.isArray(assistantMessage.trace)).toBe(true);
+    expect((assistantMessage.trace as unknown[]).length).toBeGreaterThan(0);
   });
 });
