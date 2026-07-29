@@ -18,8 +18,8 @@ function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedPr
       researchNotes: "context",
     }),
     completeAiAssisted: vi.fn(async (_env, opts) => {
-      opts.onNarrativeToken("Infy ");
-      opts.onNarrativeToken("is constructive.");
+      opts.onTrace({ source: "narrative", kind: "token", detail: "Infy " });
+      opts.onTrace({ source: "narrative", kind: "token", detail: "is constructive." });
       return {
         verdict: { direction: "bullish", conviction: "high", reasoning: "rsi", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP" },
         narrative: "Infy is constructive.",

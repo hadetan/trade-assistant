@@ -157,22 +157,20 @@ export class ClaudeCliProvider implements Provider, AiAssistedProvider {
     return runPipeline(envelope, { runPersona: this.runPersona, prompts: DEFAULT_PROMPTS });
   }
 
-  intake(query: string): Promise<IntakeResult> {
-    return runIntake({ runPersona: this.runPersona }, query);
+  intake(query: string, opts?: { onTrace?: TraceEmitter }): Promise<IntakeResult> {
+    return runIntake({ runPersona: this.runPersona }, query, { onTrace: opts?.onTrace });
   }
 
   async completeAiAssisted(envelope: AnalysisEnvelope, opts: CompleteAiAssistedOptions): Promise<AiAssistedResult> {
     const { verdict, findings } = await runPersonaPipeline(
       envelope,
       { runPersona: this.runPersona, prompts: DEFAULT_PROMPTS },
-      { researchNotes: opts.researchNotes },
+      { researchNotes: opts.researchNotes, onTrace: opts.onTrace },
     );
     const narrativeText = await this.streamNarrative({
       systemPrompt: narrative.systemPrompt,
       prompt: narrativePrompt(verdict, findings, envelope.intent_lens, opts.researchNotes),
-      onTrace: (e) => {
-        if (e.kind === "token" && e.detail !== undefined) opts.onNarrativeToken(e.detail);
-      },
+      onTrace: opts.onTrace,
       timeoutMs: PERSONA_TIMEOUTS_MS.narrative,
       signal: opts.signal,
       claudeSessionId: opts.claudeSessionId,

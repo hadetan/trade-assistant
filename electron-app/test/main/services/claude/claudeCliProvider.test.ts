@@ -242,11 +242,35 @@ describe("ClaudeCliProvider.completeAiAssisted", () => {
       return child as never;
     };
     const provider = new ClaudeCliProvider({ spawnFn });
-    const tokens: string[] = [];
-    const result = await provider.completeAiAssisted(aiEnvelope, { onNarrativeToken: (t) => tokens.push(t) });
+    const events: Array<{ source: string; kind: string; detail?: string }> = [];
+    const result = await provider.completeAiAssisted(aiEnvelope, { onTrace: (e) => events.push(e) });
     expect(result.verdict.direction).toBe("bullish");
     expect(result.narrative).toBe("Infy looks constructive.");
-    expect(tokens).toEqual(["Infy "]);
+    expect(events.filter((e) => e.source === "narrative" && e.kind === "token").map((e) => e.detail)).toEqual(["Infy "]);
+  });
+
+  it("forwards onTrace to every persona and to the narrative streamer", async () => {
+    const verdictOut = { direction: "bullish", conviction: "high", reasoning: "rsi", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP" };
+    const spawnFn = (_c: string, args: string[]) => {
+      const child = new FakeChild();
+      if (!args.includes("--json-schema")) {
+        queueMicrotask(() => {
+          child.stdout.write(`${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Infy " } } })}\n`);
+          child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Infy." })}\n`);
+          child.emit("exit", 0, null);
+        });
+      } else {
+        emitStructured(child, args.some((a) => a.includes("synthesis")) ? verdictOut : validFinding);
+      }
+      return child as never;
+    };
+    const events: Array<{ source: string; kind: string }> = [];
+    await new ClaudeCliProvider({ spawnFn }).completeAiAssisted(aiEnvelope, {
+      onTrace: (e) => events.push(e), claudeSessionId: "u", resumeSession: false,
+    });
+    expect(events.some((e) => e.source === "technical_quant" && e.kind === "started")).toBe(true);
+    expect(events.some((e) => e.source === "synthesis" && e.kind === "done")).toBe(true);
+    expect(events.some((e) => e.source === "narrative" && e.kind === "token")).toBe(true);
   });
 
   it("delegates intake to runIntake through the runner", async () => {
@@ -281,7 +305,7 @@ describe("ClaudeCliProvider.completeAiAssisted", () => {
     };
     const provider = new ClaudeCliProvider({ spawnFn });
     await provider.completeAiAssisted(aiEnvelope, {
-      onNarrativeToken: () => {},
+      onTrace: () => {},
       claudeSessionId: "uuid-xyz",
       resumeSession: true,
     });

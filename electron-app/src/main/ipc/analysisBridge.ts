@@ -94,7 +94,7 @@ export async function runAiAssistedRequest(
       renderedText: params.query,
       structuredPayload: params,
     });
-    const intake = await deps.provider.intake(params.query);
+    const intake = await deps.provider.intake(params.query, { onTrace: emit });
     const { timeframe, from, to } = horizonToFetchParams(intake.horizon, now);
     const envelope = await assembleEnvelope(
       { kite: deps.kite, sidecar: deps.sidecar },
@@ -112,7 +112,7 @@ export async function runAiAssistedRequest(
     const claudeSessionId = existingClaudeSessionId ?? randomUUID();
     const { verdict, narrative } = await deps.provider.completeAiAssisted(envelope, {
       researchNotes: intake.researchNotes,
-      onNarrativeToken: (chunk) => emit({ source: "narrative", kind: "token", detail: chunk }),
+      onTrace: emit,
       claudeSessionId,
       resumeSession: existingClaudeSessionId !== null,
     });

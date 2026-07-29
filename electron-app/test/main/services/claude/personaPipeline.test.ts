@@ -147,6 +147,20 @@ describe("runPersonaPipeline (verdict + findings for the narrative)", () => {
       expect(p).toContain("guidance cut");
     }
   });
+
+  it("sets onTrace on all analytical specs and the synthesis spec", async () => {
+    const seen: Record<string, unknown> = {};
+    const onTrace = vi.fn();
+    const runPersona: PersonaRunner = async (spec: PersonaRunSpec<unknown>) => {
+      seen[spec.name] = spec.onTrace;
+      return (spec.name === "synthesis" ? verdict : finding(spec.name as PersonaFinding["persona"])) as never;
+    };
+    await runPersonaPipeline(envelope, { runPersona, prompts }, { onTrace });
+    expect(seen.options_greeks).toBe(onTrace);
+    expect(seen.technical_quant).toBe(onTrace);
+    expect(seen.position_risk).toBe(onTrace);
+    expect(seen.synthesis).toBe(onTrace);
+  });
 });
 
 describe("narrativePrompt", () => {

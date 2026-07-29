@@ -154,7 +154,7 @@ export class ScanScheduler {
     });
     const claudeSessionId = randomUUID();
     const { verdict, narrative } = await this.deps.provider.completeAiAssisted(envelope, {
-      onNarrativeToken: () => {},
+      onTrace: () => {},
       claudeSessionId,
       resumeSession: false,
     });

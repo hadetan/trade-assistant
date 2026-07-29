@@ -9,6 +9,7 @@ import {
   type Verdict,
 } from "../analysis/contracts";
 import { PERSONA_TIMEOUTS_MS, type PersonaRunner } from "./claudeCliProvider";
+import type { TraceEmitter } from "../../ipc/rendererApi";
 
 export interface PersonaPrompt {
   systemPrompt: string;
@@ -29,6 +30,7 @@ export interface PipelineDeps {
 
 export interface PipelineRunOptions {
   researchNotes?: string;
+  onTrace?: TraceEmitter;
 }
 
 export interface PipelineOutput {
@@ -99,6 +101,7 @@ export async function runPersonaPipeline(
           timeoutMs: PERSONA_TIMEOUTS_MS[persona.name],
           signal: controller.signal,
           allowWebTools: true,
+          onTrace: opts.onTrace,
         }),
       ),
     );
@@ -114,6 +117,7 @@ export async function runPersonaPipeline(
     schema: verdictSchema,
     prompt: synthesisUserPrompt(envelope, findings),
     timeoutMs: PERSONA_TIMEOUTS_MS.synthesis,
+    onTrace: opts.onTrace,
   });
 
   if (!citedIdsWithinEnvelope(verdict.cited_algo_ids, envelope)) {

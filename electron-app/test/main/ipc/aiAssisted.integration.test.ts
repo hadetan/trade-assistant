@@ -72,9 +72,15 @@ describe("AI-assisted pipeline (fully mocked subprocess)", () => {
     const narrative = events
       .map((e) => e as { source: string; kind: string; detail?: string })
       .filter((e) => e.source === "narrative");
+    // onTrace now forwards the narrative streamer's own started/done straight through
+    // (no more token-only shim), and analysisBridge still pushes its own run-level
+    // done on top — the duplicate done is a known interim artifact until a later
+    // task collapses the two into one accumulated stream.
     expect(narrative).toEqual([
+      { source: "narrative", kind: "started", requestId: "rZ", at: expect.any(String) },
       { source: "narrative", kind: "token", detail: "Infy ", requestId: "rZ", at: expect.any(String) },
       { source: "narrative", kind: "token", detail: "is constructive.", requestId: "rZ", at: expect.any(String) },
+      { source: "narrative", kind: "done", requestId: "rZ", at: expect.any(String) },
       { source: "narrative", kind: "done", requestId: "rZ", at: expect.any(String) },
     ]);
     expect(history.appendMessage).toHaveBeenCalledTimes(2);
