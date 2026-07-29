@@ -1,8 +1,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_SCAN_CONFIG, HistoryStore } from "../../../../src/main/services/history/historyStore";
+import type { TraceEvent } from "../../../../src/main/ipc/rendererApi";
 
 const tempDirs: string[] = [];
 
@@ -132,6 +134,51 @@ describe("HistoryStore persistence across instances", () => {
     expect(second.getClaudeSessionId(session.id)).toBe("persisted-uuid");
     expect(second.listSessions().map((s) => s.id)).toContain(session.id);
     second.close();
+  });
+});
+
+describe("HistoryStore trace persistence", () => {
+  const trace: TraceEvent[] = [
+    { requestId: "r1", source: "intake", kind: "started", at: "2026-07-29T00:00:00.000Z" },
+    { requestId: "r1", source: "narrative", kind: "done", at: "2026-07-29T00:00:01.000Z" },
+  ];
+
+  it("round-trips a trace array and reads a trace-less message back as null", () => {
+    const store = memoryStore();
+    const session = store.createSession("ai_assisted");
+    store.appendMessage({ sessionId: session.id, role: "user", renderedText: "q" });
+    store.appendMessage({ sessionId: session.id, role: "assistant", renderedText: "a", trace });
+    const msgs = store.getSession(session.id)!.messages;
+    expect(msgs[0].trace).toBeNull();
+    expect(msgs[1].trace).toEqual(trace);
+    store.close();
+  });
+
+  it("adds the trace column via ALTER on a pre-existing messages table (old install)", () => {
+    const dbPath = tempDbPath();
+    // Simulate an old install: create the messages table WITHOUT a trace column.
+    const legacy = new Database(dbPath);
+    legacy.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, response_mode TEXT NOT NULL, claude_session_id TEXT, created_at TEXT NOT NULL, last_active_at TEXT NOT NULL);
+      CREATE TABLE messages (id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id), role TEXT NOT NULL, rendered_text TEXT NOT NULL, structured_payload TEXT, created_at TEXT NOT NULL);`);
+    const legacyCreatedAt = "2020-01-01T00:00:00.000Z";
+    legacy
+      .prepare("INSERT INTO sessions (id, response_mode, created_at, last_active_at) VALUES (?, 'ai_assisted', ?, ?)")
+      .run("s-old", legacyCreatedAt, legacyCreatedAt);
+    legacy
+      .prepare("INSERT INTO messages (id, session_id, role, rendered_text, created_at) VALUES (?, 's-old', 'assistant', 'old', ?)")
+      .run("m-old", legacyCreatedAt);
+    legacy.close();
+
+    const store = new HistoryStore({ path: dbPath, now: monotonicNow() });
+    expect(store.getSession("s-old")!.messages[0].trace).toBeNull(); // back-filled NULL, no throw
+    store.appendMessage({ sessionId: "s-old", role: "assistant", renderedText: "new", trace });
+    expect(store.getSession("s-old")!.messages[1].trace).toEqual(trace);
+    store.close();
+
+    // Constructing twice against the same file must not throw (idempotent guard).
+    const again = new HistoryStore({ path: dbPath, now: monotonicNow() });
+    expect(again.getSession("s-old")!.messages).toHaveLength(2);
+    again.close();
   });
 });
 
