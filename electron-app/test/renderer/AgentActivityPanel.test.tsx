@@ -39,4 +39,19 @@ describe("AgentActivityPanel", () => {
     fireEvent.click(screen.getByText("Agent activity"));
     expect(screen.getByText("Intake")).toBeTruthy();
   });
+
+  it("re-renders correctly when trace transitions from empty to populated", () => {
+    const emptyTrace: TraceEvent[] = [];
+    const { container, rerender } = render(<AgentActivityPanel trace={emptyTrace} live={true} />);
+    expect(container.firstChild).toBeNull();
+
+    const populatedTrace: TraceEvent[] = [
+      { requestId: "r1", source: "intake", kind: "started", at: "t" },
+      { requestId: "r1", source: "intake", kind: "done", at: "t" },
+    ];
+    rerender(<AgentActivityPanel trace={populatedTrace} live={true} />);
+
+    expect(screen.getByText("Agent activity")).toBeTruthy();
+    expect(screen.getByText("Intake")).toBeTruthy();
+  });
 });
