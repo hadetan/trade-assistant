@@ -170,7 +170,9 @@ export class ClaudeCliProvider implements Provider, AiAssistedProvider {
     const narrativeText = await this.streamNarrative({
       systemPrompt: narrative.systemPrompt,
       prompt: narrativePrompt(verdict, findings, envelope.intent_lens, opts.researchNotes),
-      onToken: opts.onNarrativeToken,
+      onTrace: (e) => {
+        if (e.kind === "token" && e.detail !== undefined) opts.onNarrativeToken(e.detail);
+      },
       timeoutMs: PERSONA_TIMEOUTS_MS.narrative,
       signal: opts.signal,
       claudeSessionId: opts.claudeSessionId,
