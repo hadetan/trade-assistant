@@ -191,6 +191,35 @@ describe("session continuity flags (--session-id vs --resume)", () => {
   });
 });
 
+describe("--verbose derivation for stream-json (CLI requirement)", () => {
+  it("adds --verbose whenever stream-json output is requested", () => {
+    const args = buildClaudeArgs("p", { outputFormat: "stream-json" });
+    expect(args).toContain("--verbose");
+  });
+
+  it("does not add --verbose for buffered json output or when outputFormat is omitted", () => {
+    expect(buildClaudeArgs("p", { outputFormat: "json" })).not.toContain("--verbose");
+    expect(buildClaudeArgs("p", {})).not.toContain("--verbose");
+    expect(buildClaudeArgs("p")).not.toContain("--verbose");
+  });
+
+  it("leaves the safety flags and --model byte-identical whether or not --verbose is emitted", () => {
+    const jsonArgs = buildClaudeArgs("p", { outputFormat: "json" });
+    const streamArgs = buildClaudeArgs("p", { outputFormat: "stream-json" });
+    const safetyPrefix = [
+      "--allowedTools",
+      KITE_READ_TOOL_ALLOWLIST,
+      "--disallowedTools",
+      KITE_WRITE_TOOL_DENYLIST,
+      "--strict-mcp-config",
+      "--model",
+      PERSONA_MODEL,
+    ];
+    expect(jsonArgs.slice(0, 7)).toEqual(safetyPrefix);
+    expect(streamArgs.slice(0, 7)).toEqual(safetyPrefix);
+  });
+});
+
 describe("uniform model flag", () => {
   it("defaults --model to Haiku 4.5 right after the three safety flags", () => {
     expect(PERSONA_MODEL).toBe("claude-haiku-4-5-20251001");

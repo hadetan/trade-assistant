@@ -57,6 +57,10 @@ export function buildClaudeArgs(prompt: string, opts: ClaudeArgOptions = {}): st
   if (opts.systemPrompt !== undefined) args.push("--system-prompt", opts.systemPrompt);
   if (opts.jsonSchema !== undefined) args.push("--json-schema", opts.jsonSchema);
   if (opts.outputFormat !== undefined) args.push("--output-format", opts.outputFormat);
+  // The CLI rejects --print + --output-format stream-json unless --verbose is
+  // also present, so this is derived from outputFormat rather than a
+  // separate option callers would have to remember to set.
+  if (opts.outputFormat === "stream-json") args.push("--verbose");
   if (opts.includePartialMessages) args.push("--include-partial-messages");
   if (opts.claudeSessionId !== undefined) {
     args.push(opts.resumeSession ? "--resume" : "--session-id", opts.claudeSessionId);
