@@ -257,4 +257,35 @@ describe("SidecarSupervisor", () => {
       supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]),
     ).rejects.toThrow(/sidecar request 1 timed out after 20ms/);
   });
+
+  it('routes a progress line to the "progress" event and still resolves the response pending for the same id', async () => {
+    const { supervisor, children } = makeSupervisor();
+    const progress: unknown[] = [];
+    supervisor.on("progress", (p) => progress.push(p));
+    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "compute", status: "running" })}\n`);
+    children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "rsi", status: "running" })}\n`);
+    children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "rsi", status: "done" })}\n`);
+    children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "compute", status: "done" })}\n`);
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "compute", id: 1, algo_results: [], confluence: { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 } })}\n`,
+    );
+    const response = await pending;
+    expect(response.id).toBe(1);
+    expect(progress).toEqual([
+      { type: "progress", id: 1, step: "compute", status: "running" },
+      { type: "progress", id: 1, step: "rsi", status: "running" },
+      { type: "progress", id: 1, step: "rsi", status: "done" },
+      { type: "progress", id: 1, step: "compute", status: "done" },
+    ]);
+  });
+
+  it("fires onRequestId synchronously with the allocated id before any progress can arrive", () => {
+    const { supervisor } = makeSupervisor();
+    let seen: number | undefined;
+    supervisor.compute("NSE:INFY", "day", [1, 2, 3], (id) => {
+      seen = id;
+    });
+    expect(seen).toBe(1);
+  });
 });
