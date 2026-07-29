@@ -76,6 +76,14 @@ describe("buildRendererApi narrative wiring", () => {
     adapter({ requestId: "r1", source: "intake", kind: "started", at: "t" }); // ignored
     expect(narrHandler).toHaveBeenCalledTimes(1);
     expect(narrHandler).toHaveBeenCalledWith({ requestId: "r1", chunk: "hi" });
+
+    adapter({ requestId: "r1", source: "narrative", kind: "done", at: "t" });
+    expect(narrHandler).toHaveBeenLastCalledWith({ requestId: "r1", done: true });
+
+    adapter({ requestId: "r1", source: "narrative", kind: "error", detail: "boom", at: "t" });
+    expect(narrHandler).toHaveBeenLastCalledWith({ requestId: "r1", error: "boom" });
+
+    expect(narrHandler).toHaveBeenCalledTimes(3);
   });
 
   it("routes an ai_assisted run through analysis:run", async () => {
