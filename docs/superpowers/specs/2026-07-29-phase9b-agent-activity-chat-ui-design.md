@@ -63,7 +63,7 @@ Restated for completeness, as in every phase: **nothing here touches order place
 
 ## P9B§4 Current state (verified against the tree)
 
-All line references below were read directly from the working tree on the `phase-3-electron-kite-mcp` branch.
+All line references below were read directly from the working tree on the `phase-9b-agent-activity-ui` branch.
 
 ### P9B§4.1 The trace types and the retired adapter (`src/main/ipc/rendererApi.ts`)
 
