@@ -94,6 +94,16 @@ describe("buildLanes", () => {
     expect(lane.children).toEqual([{ kind: "tool", variant: "toolCall", detail: "WebFetch {}" }]);
   });
 
+  it("produces no lane for a source with only token events", () => {
+    const trace: TraceEvent[] = [
+      ev({ source: "narrative", kind: "token", detail: "hello " }),
+      ev({ source: "narrative", kind: "token", detail: "world" }),
+      ev({ source: "narrative", kind: "token", detail: "end" }),
+    ];
+    const lanes = buildLanes(trace);
+    expect(lanes).toEqual([]);
+  });
+
   it("returns an empty array for an empty trace", () => {
     expect(buildLanes([])).toEqual([]);
   });

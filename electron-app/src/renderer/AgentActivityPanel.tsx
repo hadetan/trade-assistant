@@ -40,6 +40,10 @@ function statusFrom(events: Pick<TraceEvent, "kind">[]): NodeStatus {
   return "running";
 }
 
+// A sidecar event is a per-algorithm child iff it is a non-error progress line whose
+// detail is an algorithm id: "compute" is the reserved request-step name for the
+// bracket, and Rust never emits a per-algorithm error (P9A§9.3), so a sidecar error
+// always belongs to the request-level bracket.
 function isAlgoEvent(e: TraceEvent): boolean {
   return e.kind !== "error" && e.detail !== undefined && e.detail !== "compute";
 }
