@@ -81,7 +81,7 @@ describe("runAnalysisRequest", () => {
     if (result.mode !== "engine_only") throw new Error("mode");
     expect(result.response.direction).toBe("bullish");
     expect(result.algo_results[0].algo_id).toBe("rsi");
-    expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "day", [104, 107]);
+    expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "day", [104, 107], undefined);
   });
 
   it("writes the user message before analysis and the assistant message only after success", async () => {
