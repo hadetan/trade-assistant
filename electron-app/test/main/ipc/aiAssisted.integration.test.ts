@@ -24,14 +24,16 @@ const intakeOut = {
 const findingOut = { persona: "technical_quant", direction: "bullish", conviction: "high", findings: ["rsi>50"], cited_algo_ids: ["rsi"] };
 const verdictOut = { direction: "bullish", conviction: "high", reasoning: "rsi confluence", cited_algo_ids: ["rsi"], verify_before_acting: "check LTP in Kite" };
 
-// One scripted subprocess for the whole pipeline: branch on argv. The narrative
-// call is the only stream-json invocation; the persona system prompts carry
-// their own names so we can key the buffered replies off them.
+// One scripted subprocess for the whole pipeline: branch on argv. All six
+// persona kinds stream-json now, so narrative is distinguished from
+// structured personas by the absence of --json-schema, not by output format;
+// the persona system prompts carry their own names so we can key the
+// structured replies off them.
 function scriptedSpawn(_command: string, args: string[]): never {
   const child = new FakeChild();
   const system = args[args.indexOf("--system-prompt") + 1] ?? "";
   queueMicrotask(() => {
-    if (args.includes("stream-json")) {
+    if (!args.includes("--json-schema")) {
       child.stdout.write(`${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "Infy " } } })}\n`);
       child.stdout.write(`${JSON.stringify({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "is constructive." } } })}\n`);
       child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: "Infy is constructive." })}\n`);
@@ -41,8 +43,7 @@ function scriptedSpawn(_command: string, args: string[]): never {
     let structured: unknown = findingOut;
     if (system.includes("intake")) structured = intakeOut;
     else if (system.includes("synthesis")) structured = verdictOut;
-    child.stdout.write(`${JSON.stringify({ result: "ok", structured_output: structured })}`);
-    child.stdout.end();
+    child.stdout.write(`${JSON.stringify({ type: "result", subtype: "success", result: JSON.stringify(structured) })}\n`);
     child.emit("exit", 0, null);
   });
   return child as never;

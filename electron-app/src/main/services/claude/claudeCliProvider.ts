@@ -2,6 +2,8 @@ import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { ZodType } from "zod";
 import { spawnClaude } from "./claudeProvider";
+import { consumeStreamJson } from "./streamJsonConsumer";
+import { summarizeForTrace } from "./traceDetail";
 import type { AnalysisEnvelope, IntakeResult, Verdict } from "../analysis/contracts";
 import type { AiAssistedProvider, AiAssistedResult, CompleteAiAssistedOptions, Provider } from "./provider";
 import { runPipeline, runPersonaPipeline, narrativePrompt, type PipelinePrompts } from "./personaPipeline";
@@ -12,7 +14,7 @@ import { technicalQuant } from "./systemPrompts/technicalQuant";
 import { positionRisk } from "./systemPrompts/positionRisk";
 import { synthesis } from "./systemPrompts/synthesis";
 import { narrative } from "./systemPrompts/narrative";
-import type { TraceSource } from "../../ipc/rendererApi";
+import type { TraceSource, TraceEmitter } from "../../ipc/rendererApi";
 
 type SpawnFn = (command: string, args: string[]) => ChildProcess;
 
@@ -25,6 +27,7 @@ export interface PersonaRunSpec<T> {
   timeoutMs: number;
   signal?: AbortSignal;
   allowWebTools?: boolean;
+  onTrace?: TraceEmitter;
 }
 
 export type PersonaRunner = <T>(spec: PersonaRunSpec<T>) => Promise<T>;
@@ -43,34 +46,14 @@ export const PERSONA_TIMEOUTS_MS: Record<TraceSource, number> = {
   narrative: 60000,
 };
 
-function readResult(child: ChildProcess): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    let stdout = "";
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.on("error", (error: Error) => reject(error));
-    child.on("exit", (code: number | null) => {
-      if (code !== 0 && code !== null) {
-        reject(new Error(`claude exited with code ${code}`));
-        return;
-      }
-      try {
-        const envelope = JSON.parse(stdout) as { structured_output?: unknown };
-        resolve(envelope.structured_output);
-      } catch {
-        resolve(undefined);
-      }
-    });
-  });
-}
-
 // The runner owns the safety-critical subprocess path: every call routes
 // through spawnClaude (Task 7), so the allowlist/denylist cannot be bypassed.
 export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunner {
   const spawnFn = options.spawnFn ?? ((command, args) => spawn(command, args));
 
   return async <T>(spec: PersonaRunSpec<T>): Promise<T> => {
+    const emit = spec.onTrace;
+
     const attempt = async (prompt: string): Promise<{ ok: true; value: T } | { ok: false; error: string }> => {
       if (spec.signal?.aborted) {
         throw new Error(`persona ${spec.name} aborted`);
@@ -80,17 +63,16 @@ export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunn
         {
           systemPrompt: spec.systemPrompt,
           jsonSchema: JSON.stringify(spec.jsonSchema),
-          outputFormat: "json",
+          outputFormat: "stream-json",
+          includePartialMessages: true,
           allowWebTools: spec.allowWebTools,
         },
         spawnFn,
       );
+
       let timer: NodeJS.Timeout | undefined;
       let onAbort: (() => void) | undefined;
-      // Reject BEFORE killing: killing the child emits `exit`, which would
-      // otherwise let readResult settle the race with `undefined` first and
-      // swallow the timeout/abort rejection.
-      const guard = new Promise<never>((_, reject) => {
+      const raw = await new Promise<string>((resolve, reject) => {
         timer = setTimeout(() => {
           reject(new Error(`persona ${spec.name} timed out after ${spec.timeoutMs}ms`));
           child.kill();
@@ -100,27 +82,53 @@ export function makeClaudeRunner(options: ClaudeRunnerOptions = {}): PersonaRunn
           child.kill();
         };
         spec.signal?.addEventListener("abort", onAbort);
-      });
-      let raw: unknown;
-      try {
-        raw = await Promise.race([readResult(child), guard]);
-      } finally {
+        // ChildProcess.on's overloads don't structurally satisfy consumeStreamJson's
+        // narrowed (event, cb: (...args: never[]) => void) signature; streamJsonConsumer.ts
+        // casts its own internal `on` calls the same way, so this mirrors that precedent.
+        consumeStreamJson(child as never, {
+          onToolCall: (name, input) =>
+            emit?.({ source: spec.name, kind: "toolCall", detail: `${name} ${summarizeForTrace(JSON.stringify(input ?? {}))}` }),
+          onToolResult: (name, resultText) =>
+            emit?.({ source: spec.name, kind: "toolResult", detail: `${name} → ${summarizeForTrace(resultText)}` }),
+          onResult: (finalText) => resolve(finalText),
+          onFailure: (error) => reject(error),
+        });
+      }).finally(() => {
         if (timer) clearTimeout(timer);
         if (onAbort) spec.signal?.removeEventListener("abort", onAbort);
+      });
+
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(raw);
+      } catch {
+        parsedJson = undefined;
       }
-      const parsed = spec.schema.safeParse(raw);
+      const parsed = spec.schema.safeParse(parsedJson);
       if (parsed.success) return { ok: true, value: parsed.data };
       return { ok: false, error: parsed.error.message };
     };
 
-    const first = await attempt(spec.prompt);
-    if (first.ok) return first.value;
+    emit?.({ source: spec.name, kind: "started" });
+    try {
+      const first = await attempt(spec.prompt);
+      if (first.ok) {
+        emit?.({ source: spec.name, kind: "done" });
+        return first.value;
+      }
 
-    const corrective = `${spec.prompt}\n\nYour previous reply did not match the required JSON schema (${first.error}). Reply with only a JSON object conforming to it.`;
-    const second = await attempt(corrective);
-    if (second.ok) return second.value;
+      const corrective = `${spec.prompt}\n\nYour previous reply did not match the required JSON schema (${first.error}). Reply with only a JSON object conforming to it.`;
+      const second = await attempt(corrective);
+      if (second.ok) {
+        emit?.({ source: spec.name, kind: "done" });
+        return second.value;
+      }
 
-    throw new Error(`persona ${spec.name} failed to produce valid structured output after retry`);
+      throw new Error(`persona ${spec.name} failed to produce valid structured output after retry`);
+    } catch (error) {
+      emit?.({ source: spec.name, kind: "error", detail: (error as Error).message });
+      throw error;
+    }
   };
 }
 
