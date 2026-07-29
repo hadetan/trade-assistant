@@ -241,6 +241,24 @@ pub fn encode_response(response: &SidecarResponse) -> String {
     serde_json::to_string(response).expect("SidecarResponse always serializes")
 }
 
+#[derive(Debug, Serialize)]
+pub struct ProgressLine {
+    pub r#type: &'static str,
+    pub id: u64,
+    pub step: String,
+    pub status: String,
+}
+
+pub fn encode_progress(id: u64, step: &str, status: &str) -> String {
+    serde_json::to_string(&ProgressLine {
+        r#type: "progress",
+        id,
+        step: step.to_string(),
+        status: status.to_string(),
+    })
+    .expect("ProgressLine always serializes")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +309,17 @@ mod tests {
         assert!(line.contains("\"type\":\"persist_candles\""));
         assert!(line.contains("\"written\":1"));
         assert!(!line.contains("error"));
+    }
+
+    #[test]
+    fn encode_progress_emits_a_single_line_progress_object() {
+        let line = encode_progress(7, "compute", "running");
+        assert!(line.contains("\"type\":\"progress\""));
+        assert!(line.contains("\"id\":7"));
+        assert!(line.contains("\"step\":\"compute\""));
+        assert!(line.contains("\"status\":\"running\""));
+        assert!(!line.contains('\n'));
+        // per-algorithm step is just another string in the same field
+        assert!(encode_progress(7, "rsi", "done").contains("\"step\":\"rsi\""));
     }
 }

@@ -1,10 +1,11 @@
 use sidecar::handlers::{
     handle_add_watchlist_symbol, handle_benchmark_compute, handle_evaluate_scan_gate,
     handle_evaluate_scan_gate_stateless, handle_list_lake_symbols, handle_list_watchlist,
-    handle_persist, handle_read_lake_candles, handle_remove_watchlist_symbol, handle_request,
+    handle_persist, handle_read_lake_candles, handle_remove_watchlist_symbol,
+    handle_request_with_progress,
 };
 use sidecar::protocol::{
-    benchmark_empty_response, empty_response, encode_response, parse_request,
+    benchmark_empty_response, empty_response, encode_progress, encode_response, parse_request,
     LakeCandlesResponse, LakeSymbolsResponse, PersistCandlesResponse, ScanGateResponse,
     SidecarRequest, SidecarResponse, WatchlistResponse,
 };
@@ -25,6 +26,36 @@ fn lake_root_from_args() -> Option<PathBuf> {
 
 fn state_db_path(lake_root: &Path) -> PathBuf {
     lake_root.join("state.sqlite3")
+}
+
+fn request_id(request: &SidecarRequest) -> u64 {
+    match request {
+        SidecarRequest::Compute(r) => r.id,
+        SidecarRequest::PersistCandles(r) => r.id,
+        SidecarRequest::AddWatchlistSymbol(r) => r.id,
+        SidecarRequest::RemoveWatchlistSymbol(r) => r.id,
+        SidecarRequest::ListWatchlist(r) => r.id,
+        SidecarRequest::EvaluateScanGate(r) => r.id,
+        SidecarRequest::ListLakeSymbols(r) => r.id,
+        SidecarRequest::ReadLakeCandles(r) => r.id,
+        SidecarRequest::BenchmarkCompute(r) => r.id,
+        SidecarRequest::EvaluateScanGateStateless(r) => r.id,
+    }
+}
+
+fn request_step(request: &SidecarRequest) -> &'static str {
+    match request {
+        SidecarRequest::Compute(_) => "compute",
+        SidecarRequest::PersistCandles(_) => "persist_candles",
+        SidecarRequest::AddWatchlistSymbol(_) => "add_watchlist_symbol",
+        SidecarRequest::RemoveWatchlistSymbol(_) => "remove_watchlist_symbol",
+        SidecarRequest::ListWatchlist(_) => "list_watchlist",
+        SidecarRequest::EvaluateScanGate(_) => "evaluate_scan_gate",
+        SidecarRequest::ListLakeSymbols(_) => "list_lake_symbols",
+        SidecarRequest::ReadLakeCandles(_) => "read_lake_candles",
+        SidecarRequest::BenchmarkCompute(_) => "benchmark_compute",
+        SidecarRequest::EvaluateScanGateStateless(_) => "evaluate_scan_gate_stateless",
+    }
 }
 
 /// This process is a long-lived sidecar: Electron spawns one instance and
@@ -60,10 +91,20 @@ fn main() {
             }
         };
 
+        let step = request_step(&request);
+        let id = request_id(&request);
+        writeln!(stdout, "{}", encode_progress(id, step, "running")).expect("stdout must be writable");
+        stdout.flush().expect("stdout must flush");
+
         let response = match request {
             SidecarRequest::Compute(compute) => {
-                let id = compute.id;
-                let result = panic::catch_unwind(AssertUnwindSafe(|| handle_request(compute)));
+                let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                    handle_request_with_progress(compute, &mut |algo_id, done| {
+                        let status = if done { "done" } else { "running" };
+                        writeln!(stdout, "{}", encode_progress(id, algo_id, status)).expect("stdout must be writable");
+                        stdout.flush().expect("stdout must flush");
+                    })
+                }));
                 match result {
                     Ok(response) => SidecarResponse::Compute(response),
                     Err(_) => {
@@ -219,6 +260,8 @@ fn main() {
             }
         };
 
+        writeln!(stdout, "{}", encode_progress(id, step, "done")).expect("stdout must be writable");
+        stdout.flush().expect("stdout must flush");
         writeln!(stdout, "{}", encode_response(&response)).expect("stdout must be writable");
         stdout.flush().expect("stdout must flush");
     }

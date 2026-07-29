@@ -1,6 +1,27 @@
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
+/// Every request now brackets its actual response with `"type":"progress"`
+/// lines (request-level running/done, plus per-algorithm ones nested inside a
+/// `compute`), so a test reading N logical responses off stdout must skip
+/// those lines exactly as a real client (Task 5's wire contract) will.
+fn read_next_response<R: BufRead>(reader: &mut R) -> serde_json::Value {
+    loop {
+        let mut line = String::new();
+        let n = reader.read_line(&mut line).expect("stdout must be readable");
+        assert!(n > 0, "expected a response line before EOF");
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("each line must be well-formed JSON");
+        if value["type"] == "progress" {
+            continue;
+        }
+        return value;
+    }
+}
+
 #[test]
 fn compiled_binary_computes_algorithms_over_stdin_stdout() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
@@ -18,13 +39,10 @@ fn compiled_binary_computes_algorithms_over_stdin_stdout() {
 
     let stdout = child.stdout.take().unwrap();
     let mut reader = BufReader::new(stdout);
-    let mut response_line = String::new();
-    reader.read_line(&mut response_line).unwrap();
+    let response = read_next_response(&mut reader);
 
     child.kill().ok();
     child.wait().ok();
-
-    let response: serde_json::Value = serde_json::from_str(response_line.trim()).unwrap();
 
     assert_eq!(response["id"], 1);
     let algo_results = response["algo_results"].as_array().unwrap();
@@ -73,17 +91,7 @@ fn a_thin_history_request_between_two_valid_ones_does_not_kill_the_sidecar() {
 
     let mut responses = Vec::new();
     for _ in 0..3 {
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .expect("stdout must be readable");
-        assert!(
-            !line.trim().is_empty(),
-            "expected a response line for every request; the process may have died"
-        );
-        let response: serde_json::Value = serde_json::from_str(line.trim())
-            .expect("each line must be a well-formed JSON response");
-        responses.push(response);
+        responses.push(read_next_response(&mut reader));
     }
 
     let status = child
@@ -174,9 +182,7 @@ fn watchlist_and_scan_gate_flow_over_stdin_stdout_with_a_lake_root() {
     let mut reader = BufReader::new(stdout);
     let mut responses = Vec::new();
     for _ in 0..4 {
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("stdout must be readable");
-        responses.push(serde_json::from_str::<serde_json::Value>(line.trim()).unwrap());
+        responses.push(read_next_response(&mut reader));
     }
     child.wait().ok();
 
@@ -270,9 +276,7 @@ fn benchmark_and_lake_flow_over_stdin_stdout_with_a_lake_root() {
     let mut reader = BufReader::new(stdout);
     let mut responses = Vec::new();
     for _ in 0..5 {
-        let mut line = String::new();
-        reader.read_line(&mut line).expect("stdout must be readable");
-        responses.push(serde_json::from_str::<serde_json::Value>(line.trim()).unwrap());
+        responses.push(read_next_response(&mut reader));
     }
     child.wait().ok();
 
@@ -309,11 +313,9 @@ fn benchmark_compute_answers_even_with_no_lake_root() {
 
     let stdout = child.stdout.take().unwrap();
     let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("stdout must be readable");
+    let response = read_next_response(&mut reader);
     child.wait().ok();
 
-    let response: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     assert_eq!(response["type"], "benchmark_compute");
     assert_eq!(response["id"], 1);
 }
@@ -351,17 +353,7 @@ fn a_benchmark_compute_with_an_out_of_range_timestamp_between_two_valid_ones_doe
 
     let mut responses = Vec::new();
     for _ in 0..3 {
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .expect("stdout must be readable");
-        assert!(
-            !line.trim().is_empty(),
-            "expected a response line for every request; the process may have died"
-        );
-        let response: serde_json::Value = serde_json::from_str(line.trim())
-            .expect("each line must be a well-formed JSON response");
-        responses.push(response);
+        responses.push(read_next_response(&mut reader));
     }
 
     let status = child
@@ -413,11 +405,9 @@ fn evaluate_scan_gate_stateless_answers_even_with_no_lake_root_at_all() {
 
     let stdout = child.stdout.take().unwrap();
     let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    reader.read_line(&mut line).expect("stdout must be readable");
+    let response = read_next_response(&mut reader);
     child.wait().ok();
 
-    let response: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
     assert_eq!(response["id"], 1);
     assert_eq!(response["type"], "scan_gate");
     // No prior snapshot exists (no store at all was ever consulted); the first
