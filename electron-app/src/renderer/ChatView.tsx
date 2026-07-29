@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { bridge } from "./bridge";
 import { MessageMarkdown } from "./MessageMarkdown";
+import { AgentActivityPanel } from "./AgentActivityPanel";
+import { ThemeToggle, useChatTheme } from "./ThemeToggle";
+import "./theme.css";
+import "./ChatView.css";
 import type { AnalysisResult, HistoryMessage, IntentLens, TraceEvent, Verdict } from "../main/ipc/rendererApi";
 
 export interface ChatViewProps {
@@ -51,6 +55,7 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
+  const [theme, toggleTheme] = useChatTheme();
 
   useEffect(() => {
     bridge().onTrace((event: TraceEvent) => {
@@ -104,12 +109,14 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
   };
 
   return (
-    <section className="chat-view">
+    <section className="chat-view" data-theme={theme}>
+      <ThemeToggle theme={theme} onToggle={toggleTheme} />
       <ul className="messages">
         {messages.map((message, index) => (
           <li key={index} className={`message message-${message.role}`}>
             {message.role === "assistant" ? (
               <>
+                {message.trace.length > 0 && <AgentActivityPanel trace={message.trace} live={message.live} />}
                 {message.verdict && (
                   <div className="verdict">
                     {message.verdict.direction} · {message.verdict.conviction} conviction

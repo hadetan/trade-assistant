@@ -100,6 +100,35 @@ describe("ChatView", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     expect(await screen.findByText(/claude down/)).toBeTruthy();
   });
+
+  it("renders an Agent Activity panel once trace events arrive, live and open by default", async () => {
+    let traceHandler: ((event: TraceEvent) => void) | undefined;
+    installBridge({
+      onTrace: vi.fn((handler) => {
+        traceHandler = handler as (event: TraceEvent) => void;
+      }),
+      runAnalysis: vi.fn(async (params) => {
+        if (params.mode !== "ai_assisted") throw new Error("mode");
+        traceHandler?.({ requestId: params.requestId, source: "intake", kind: "started", at: "t" });
+        // Never resolves: only the live trace panel is under test here.
+        return new Promise(() => {});
+      }),
+    });
+    render(<ChatView intentLens="buying" sessionId="sess-9" />);
+    fireEvent.change(screen.getByLabelText(/ask about an instrument/i), { target: { value: "q" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    expect(await screen.findByText("Agent activity")).toBeTruthy();
+    expect(await screen.findByText("Intake")).toBeTruthy();
+  });
+
+  it("wires the theme toggle onto the chat-view root and flips data-theme on click", () => {
+    installBridge();
+    render(<ChatView intentLens="buying" sessionId="sess-9" />);
+    const section = document.querySelector(".chat-view") as HTMLElement;
+    expect(section.getAttribute("data-theme")).toBe("dark");
+    fireEvent.click(screen.getByRole("button", { name: /switch to light theme/i }));
+    expect(section.getAttribute("data-theme")).toBe("light");
+  });
 });
 
 describe("historyToChatMessages", () => {
