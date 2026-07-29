@@ -68,10 +68,13 @@ describe("AI-assisted pipeline (fully mocked subprocess)", () => {
     expect(result.intent_lens).toBe("buying");
     expect(result.algo_results[0].algo_id).toBe("rsi");
     expect(result.confluence.bullish_count).toBe(1);
-    expect(events).toEqual([
-      { requestId: "rZ", chunk: "Infy " },
-      { requestId: "rZ", chunk: "is constructive." },
-      { requestId: "rZ", done: true },
+    const narrative = events
+      .map((e) => e as { source: string; kind: string; detail?: string })
+      .filter((e) => e.source === "narrative");
+    expect(narrative).toEqual([
+      { source: "narrative", kind: "token", detail: "Infy ", requestId: "rZ", at: expect.any(String) },
+      { source: "narrative", kind: "token", detail: "is constructive.", requestId: "rZ", at: expect.any(String) },
+      { source: "narrative", kind: "done", requestId: "rZ", at: expect.any(String) },
     ]);
     expect(history.appendMessage).toHaveBeenCalledTimes(2);
     expect(history.setClaudeSessionId).toHaveBeenCalledTimes(1);

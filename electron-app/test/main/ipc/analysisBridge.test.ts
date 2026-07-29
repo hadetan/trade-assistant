@@ -127,9 +127,9 @@ describe("runAiAssistedRequest", () => {
     expect(result.narrative).toBe("Infy is constructive.");
     expect(result.intent_lens).toBe("selling");
     expect(sends).toEqual([
-      { requestId: "r7", chunk: "Infy " },
-      { requestId: "r7", chunk: "is constructive." },
-      { requestId: "r7", done: true },
+      { requestId: "r7", source: "narrative", kind: "token", detail: "Infy ", at: expect.any(String) },
+      { requestId: "r7", source: "narrative", kind: "token", detail: "is constructive.", at: expect.any(String) },
+      { requestId: "r7", source: "narrative", kind: "done", at: expect.any(String) },
     ]);
   });
 
@@ -182,7 +182,7 @@ describe("runAiAssistedRequest", () => {
     expect(history.setClaudeSessionId).not.toHaveBeenCalled();
     expect(history.appendMessage).toHaveBeenCalledTimes(1);
     expect(history.appendMessage.mock.calls[0][0]).toMatchObject({ role: "user" });
-    expect(sends).toContainEqual({ requestId: "r7", error: "claude down" });
+    expect(sends).toContainEqual({ requestId: "r7", source: "narrative", kind: "error", detail: "claude down", at: expect.any(String) });
   });
 });
 
@@ -199,7 +199,7 @@ describe("registerAnalysisBridge", () => {
       sidecar: mockSidecar() as never,
       provider: fakeProvider(),
       history,
-      sendNarrative: vi.fn(),
+      sendTrace: vi.fn(),
       markNeedsLogin,
     });
     return { handlers, login, markNeedsLogin, history };

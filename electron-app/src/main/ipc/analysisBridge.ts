@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IpcMain } from "electron";
-import type { AnalysisRunParams, AnalysisResult, LoginResult, NarrativeEvent } from "./rendererApi";
+import type { AnalysisRunParams, AnalysisResult, LoginResult, TraceEvent, TraceEventInput } from "./rendererApi";
 import type { KiteClient } from "../services/kite/kiteClient";
 import type { KiteSession } from "../services/kite/kiteLogin";
 import type { SidecarSupervisor } from "../services/sidecar/sidecarSupervisor";
@@ -81,9 +81,12 @@ export interface AiAssistedRequestDeps {
 export async function runAiAssistedRequest(
   deps: AiAssistedRequestDeps,
   params: Extract<AnalysisRunParams, { mode: "ai_assisted" }>,
-  sendNarrative: (event: NarrativeEvent) => void,
+  sendTrace: (event: TraceEvent) => void,
 ): Promise<AnalysisResult> {
   const now = deps.now?.() ?? new Date();
+  const emit = (input: TraceEventInput): void => {
+    sendTrace({ requestId: params.requestId, at: (deps.now?.() ?? new Date()).toISOString(), ...input });
+  };
   try {
     deps.history.appendMessage({
       sessionId: params.sessionId,
@@ -109,7 +112,7 @@ export async function runAiAssistedRequest(
     const claudeSessionId = existingClaudeSessionId ?? randomUUID();
     const { verdict, narrative } = await deps.provider.completeAiAssisted(envelope, {
       researchNotes: intake.researchNotes,
-      onNarrativeToken: (chunk) => sendNarrative({ requestId: params.requestId, chunk }),
+      onNarrativeToken: (chunk) => emit({ source: "narrative", kind: "token", detail: chunk }),
       claudeSessionId,
       resumeSession: existingClaudeSessionId !== null,
     });
@@ -118,7 +121,7 @@ export async function runAiAssistedRequest(
     if (existingClaudeSessionId === null) {
       deps.history.setClaudeSessionId(params.sessionId, claudeSessionId);
     }
-    sendNarrative({ requestId: params.requestId, done: true });
+    emit({ source: "narrative", kind: "done" });
     const result: AnalysisResult = {
       mode: "ai_assisted",
       instrument: envelope.instrument,
@@ -137,7 +140,7 @@ export async function runAiAssistedRequest(
     });
     return result;
   } catch (error) {
-    sendNarrative({ requestId: params.requestId, error: (error as Error).message });
+    emit({ source: "narrative", kind: "error", detail: (error as Error).message });
     throw error;
   }
 }
@@ -149,7 +152,7 @@ export interface AnalysisBridgeDeps {
   sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
   provider: AiAssistedProvider;
   history: Pick<HistoryStore, "appendMessage" | "getClaudeSessionId" | "setClaudeSessionId">;
-  sendNarrative: (event: NarrativeEvent) => void;
+  sendTrace: (event: TraceEvent) => void;
   markNeedsLogin: () => void;
   now?: () => Date;
 }
@@ -184,7 +187,7 @@ export function registerAnalysisBridge(deps: AnalysisBridgeDeps): void {
         runAiAssistedRequest(
           { kite, sidecar: deps.sidecar, provider: deps.provider, history: deps.history, now: deps.now },
           params,
-          deps.sendNarrative,
+          deps.sendTrace,
         ),
       );
     }
