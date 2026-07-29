@@ -1,3 +1,6 @@
+import { useState } from "react";
+import "./AgentActivityPanel.css";
+import { TraceStepRow } from "./TraceStepRow";
 import type { TraceEvent, TraceSource } from "../main/ipc/rendererApi";
 
 export const LANE_ORDER: TraceSource[] = [
@@ -92,4 +95,31 @@ export function buildLanes(trace: TraceEvent[]): LaneNode[] {
     }
   }
   return lanes;
+}
+
+export interface AgentActivityPanelProps {
+  trace: TraceEvent[];
+  live: boolean;
+}
+
+export function AgentActivityPanel({ trace, live }: AgentActivityPanelProps): JSX.Element | null {
+  const [open, setOpen] = useState(live); // card open while streaming, collapsed on replay
+  const lanes = buildLanes(trace);
+  if (lanes.length === 0) return null; // engine_only / token-only turns show no panel
+
+  return (
+    <div className="agent-activity">
+      <button type="button" className="agent-activity-head" onClick={() => setOpen((v) => !v)}>
+        <span className="agent-activity-caret">{open ? "▾" : "▸"}</span>
+        Agent activity
+      </button>
+      {open && (
+        <div className="agent-activity-lanes">
+          {lanes.map((lane) => (
+            <TraceStepRow key={lane.source} node={lane} live={live} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
