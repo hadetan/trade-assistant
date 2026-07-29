@@ -1,24 +1,25 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatView, historyToChatMessages } from "../../src/renderer/ChatView";
 import { installBridge } from "./testBridge";
-import type { HistoryMessage, NarrativeEvent } from "../../src/main/ipc/rendererApi";
+import type { HistoryMessage, TraceEvent } from "../../src/main/ipc/rendererApi";
 
 afterEach(cleanup);
+beforeEach(() => localStorage.clear());
 
 describe("ChatView", () => {
-  it("submits an ai_assisted run with the session id, lens and a requestId, then streams tokens", async () => {
-    let narrativeHandler: ((event: NarrativeEvent) => void) | undefined;
+  it("submits an ai_assisted run with the session id, lens and a requestId, then streams narrative tokens", async () => {
+    let traceHandler: ((event: TraceEvent) => void) | undefined;
     const bridge = installBridge({
-      onNarrative: vi.fn((handler) => {
-        narrativeHandler = handler as (event: NarrativeEvent) => void;
+      onTrace: vi.fn((handler) => {
+        traceHandler = handler as (event: TraceEvent) => void;
       }),
       runAnalysis: vi.fn(async (params) => {
         if (params.mode !== "ai_assisted") throw new Error("mode");
-        narrativeHandler?.({ requestId: params.requestId, chunk: "Infy " });
-        narrativeHandler?.({ requestId: params.requestId, chunk: "constructive." });
-        narrativeHandler?.({ requestId: params.requestId, done: true });
+        traceHandler?.({ requestId: params.requestId, source: "narrative", kind: "token", detail: "Infy ", at: "t" });
+        traceHandler?.({ requestId: params.requestId, source: "narrative", kind: "token", detail: "constructive.", at: "t" });
+        traceHandler?.({ requestId: params.requestId, source: "narrative", kind: "done", at: "t" });
         return {
           mode: "ai_assisted",
           instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
@@ -50,14 +51,39 @@ describe("ChatView", () => {
     expect(await screen.findByText(/bullish/i)).toBeTruthy();
   });
 
+  it("ignores trace events for a stale requestId and never folds non-token events into the bubble text", async () => {
+    let traceHandler: ((event: TraceEvent) => void) | undefined;
+    installBridge({
+      onTrace: vi.fn((handler) => {
+        traceHandler = handler as (event: TraceEvent) => void;
+      }),
+      runAnalysis: vi.fn(async (params) => {
+        if (params.mode !== "ai_assisted") throw new Error("mode");
+        traceHandler?.({ requestId: "stale-request", source: "narrative", kind: "token", detail: "SHOULD NOT APPEAR", at: "t" });
+        traceHandler?.({ requestId: params.requestId, source: "intake", kind: "started", at: "t" });
+        traceHandler?.({ requestId: params.requestId, source: "narrative", kind: "token", detail: "real text", at: "t" });
+        // Never resolves: this test only inspects the bubble text streamed before completion.
+        return new Promise(() => {});
+      }),
+    });
+
+    render(<ChatView intentLens="buying" sessionId="sess-9" />);
+    fireEvent.change(screen.getByLabelText(/ask about an instrument/i), { target: { value: "q" } });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText("real text")).toBeTruthy();
+    expect(screen.queryByText(/SHOULD NOT APPEAR/)).toBeNull();
+  });
+
   it("seeds its transcript from initialMessages so a reopened session shows prior turns", () => {
-    installBridge({ onNarrative: vi.fn(), runAnalysis: vi.fn() });
+    installBridge();
     const history: HistoryMessage[] = [
-      { role: "user", rendered_text: "earlier ask", structured_payload: null, created_at: "t0" },
+      { role: "user", rendered_text: "earlier ask", structured_payload: null, trace: null, created_at: "t0" },
       {
         role: "assistant",
         rendered_text: "earlier reply",
         structured_payload: { mode: "ai_assisted", verdict: { direction: "bearish", conviction: "low", reasoning: "x", cited_algo_ids: ["rsi"], verify_before_acting: "y" } },
+        trace: null,
         created_at: "t1",
       },
     ];
@@ -68,10 +94,29 @@ describe("ChatView", () => {
   });
 
   it("shows an error when the run rejects", async () => {
-    installBridge({ onNarrative: vi.fn(), runAnalysis: vi.fn().mockRejectedValue(new Error("claude down")) });
+    installBridge({ runAnalysis: vi.fn().mockRejectedValue(new Error("claude down")) });
     render(<ChatView intentLens="selling" sessionId="sess-9" />);
     fireEvent.change(screen.getByLabelText(/ask about an instrument/i), { target: { value: "q" } });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     expect(await screen.findByText(/claude down/)).toBeTruthy();
+  });
+});
+
+describe("historyToChatMessages", () => {
+  it("maps a null trace to an empty array and marks replayed assistant turns live: false", () => {
+    const history: HistoryMessage[] = [
+      { role: "assistant", rendered_text: "reply", structured_payload: null, trace: null, created_at: "t0" },
+    ];
+    const [message] = historyToChatMessages(history);
+    expect(message).toMatchObject({ role: "assistant", trace: [], live: false });
+  });
+
+  it("carries a persisted trace array through onto the reconstructed assistant message", () => {
+    const trace: TraceEvent[] = [{ requestId: "r0", source: "intake", kind: "started", at: "t0" }];
+    const history: HistoryMessage[] = [
+      { role: "assistant", rendered_text: "reply", structured_payload: null, trace, created_at: "t0" },
+    ];
+    const [message] = historyToChatMessages(history);
+    expect(message).toMatchObject({ trace, live: false });
   });
 });

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { bridge } from "./bridge";
 import { MessageMarkdown } from "./MessageMarkdown";
-import type { AnalysisResult, HistoryMessage, IntentLens, NarrativeEvent, Verdict } from "../main/ipc/rendererApi";
+import type { AnalysisResult, HistoryMessage, IntentLens, TraceEvent, Verdict } from "../main/ipc/rendererApi";
 
 export interface ChatViewProps {
   intentLens: IntentLens;
@@ -14,6 +14,8 @@ interface AssistantMessage {
   requestId: string;
   text: string;
   verdict?: Verdict;
+  trace: TraceEvent[];
+  live: boolean;
 }
 
 interface UserMessage {
@@ -32,7 +34,14 @@ export function historyToChatMessages(messages: HistoryMessage[]): ChatMessage[]
     if (message.role === "user") return { role: "user", text: message.rendered_text };
     const payload = message.structured_payload as AnalysisResult | null;
     const verdict = payload && payload.mode === "ai_assisted" ? payload.verdict : undefined;
-    return { role: "assistant", requestId: newRequestId(), text: message.rendered_text, verdict };
+    return {
+      role: "assistant",
+      requestId: newRequestId(),
+      text: message.rendered_text,
+      verdict,
+      trace: message.trace ?? [],
+      live: false,
+    };
   });
 }
 
@@ -44,18 +53,22 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
   const activeRequestId = useRef<string | null>(null);
 
   useEffect(() => {
-    bridge().onNarrative((event: NarrativeEvent) => {
+    bridge().onTrace((event: TraceEvent) => {
       if (event.requestId !== activeRequestId.current) return;
-      if (event.chunk !== undefined) {
-        setMessages((prev) =>
-          prev.map((message) =>
-            message.role === "assistant" && message.requestId === event.requestId
-              ? { ...message, text: message.text + event.chunk }
-              : message,
-          ),
-        );
-      }
-      if (event.error !== undefined) setError(event.error);
+      const isNarrativeToken = event.source === "narrative" && event.kind === "token";
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.role === "assistant" && message.requestId === event.requestId
+            ? {
+                ...message,
+                // narrative tokens stream into the bubble text, exactly as onNarrative did;
+                // every other event is trace fuel for the panel and never appended to text.
+                text: isNarrativeToken ? message.text + (event.detail ?? "") : message.text,
+                trace: isNarrativeToken ? message.trace : [...message.trace, event],
+              }
+            : message,
+        ),
+      );
     });
   }, []);
 
@@ -67,7 +80,11 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
     setError(null);
     setBusy(true);
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", text: query }, { role: "assistant", requestId, text: "" }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: "user", text: query },
+      { role: "assistant", requestId, text: "", trace: [], live: true },
+    ]);
     try {
       const result = await bridge().runAnalysis({ mode: "ai_assisted", sessionId, query, intent_lens: intentLens, requestId });
       if (result.mode === "ai_assisted") {
