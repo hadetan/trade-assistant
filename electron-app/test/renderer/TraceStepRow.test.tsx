@@ -58,6 +58,20 @@ describe("TraceStepRow", () => {
     expect(screen.getByText("boom")).toBeTruthy(); // status transitioned; auto takes back over and re-expands
   });
 
+  it("auto-collapses when a running row transitions to done", () => {
+    const runningNode = lane("running", [{ kind: "tool", variant: "toolCall", detail: "Read {}" }]);
+    const { rerender } = render(<TraceStepRow node={runningNode} live={true} />);
+    expect(screen.getByText("⟳")).toBeTruthy();
+    expect(screen.getByText("Read {}")).toBeTruthy(); // auto-expanded while running
+    expect(screen.getByText("▾")).toBeTruthy();
+
+    const doneNode = lane("done", [{ kind: "tool", variant: "toolCall", detail: "Read {}" }]);
+    rerender(<TraceStepRow node={doneNode} live={true} />);
+    expect(screen.getByText("✓")).toBeTruthy();
+    expect(screen.queryByText("Read {}")).toBeNull(); // auto-collapsed after status transition
+    expect(screen.getByText("▸")).toBeTruthy();
+  });
+
   it("renders every row collapsed by default in history replay (live=false), even an errored one, until manually toggled", () => {
     const node = lane("error", [{ kind: "tool", variant: "toolResult", detail: "boom" }]);
     render(<TraceStepRow node={node} live={false} />);
