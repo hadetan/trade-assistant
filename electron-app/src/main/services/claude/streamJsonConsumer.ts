@@ -40,7 +40,21 @@ export function consumeStreamJson(
 ): void {
   let buffer = "";
   let finalText: string | undefined;
+  let settled = false;
   const toolNamesById = new Map<string, string>();
+
+  // A failing result line settles onFailure immediately; the exit handler that
+  // follows would otherwise re-derive "no terminal result" and fire again.
+  const fail = (error: Error): void => {
+    if (settled) return;
+    settled = true;
+    callbacks.onFailure(error);
+  };
+  const succeed = (text: string): void => {
+    if (settled) return;
+    settled = true;
+    callbacks.onResult(text);
+  };
 
   const handleLine = (raw: string): void => {
     const trimmed = raw.trim();
@@ -94,7 +108,7 @@ export function consumeStreamJson(
     }
     if (line.type === "result") {
       if (line.subtype === "success" && typeof line.result === "string") finalText = line.result;
-      else callbacks.onFailure(new Error(`result was not successful: ${line.subtype ?? "unknown"}`));
+      else fail(new Error(`result was not successful: ${line.subtype ?? "unknown"}`));
     }
   };
 
@@ -107,17 +121,17 @@ export function consumeStreamJson(
       newline = buffer.indexOf("\n");
     }
   });
-  child.on("error", ((error: Error) => callbacks.onFailure(error)) as never);
+  child.on("error", ((error: Error) => fail(error)) as never);
   child.on("exit", ((code: number | null) => {
     if (buffer.trim().length > 0) handleLine(buffer);
     if (code !== 0 && code !== null) {
-      callbacks.onFailure(new Error(`claude exited with code ${code}`));
+      fail(new Error(`claude exited with code ${code}`));
       return;
     }
     if (finalText === undefined) {
-      callbacks.onFailure(new Error("stream ended without a terminal result"));
+      fail(new Error("stream ended without a terminal result"));
       return;
     }
-    callbacks.onResult(finalText);
+    succeed(finalText);
   }) as never);
 }

@@ -71,4 +71,21 @@ describe("consumeStreamJson", () => {
     child.stdout.write(`${JSON.stringify({ type: "result", subtype: "error_max_turns" })}\n`);
     expect(calls.some((c) => c.startsWith("failure:"))).toBe(true);
   });
+
+  it("calls onFailure exactly once when a failing result line is followed by a clean exit", () => {
+    const child = new FakeChild();
+    const { calls, cbs } = collect();
+    consumeStreamJson(child as never, cbs);
+    child.stdout.write(`${JSON.stringify({ type: "result", subtype: "error_max_turns" })}\n`);
+    child.emit("exit", 0, null);
+    expect(calls.filter((c) => c.startsWith("failure:"))).toHaveLength(1);
+  });
+
+  it("calls onFailure exactly once on a non-zero exit", () => {
+    const child = new FakeChild();
+    const { calls, cbs } = collect();
+    consumeStreamJson(child as never, cbs);
+    child.emit("exit", 1, null);
+    expect(calls.filter((c) => c.startsWith("failure:"))).toHaveLength(1);
+  });
 });
