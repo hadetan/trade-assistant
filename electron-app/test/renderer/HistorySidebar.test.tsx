@@ -13,14 +13,14 @@ const sessions: SessionSummary[] = [
 
 describe("HistorySidebar", () => {
   it("renders one entry per session showing its preview", () => {
-    render(<HistorySidebar sessions={sessions} onOpenSession={vi.fn()} />);
+    render(<HistorySidebar sessions={sessions} activeSessionId={null} onOpenSession={vi.fn()} />);
     expect(screen.getByText("how is infy")).toBeTruthy();
     expect(screen.getByText("(no messages yet)")).toBeTruthy();
   });
 
   it("calls onOpenSession with the session id when an entry is clicked", () => {
     const onOpenSession = vi.fn();
-    render(<HistorySidebar sessions={sessions} onOpenSession={onOpenSession} />);
+    render(<HistorySidebar sessions={sessions} activeSessionId={null} onOpenSession={onOpenSession} />);
     fireEvent.click(screen.getByText("how is infy"));
     expect(onOpenSession).toHaveBeenCalledWith("s1");
   });

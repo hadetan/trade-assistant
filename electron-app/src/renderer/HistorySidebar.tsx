@@ -2,6 +2,7 @@ import type { SessionSummary } from "../main/ipc/rendererApi";
 
 export interface HistorySidebarProps {
   sessions: SessionSummary[];
+  activeSessionId: string | null;
   onOpenSession: (id: string) => void;
 }
 

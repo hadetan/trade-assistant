@@ -7,31 +7,32 @@ import { installBridge } from "./testBridge";
 afterEach(cleanup);
 
 async function startEngineOnlyChat(): Promise<void> {
-  fireEvent.click(await screen.findByRole("button", { name: /new chat/i }));
+  fireEvent.click(await screen.findByRole("button", { name: /new session/i }));
   fireEvent.click(await screen.findByRole("button", { name: /engine-only/i }));
 }
 
 describe("App", () => {
-  it("renders the status line from the bridge", async () => {
+  it("renders the sidecar/Kite status from the bridge", async () => {
     installBridge();
     render(<App />);
     await startEngineOnlyChat();
-    expect(await screen.findByText(/sidecar: up \| kite: needsLogin/)).toBeTruthy();
+    expect(await screen.findByText(/sidecar up/i)).toBeTruthy();
+    expect(screen.getByText(/kite needsLogin/i)).toBeTruthy();
   });
 
-  it("shows Home first and lists existing sessions from the bridge", async () => {
+  it("shows New session and lists existing sessions from the bridge, with no mode picker yet", async () => {
     installBridge({
       listSessions: vi.fn().mockResolvedValue([
         { id: "s1", response_mode: "ai_assisted", created_at: "t", last_active_at: "t", preview: "how is infy" },
       ]),
     });
     render(<App />);
-    expect(await screen.findByRole("button", { name: /new chat/i })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /new session/i })).toBeTruthy();
     expect(await screen.findByText("how is infy")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /engine-only/i })).toBeNull();
   });
 
-  it("shows the Login button after New Chat + mode, and no analysis form", async () => {
+  it("shows the Login button after New session + mode, and no analysis form", async () => {
     installBridge();
     render(<App />);
     await startEngineOnlyChat();
@@ -39,15 +40,15 @@ describe("App", () => {
     expect(screen.queryByLabelText(/instrument search/i)).toBeNull();
   });
 
-  it("creates a session with the picked mode on New Chat", async () => {
+  it("creates a session with the picked mode on New session", async () => {
     const bridge = installBridge();
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /new chat/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /new session/i }));
     fireEvent.click(await screen.findByRole("button", { name: /ai-assisted/i }));
     await waitFor(() => expect(bridge.createSession).toHaveBeenCalledWith("ai_assisted"));
   });
 
-  it("gates the login button behind Home + mode picker, then reflects authenticated status", async () => {
+  it("gates the login button behind New session + mode picker, then reflects authenticated status", async () => {
     const bridge = installBridge({
       getStatus: vi
         .fn()
@@ -59,7 +60,7 @@ describe("App", () => {
     await startEngineOnlyChat();
     fireEvent.click(await screen.findByRole("button", { name: /login to kite/i }));
     await waitFor(() => expect(bridge.login).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(/kite: authenticated/)).toBeTruthy();
+    expect(await screen.findByText(/kite authenticated/i)).toBeTruthy();
   });
 
   it("clears the kiteLogin banner once login succeeds", async () => {
@@ -68,8 +69,6 @@ describe("App", () => {
       getStatus: vi
         .fn()
         .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null })
-        // The banner's own reactive re-fetch (App.tsx's onBanner handler) consumes
-        // this second value before the login button is ever clicked.
         .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null })
         .mockResolvedValueOnce({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
       onBanner: vi.fn((handler) => {
@@ -85,7 +84,7 @@ describe("App", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: /login to kite/i }));
     await waitFor(() => expect(bridge.login).toHaveBeenCalledTimes(1));
-    expect(await screen.findByText(/kite: authenticated/)).toBeTruthy();
+    expect(await screen.findByText(/kite authenticated/i)).toBeTruthy();
     expect(screen.queryByText(/kite needs login today/i)).toBeNull();
   });
 
@@ -183,12 +182,12 @@ describe("App", () => {
     expect((runAnalysis.mock.calls[0][0] as { sessionId: string }).sessionId).toBe("s7");
   });
 
-  it("shows the AI-Assisted chat input after New Chat + AI-Assisted + login", async () => {
+  it("shows the AI-Assisted chat input after New session + AI-Assisted + login", async () => {
     installBridge({
       getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /new chat/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /new session/i }));
     fireEvent.click(await screen.findByRole("button", { name: /ai-assisted/i }));
     expect(await screen.findByLabelText(/ask about an instrument/i)).toBeTruthy();
   });

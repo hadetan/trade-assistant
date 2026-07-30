@@ -4,8 +4,10 @@ import { IntentLensSelector } from "./IntentLensSelector";
 import { InstrumentSearch } from "./InstrumentSearch";
 import { AnalysisResultView } from "./AnalysisResult";
 import { ChatView, historyToChatMessages } from "./ChatView";
-import { HomeScreen } from "./HomeScreen";
 import { BenchmarkView } from "./BenchmarkView";
+import { AppShell } from "./AppShell";
+import { EmptyState } from "./ui/EmptyState";
+import { MessageSquare } from "./ui/icons";
 import { bridge } from "./bridge";
 import type {
   AnalysisMode,
@@ -60,7 +62,17 @@ export function App(): JSX.Element {
     });
   }, []);
 
-  const onNewChat = (): void => setShowModePicker(true);
+  // "New session" (renamed from "New Chat", P10§4.2) is now always visible in the
+  // sidebar rather than gated behind a dedicated Home screen, so it must reset
+  // every other top-level view flag itself instead of relying on them already
+  // being false.
+  const onNewSession = (): void => {
+    setActiveSession(null);
+    setSessionDetail(null);
+    setShowBenchmark(false);
+    setShowModePicker(true);
+    void bridge().listSessions().then(setSessions);
+  };
 
   const onOpenBenchmark = (): void => {
     setActiveSession(null);
@@ -78,6 +90,10 @@ export function App(): JSX.Element {
   };
 
   const onOpenSession = async (id: string): Promise<void> => {
+    // The sidebar (and its history rows) is now always visible, so a click here can
+    // arrive while the mode picker or benchmark view is showing in the content pane.
+    setShowModePicker(false);
+    setShowBenchmark(false);
     const detail = await bridge().getSession(id);
     setSessionDetail(detail);
     setActiveSession({ id: detail.id, mode: detail.response_mode });
@@ -86,13 +102,6 @@ export function App(): JSX.Element {
       const payload = lastUserMessage.structured_payload as AnalysisRunParams;
       setIntentLens(payload.intent_lens);
     }
-  };
-
-  const onBackToHome = (): void => {
-    setActiveSession(null);
-    setSessionDetail(null);
-    setShowBenchmark(false);
-    void bridge().listSessions().then(setSessions);
   };
 
   const onLogin = async (): Promise<void> => {
@@ -123,38 +132,25 @@ export function App(): JSX.Element {
   const { result, history } = deriveEngineOnlyView(sessionDetail);
 
   return (
-    <main className="app">
-      <h1>Trade Assistant</h1>
-      <div className="status">
-        {status ? `sidecar: ${status.sidecar} | kite: ${status.kiteSession}` : "Loading…"}
-      </div>
-      {(activeSession !== null || showBenchmark) && (
-        <button type="button" onClick={onBackToHome}>
-          Home
-        </button>
-      )}
-      {activeSession === null && !showModePicker && !showBenchmark && (
-        <button type="button" onClick={onOpenBenchmark}>
-          Benchmark
-        </button>
-      )}
-      <ul className="banners">
-        {banners.map((banner, index) => (
-          <li key={index}>
-            [{banner.kind}] {banner.message}
-          </li>
-        ))}
-      </ul>
-
-      {activeSession === null && !showModePicker && !showBenchmark && (
-        <HomeScreen sessions={sessions} onNewChat={onNewChat} onOpenSession={onOpenSession} />
-      )}
-      {activeSession === null && showModePicker && <ModePicker onSelect={onSelectMode} />}
+    <AppShell
+      status={status}
+      banners={banners}
+      sessions={sessions}
+      activeSessionId={activeSession?.id ?? null}
+      benchmarkActive={showBenchmark}
+      onNewSession={onNewSession}
+      onOpenSession={(id) => void onOpenSession(id)}
+      onOpenBenchmark={onOpenBenchmark}
+    >
+      {activeSession === null && showModePicker && <ModePicker onSelect={(mode) => void onSelectMode(mode)} />}
       {activeSession === null && showBenchmark && <BenchmarkView api={bridge()} />}
+      {activeSession === null && !showModePicker && !showBenchmark && (
+        <EmptyState icon={MessageSquare} message="Select New session to start, or reopen a session from the sidebar." />
+      )}
 
       {activeSession !== null && !authenticated && (
         <>
-          <button type="button" onClick={onLogin} disabled={loggingIn}>
+          <button type="button" onClick={() => void onLogin()} disabled={loggingIn}>
             {loggingIn ? "Logging in…" : "Login to Kite"}
           </button>
           {loginError && <div className="error">{loginError}</div>}
@@ -171,16 +167,14 @@ export function App(): JSX.Element {
               {result && <AnalysisResultView result={result} history={history} />}
             </>
           ) : (
-            <>
-              <ChatView
-                intentLens={intentLens}
-                sessionId={activeSession.id}
-                initialMessages={historyToChatMessages(sessionDetail?.messages ?? [])}
-              />
-            </>
+            <ChatView
+              intentLens={intentLens}
+              sessionId={activeSession.id}
+              initialMessages={historyToChatMessages(sessionDetail?.messages ?? [])}
+            />
           )}
         </>
       )}
-    </main>
+    </AppShell>
   );
 }
