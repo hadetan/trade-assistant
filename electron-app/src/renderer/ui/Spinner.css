@@ -1,0 +1,10 @@
+.spinner {
+  color: var(--accent);
+  animation: spinner-spin 1s linear infinite;
+}
+
+@keyframes spinner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
