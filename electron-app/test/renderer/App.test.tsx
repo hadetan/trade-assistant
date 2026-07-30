@@ -107,7 +107,7 @@ describe("App", () => {
     fireEvent.click(await screen.findByLabelText(/selling stance/i));
     fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
     fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
-    fireEvent.click(screen.getByLabelText(/positional/i));
+    fireEvent.click(screen.getByRole("button", { name: /positional/i }));
     fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
     await waitFor(() =>
       expect(bridge.runAnalysis).toHaveBeenCalledWith({

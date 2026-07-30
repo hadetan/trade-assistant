@@ -2,14 +2,21 @@ import { useEffect, useState } from "react";
 import type { Horizon, InstrumentSelection } from "../main/ipc/rendererApi";
 import { bridge } from "./bridge";
 import { parseInstruments } from "./instrumentParsing";
+import { TextField } from "./ui/TextField";
+import { Button } from "./ui/Button";
+import { Banner } from "./ui/Banner";
+import { Spinner } from "./ui/Spinner";
+import "./InstrumentSearch.css";
 
 export { parseInstruments };
 
 export interface InstrumentSearchProps {
-  onSubmit: (instrument: InstrumentSelection, horizon: Horizon) => void;
+  onSubmit: (instrument: InstrumentSelection, horizon: Horizon) => void | Promise<void>;
 }
 
 const SEARCH_DEBOUNCE_MS = 300;
+const HORIZON_LABEL: Record<Horizon, string> = { intraday: "Intraday", positional: "Positional" };
+const HORIZONS: Horizon[] = ["intraday", "positional"];
 
 export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Element {
   const [query, setQuery] = useState("");
@@ -17,6 +24,7 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
   const [selected, setSelected] = useState<InstrumentSelection | null>(null);
   const [horizon, setHorizon] = useState<Horizon>("intraday");
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
 
   useEffect(() => {
     // A new query invalidates whatever was selected under the old one — the
@@ -43,38 +51,57 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
     };
   }, [query]);
 
+  const onAnalyzeClick = async (): Promise<void> => {
+    if (!selected || running) return;
+    setRunning(true);
+    try {
+      await onSubmit(selected, horizon);
+    } finally {
+      setRunning(false);
+    }
+  };
+
   return (
     <section className="analysis-form">
-      <input
+      <TextField
+        variant="search"
         aria-label="instrument search"
         placeholder="Search instrument"
         value={query}
         onChange={(event) => setQuery(event.target.value)}
       />
-      {searchError && <div className="error">{searchError}</div>}
-      <ul className="results">
-        {results.map((instrument) => (
-          <li key={instrument.instrumentToken}>
-            <button type="button" onClick={() => setSelected(instrument)}>
-              {instrument.symbol}
-            </button>
-          </li>
+      {searchError && <Banner variant="error">{searchError}</Banner>}
+      {results.length > 0 && (
+        <ul className="instrument-results">
+          {results.map((instrument) => (
+            <li key={instrument.instrumentToken}>
+              <button
+                type="button"
+                className={`instrument-result${selected?.instrumentToken === instrument.instrumentToken ? " instrument-result-selected" : ""}`}
+                onClick={() => setSelected(instrument)}
+              >
+                {instrument.symbol}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="horizon-toggle" role="group" aria-label="Horizon">
+        {HORIZONS.map((value) => (
+          <Button
+            key={value}
+            variant={horizon === value ? "primary" : "secondary"}
+            size="sm"
+            aria-pressed={horizon === value}
+            onClick={() => setHorizon(value)}
+          >
+            {HORIZON_LABEL[value]}
+          </Button>
         ))}
-      </ul>
-      <fieldset>
-        <legend>Horizon</legend>
-        <label>
-          <input type="radio" name="horizon" checked={horizon === "intraday"} onChange={() => setHorizon("intraday")} />
-          Intraday
-        </label>
-        <label>
-          <input type="radio" name="horizon" checked={horizon === "positional"} onChange={() => setHorizon("positional")} />
-          Positional
-        </label>
-      </fieldset>
-      <button type="button" disabled={!selected} onClick={() => selected && onSubmit(selected, horizon)}>
-        Analyze {selected ? selected.symbol : ""}
-      </button>
+      </div>
+      <Button disabled={!selected || running} onClick={() => void onAnalyzeClick()}>
+        {running && <Spinner size={14} />} Analyze {selected ? selected.symbol : ""}
+      </Button>
     </section>
   );
 }
