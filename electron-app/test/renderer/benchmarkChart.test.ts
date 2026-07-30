@@ -47,19 +47,28 @@ function resultWith(outcomes: Array<BenchmarkResult["decisionPoints"][number]["o
   };
 }
 
+function containerWithTokens(): HTMLElement {
+  const container = document.createElement("div");
+  container.style.setProperty("--bullish", "#16a34a");
+  container.style.setProperty("--bearish", "#dc2626");
+  container.style.setProperty("--neutral", "#6b7280");
+  document.body.appendChild(container);
+  return container;
+}
+
 describe("createBenchmarkChart", () => {
-  it("passes one marker per decision point with a color matching each outcome", () => {
+  it("reads each marker's color from the container's --bullish/--bearish/--neutral custom properties", () => {
     createSeriesMarkers.mockClear();
-    const container = document.createElement("div");
+    const container = containerWithTokens();
     createBenchmarkChart(container, resultWith(["correct", "incorrect", "neutral"]), () => {});
     const markers = createSeriesMarkers.mock.calls[0][1] as Array<{ color: string }>;
     expect(markers).toHaveLength(3);
-    expect(markers.map((m) => m.color)).toEqual(["#26a69a", "#ef5350", "#9e9e9e"]);
+    expect(markers.map((m) => m.color)).toEqual(["#16a34a", "#dc2626", "#6b7280"]);
   });
 
   it("dispose() removes the chart", () => {
     remove.mockClear();
-    const container = document.createElement("div");
+    const container = containerWithTokens();
     const handle = createBenchmarkChart(container, resultWith([]), () => {});
     handle.dispose();
     expect(remove).toHaveBeenCalledTimes(1);

@@ -1,0 +1,83 @@
+.benchmark {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 640px;
+}
+
+.benchmark-loading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6);
+}
+
+.benchmark-picker {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.benchmark-picker-item {
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.benchmark-picker-item:hover {
+  background: var(--bg-subtle);
+}
+
+.benchmark-setup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.benchmark-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.segmented-control {
+  display: inline-flex;
+  gap: var(--space-1);
+}
+
+.benchmark-results {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.benchmark-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.benchmark-summary-hitrate {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  opacity: 0.8;
+}
+
+.benchmark-chart {
+  height: 360px;
+}
+
+.benchmark-popover {
+  box-shadow: var(--shadow-md);
+}
