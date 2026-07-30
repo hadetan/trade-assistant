@@ -95,3 +95,10 @@
   flex: 1;
   padding: var(--space-5);
 }
+
+.app-empty-state-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}

@@ -7,6 +7,9 @@ import { ChatView, historyToChatMessages } from "./ChatView";
 import { BenchmarkView } from "./BenchmarkView";
 import { AppShell } from "./AppShell";
 import { EmptyState } from "./ui/EmptyState";
+import { Button } from "./ui/Button";
+import { Banner } from "./ui/Banner";
+import { Spinner } from "./ui/Spinner";
 import { MessageSquare } from "./ui/icons";
 import { bridge } from "./bridge";
 import type {
@@ -145,15 +148,17 @@ export function App(): JSX.Element {
       {activeSession === null && showModePicker && <ModePicker onSelect={(mode) => void onSelectMode(mode)} />}
       {activeSession === null && showBenchmark && <BenchmarkView api={bridge()} />}
       {activeSession === null && !showModePicker && !showBenchmark && (
-        <EmptyState icon={MessageSquare} message="Select New session to start, or reopen a session from the sidebar." />
+        <div className="app-empty-state-wrap">
+          <EmptyState icon={MessageSquare} message="Select New session to start, or reopen a session from the sidebar." />
+        </div>
       )}
 
       {activeSession !== null && !authenticated && (
         <>
-          <button type="button" onClick={() => void onLogin()} disabled={loggingIn}>
-            {loggingIn ? "Logging in…" : "Login to Kite"}
-          </button>
-          {loginError && <div className="error">{loginError}</div>}
+          <Button onClick={() => void onLogin()} disabled={loggingIn}>
+            {loggingIn && <Spinner size={14} />} {loggingIn ? "Logging in…" : "Login to Kite"}
+          </Button>
+          {loginError && <Banner variant="error">{loginError}</Banner>}
         </>
       )}
 

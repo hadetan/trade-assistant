@@ -4,6 +4,9 @@
   gap: var(--space-4);
   padding: var(--space-4);
   max-width: 420px;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
 }
 
 .settings-section {
