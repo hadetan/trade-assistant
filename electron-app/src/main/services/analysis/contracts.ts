@@ -102,7 +102,11 @@ export const intakeResultSchema = z
         symbol: z.string().min(1),
         exchange: z.string(),
         segment: z.string(),
-        instrumentToken: z.string().min(1),
+        // search_instruments (Kite's remote MCP server) returns instrument_token
+        // as a JSON number; the intake persona transcribes it freehand from the
+        // tool result rather than through a coercing parser, so it round-trips
+        // as either type depending on what the model echoes back.
+        instrumentToken: z.union([z.string().min(1), z.number()]).transform(String),
       })
       .strict(),
     horizon: z.enum(["intraday", "positional"]),
@@ -152,7 +156,7 @@ export const intakeResultJsonSchema = {
         symbol: { type: "string" },
         exchange: { type: "string" },
         segment: { type: "string" },
-        instrumentToken: { type: "string" },
+        instrumentToken: { type: ["string", "number"] },
       },
     },
     horizon: { type: "string", enum: ["intraday", "positional"] },

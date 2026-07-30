@@ -102,7 +102,7 @@ describe("makeClaudeRunner", () => {
   it("exposes the P9A§6 default timeout table", async () => {
     const { PERSONA_TIMEOUTS_MS } = await import("../../../../src/main/services/claude/claudeCliProvider");
     expect(PERSONA_TIMEOUTS_MS).toEqual({
-      sidecar: 20000, intake: 20000, options_greeks: 45000, technical_quant: 45000,
+      sidecar: 20000, intake: 45000, options_greeks: 45000, technical_quant: 45000,
       position_risk: 45000, synthesis: 25000, narrative: 60000,
     });
   });

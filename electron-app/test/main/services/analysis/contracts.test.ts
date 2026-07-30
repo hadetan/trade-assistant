@@ -136,4 +136,26 @@ describe("IntakeResult contract", () => {
     expect(intakeResultJsonSchema.properties.horizon.enum).toEqual(["intraday", "positional"]);
     expect(intakeResultJsonSchema.additionalProperties).toBe(false);
   });
+
+  it("normalizes a numeric instrumentToken (search_instruments returns it as a JSON number) to a string", () => {
+    const result = intakeResultSchema.safeParse({
+      ...valid,
+      instrument: { ...valid.instrument, instrumentToken: 408065 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.instrument.instrumentToken).toBe("408065");
+    }
+  });
+
+  it("still rejects a missing or empty instrumentToken", () => {
+    expect(
+      intakeResultSchema.safeParse({ ...valid, instrument: { ...valid.instrument, instrumentToken: "" } }).success,
+    ).toBe(false);
+    expect(
+      intakeResultSchema.safeParse({ ...valid, instrument: { ...valid.instrument, instrumentToken: null } }).success,
+    ).toBe(false);
+    const { instrumentToken: _omit, ...withoutToken } = valid.instrument;
+    expect(intakeResultSchema.safeParse({ ...valid, instrument: withoutToken }).success).toBe(false);
+  });
 });

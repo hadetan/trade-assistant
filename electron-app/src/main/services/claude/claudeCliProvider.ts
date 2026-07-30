@@ -38,7 +38,10 @@ export interface ClaudeRunnerOptions {
 
 export const PERSONA_TIMEOUTS_MS: Record<TraceSource, number> = {
   sidecar: 20000, // used by P9A§7's compute bound, kept here for co-location
-  intake: 20000,
+  // intake's prompt mandates a search_instruments MCP round-trip (unlike the
+  // analytical personas below, for which allowWebTools is merely permitted),
+  // so it needs the same budget as them, not sidecar's local-compute-only one.
+  intake: 45000,
   options_greeks: 45000,
   technical_quant: 45000,
   position_risk: 45000,
