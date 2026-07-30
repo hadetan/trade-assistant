@@ -102,3 +102,27 @@
   justify-content: center;
   height: 100%;
 }
+
+.kite-login-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  text-align: center;
+}
+
+.kite-login-icon {
+  color: var(--neutral);
+}
+
+.kite-login-message {
+  margin: 0;
+  max-width: 360px;
+  font-size: var(--text-sm);
+  opacity: 0.8;
+}
+
+.kite-login-button.btn-md {
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--text-lg);
+}

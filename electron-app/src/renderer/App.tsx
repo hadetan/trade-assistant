@@ -10,7 +10,7 @@ import { EmptyState } from "./ui/EmptyState";
 import { Button } from "./ui/Button";
 import { Banner } from "./ui/Banner";
 import { Spinner } from "./ui/Spinner";
-import { MessageSquare } from "./ui/icons";
+import { MessageSquare, LogIn } from "./ui/icons";
 import { bridge } from "./bridge";
 import type {
   AnalysisMode,
@@ -154,12 +154,16 @@ export function App(): JSX.Element {
       )}
 
       {activeSession !== null && !authenticated && (
-        <>
-          <Button onClick={() => void onLogin()} disabled={loggingIn}>
-            {loggingIn && <Spinner size={14} />} {loggingIn ? "Logging in…" : "Login to Kite"}
-          </Button>
-          {loginError && <Banner variant="error">{loginError}</Banner>}
-        </>
+        <div className="app-empty-state-wrap">
+          <div className="kite-login-prompt">
+            <LogIn className="kite-login-icon" size={40} aria-hidden="true" />
+            <p className="kite-login-message">Connect your Kite account to fetch live quotes and run analysis.</p>
+            <Button className="kite-login-button" onClick={() => void onLogin()} disabled={loggingIn}>
+              {loggingIn && <Spinner size={16} />} {loggingIn ? "Logging in…" : "Login to Kite"}
+            </Button>
+            {loginError && <Banner variant="error">{loginError}</Banner>}
+          </div>
+        </div>
       )}
 
       {activeSession !== null && authenticated && (

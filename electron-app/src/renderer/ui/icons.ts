@@ -16,5 +16,6 @@ export {
   MessageSquare,
   Gauge,
   BarChart3,
+  LogIn,
 } from "lucide-react";
 export type { LucideIcon } from "lucide-react";
