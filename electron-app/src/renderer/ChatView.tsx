@@ -2,8 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { bridge } from "./bridge";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { AgentActivityPanel } from "./AgentActivityPanel";
-import { ThemeToggle, useChatTheme } from "./ThemeToggle";
-import "./theme.css";
+import { TextField } from "./ui/TextField";
+import { Button } from "./ui/Button";
+import { Badge, directionTone } from "./ui/Badge";
+import { Banner } from "./ui/Banner";
+import { Send } from "./ui/icons";
 import "./ChatView.css";
 import type { AnalysisResult, HistoryMessage, IntentLens, TraceEvent, Verdict } from "../main/ipc/rendererApi";
 
@@ -55,7 +58,6 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const activeRequestId = useRef<string | null>(null);
-  const [theme, toggleTheme] = useChatTheme();
 
   useEffect(() => {
     bridge().onTrace((event: TraceEvent) => {
@@ -66,8 +68,6 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
           message.role === "assistant" && message.requestId === event.requestId
             ? {
                 ...message,
-                // narrative tokens stream into the bubble text, exactly as onNarrative did;
-                // every other event is trace fuel for the panel and never appended to text.
                 text: isNarrativeToken ? message.text + (event.detail ?? "") : message.text,
                 trace: isNarrativeToken ? message.trace : [...message.trace, event],
               }
@@ -109,8 +109,7 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
   };
 
   return (
-    <section className="chat-view" data-theme={theme}>
-      <ThemeToggle theme={theme} onToggle={toggleTheme} />
+    <section className="chat-view">
       <ul className="messages">
         {messages.map((message, index) => (
           <li key={index} className={`message message-${message.role}`}>
@@ -118,9 +117,9 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
               <>
                 {message.trace.length > 0 && <AgentActivityPanel trace={message.trace} live={message.live} />}
                 {message.verdict && (
-                  <div className="verdict">
+                  <Badge tone={directionTone(message.verdict.direction)} className="verdict">
                     {message.verdict.direction} · {message.verdict.conviction} conviction
-                  </div>
+                  </Badge>
                 )}
                 <MessageMarkdown text={message.text} />
               </>
@@ -130,17 +129,23 @@ export function ChatView({ intentLens, sessionId, initialMessages }: ChatViewPro
           </li>
         ))}
       </ul>
-      {error && <div className="error">{error}</div>}
+      {error && <Banner variant="error">{error}</Banner>}
       <div className="chat-input">
-        <input
+        <TextField
           aria-label="ask about an instrument"
           placeholder="Ask about an instrument…"
           value={input}
           onChange={(event) => setInput(event.target.value)}
         />
-        <button type="button" onClick={onSend} disabled={busy}>
-          {busy ? "Analyzing…" : "Send"}
-        </button>
+        <Button onClick={() => void onSend()} disabled={busy}>
+          {busy ? (
+            "Analyzing…"
+          ) : (
+            <>
+              <Send size={14} aria-hidden="true" /> Send
+            </>
+          )}
+        </Button>
       </div>
     </section>
   );

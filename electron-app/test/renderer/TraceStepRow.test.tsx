@@ -13,26 +13,24 @@ function lane(status: LaneNode["status"], children: LaneNode["children"] = []): 
 describe("TraceStepRow", () => {
   it("auto-expands a running row and shows its children while live", () => {
     const node = lane("running", [{ kind: "tool", variant: "toolCall", detail: "Read {}" }]);
-    render(<TraceStepRow node={node} live={true} />);
-    expect(screen.getByText("⟳")).toBeTruthy();
+    const { container } = render(<TraceStepRow node={node} live={true} />);
+    expect(container.querySelector(".status-dot-running")).toBeTruthy();
     expect(screen.getByText("Read {}")).toBeTruthy();
-    expect(screen.getByText("▾")).toBeTruthy();
+    expect(container.querySelector(".trace-step-caret")).toBeTruthy();
   });
 
   it("auto-collapses a done row while live", () => {
     const node = lane("done", [{ kind: "tool", variant: "toolCall", detail: "Read {}" }]);
-    render(<TraceStepRow node={node} live={true} />);
-    expect(screen.getByText("✓")).toBeTruthy();
+    const { container } = render(<TraceStepRow node={node} live={true} />);
+    expect(container.querySelector(".status-dot-done")).toBeTruthy();
     expect(screen.queryByText("Read {}")).toBeNull();
-    expect(screen.getByText("▸")).toBeTruthy();
   });
 
   it("stays expanded on error while live", () => {
     const node = lane("error", [{ kind: "tool", variant: "toolResult", detail: "boom" }]);
-    render(<TraceStepRow node={node} live={true} />);
-    expect(screen.getByText("✗")).toBeTruthy();
+    const { container } = render(<TraceStepRow node={node} live={true} />);
+    expect(container.querySelector(".status-dot-error")).toBeTruthy();
     expect(screen.getByText("boom")).toBeTruthy();
-    expect(screen.getByText("▾")).toBeTruthy();
   });
 
   it("lets a manual expand override auto-collapse on a done row, and the override persists across a same-status re-render", () => {
@@ -55,21 +53,19 @@ describe("TraceStepRow", () => {
 
     const erroredNode = lane("error", [{ kind: "tool", variant: "toolResult", detail: "boom" }]);
     rerender(<TraceStepRow node={erroredNode} live={true} />);
-    expect(screen.getByText("boom")).toBeTruthy(); // status transitioned; auto takes back over and re-expands
+    expect(screen.getByText("boom")).toBeTruthy();
   });
 
   it("auto-collapses when a running row transitions to done", () => {
     const runningNode = lane("running", [{ kind: "tool", variant: "toolCall", detail: "Read {}" }]);
-    const { rerender } = render(<TraceStepRow node={runningNode} live={true} />);
-    expect(screen.getByText("⟳")).toBeTruthy();
-    expect(screen.getByText("Read {}")).toBeTruthy(); // auto-expanded while running
-    expect(screen.getByText("▾")).toBeTruthy();
+    const { container, rerender } = render(<TraceStepRow node={runningNode} live={true} />);
+    expect(container.querySelector(".status-dot-running")).toBeTruthy();
+    expect(screen.getByText("Read {}")).toBeTruthy();
 
     const doneNode = lane("done", [{ kind: "tool", variant: "toolCall", detail: "Read {}" }]);
     rerender(<TraceStepRow node={doneNode} live={true} />);
-    expect(screen.getByText("✓")).toBeTruthy();
-    expect(screen.queryByText("Read {}")).toBeNull(); // auto-collapsed after status transition
-    expect(screen.getByText("▸")).toBeTruthy();
+    expect(container.querySelector(".status-dot-done")).toBeTruthy();
+    expect(screen.queryByText("Read {}")).toBeNull();
   });
 
   it("renders every row collapsed by default in history replay (live=false), even an errored one, until manually toggled", () => {
@@ -82,9 +78,8 @@ describe("TraceStepRow", () => {
 
   it("disables the toggle button and shows no caret for a childless algo leaf", () => {
     const node = { kind: "algo" as const, label: "rsi", status: "done" as const };
-    render(<TraceStepRow node={node} live={false} />);
+    const { container } = render(<TraceStepRow node={node} live={false} />);
     expect((screen.getByRole("button") as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByText("▾")).toBeNull();
-    expect(screen.queryByText("▸")).toBeNull();
+    expect(container.querySelector(".trace-step-caret")).toBeNull();
   });
 });

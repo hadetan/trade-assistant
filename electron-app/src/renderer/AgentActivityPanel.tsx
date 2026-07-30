@@ -1,6 +1,7 @@
 import { useState } from "react";
 import "./AgentActivityPanel.css";
 import { TraceStepRow } from "./TraceStepRow";
+import { ChevronDown, ChevronRight } from "./ui/icons";
 import type { TraceEvent, TraceSource } from "../main/ipc/rendererApi";
 
 export const LANE_ORDER: TraceSource[] = [
@@ -110,7 +111,11 @@ export function AgentActivityPanel({ trace, live }: AgentActivityPanelProps): JS
   return (
     <div className="agent-activity">
       <button type="button" className="agent-activity-head" onClick={() => setOpen((v) => !v)}>
-        <span className="agent-activity-caret">{open ? "▾" : "▸"}</span>
+        {open ? (
+          <ChevronDown size={14} className="agent-activity-caret" aria-hidden="true" />
+        ) : (
+          <ChevronRight size={14} className="agent-activity-caret" aria-hidden="true" />
+        )}
         Agent activity
       </button>
       {open && (

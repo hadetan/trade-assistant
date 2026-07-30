@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import "./TraceStepRow.css";
-import type { ChildNode, LaneNode, NodeStatus } from "./AgentActivityPanel";
-
-const STATUS_ICON: Record<NodeStatus, string> = { running: "⟳", done: "✓", error: "✗" };
+import { StatusDot } from "./ui/StatusDot";
+import { ChevronDown, ChevronRight } from "./ui/icons";
+import type { ChildNode, LaneNode } from "./AgentActivityPanel";
 
 type BracketNode = LaneNode | Extract<ChildNode, { kind: "algo" }>;
 
@@ -31,9 +31,13 @@ export function TraceStepRow({ node, live }: TraceStepRowProps): JSX.Element {
         onClick={() => hasChildren && setOverride(!expanded)}
         disabled={!hasChildren}
       >
-        <span className="trace-step-icon">{STATUS_ICON[node.status]}</span>
-        {hasChildren && <span className="trace-step-caret">{expanded ? "▾" : "▸"}</span>}
-        <span className="trace-step-label">{node.label}</span>
+        <StatusDot tone={node.status} label={node.label} />
+        {hasChildren &&
+          (expanded ? (
+            <ChevronDown size={12} className="trace-step-caret" aria-hidden="true" />
+          ) : (
+            <ChevronRight size={12} className="trace-step-caret" aria-hidden="true" />
+          ))}
       </button>
       {node.kind === "lane" && expanded && node.children.length > 0 && (
         <div className="trace-step-children">
