@@ -45,13 +45,13 @@ describe("SettingsWindow", () => {
     const addButton = await screen.findByText("Add NSE:INFY");
     fireEvent.click(addButton);
     expect(api.addWatchlistSymbol).toHaveBeenCalledWith("NSE:INFY");
-    await waitFor(() => expect(screen.getByText("Remove")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: /remove nse:infy/i })).toBeTruthy());
   });
 
-  it("clicking Remove calls removeWatchlistSymbol", async () => {
+  it("clicking the remove control on a watchlist chip calls removeWatchlistSymbol", async () => {
     const api = installSettingsBridge({ listWatchlist: vi.fn().mockResolvedValue(["NSE:INFY"]), removeWatchlistSymbol: vi.fn().mockResolvedValue([]) });
     render(<SettingsWindow />);
-    const removeButton = await screen.findByText("Remove");
+    const removeButton = await screen.findByRole("button", { name: /remove nse:infy/i });
     fireEvent.click(removeButton);
     expect(api.removeWatchlistSymbol).toHaveBeenCalledWith("NSE:INFY");
   });

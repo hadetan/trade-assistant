@@ -1,10 +1,31 @@
 import { useEffect, useState } from "react";
-import type { AppStatus, InstrumentSelection, ScanConfig, ScanIntervalMinutes } from "../main/ipc/rendererApi";
+import type { AppStatus, InstrumentSelection, KiteSessionStatus, ScanConfig, ScanIntervalMinutes, SidecarStatus } from "../main/ipc/rendererApi";
 import { settingsBridge } from "./settingsBridge";
 import { parseInstruments } from "./instrumentParsing";
+import { Card } from "./ui/Card";
+import { Switch } from "./ui/Switch";
+import { TextField } from "./ui/TextField";
+import { Button } from "./ui/Button";
+import { Badge } from "./ui/Badge";
+import { StatusDot } from "./ui/StatusDot";
+import type { StatusDotTone } from "./ui/StatusDot";
+import { Banner } from "./ui/Banner";
+import "./SettingsWindow.css";
 
 const INTERVAL_OPTIONS: ScanIntervalMinutes[] = [5, 15, 30, 60];
 const SEARCH_DEBOUNCE_MS = 300;
+
+function sidecarTone(status: SidecarStatus | undefined): StatusDotTone {
+  if (status === "up") return "done";
+  if (status === "restarting") return "running";
+  return "error";
+}
+
+function kiteTone(status: KiteSessionStatus | undefined): StatusDotTone {
+  if (status === "authenticated") return "done";
+  if (status === "needsLogin") return "running";
+  return "error";
+}
 
 export function SettingsWindow(): JSX.Element {
   const [config, setConfig] = useState<ScanConfig>({ enabled: false, intervalMinutes: 15 });
@@ -42,17 +63,14 @@ export function SettingsWindow(): JSX.Element {
 
   return (
     <section className="settings">
-      <fieldset>
-        <legend>Proactive scanning</legend>
-        <label>
-          <input
-            type="checkbox"
-            checked={config.enabled}
-            onChange={(event) => void applyConfig({ ...config, enabled: event.target.checked })}
-          />
-          Enable proactive scanning
-        </label>
-        <label>
+      <Card className="settings-section">
+        <h3>Proactive scanning</h3>
+        <Switch
+          checked={config.enabled}
+          onChange={(checked) => void applyConfig({ ...config, enabled: checked })}
+          label="Enable proactive scanning"
+        />
+        <label className="settings-field">
           Interval
           <select
             aria-label="scan interval"
@@ -66,43 +84,52 @@ export function SettingsWindow(): JSX.Element {
             ))}
           </select>
         </label>
-      </fieldset>
+      </Card>
 
-      <fieldset>
-        <legend>Watchlist</legend>
-        <input
+      <Card className="settings-section">
+        <h3>Watchlist</h3>
+        <TextField
+          variant="search"
           aria-label="instrument search"
           placeholder="Search instrument"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <ul className="results">
-          {results.map((instrument) => (
-            <li key={instrument.instrumentToken}>
-              <button type="button" onClick={async () => setWatchlist(await settingsBridge().addWatchlistSymbol(instrument.symbol))}>
-                Add {instrument.symbol}
-              </button>
-            </li>
-          ))}
-        </ul>
-        <ul className="watchlist">
+        {results.length > 0 && (
+          <ul className="results">
+            {results.map((instrument) => (
+              <li key={instrument.instrumentToken}>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={async () => setWatchlist(await settingsBridge().addWatchlistSymbol(instrument.symbol))}
+                >
+                  Add {instrument.symbol}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="watchlist">
           {watchlist.map((symbol) => (
-            <li key={symbol}>
+            <Badge
+              key={symbol}
+              tone="neutral"
+              onRemove={async () => setWatchlist(await settingsBridge().removeWatchlistSymbol(symbol))}
+              removeLabel={`Remove ${symbol}`}
+            >
               {symbol}
-              <button type="button" onClick={async () => setWatchlist(await settingsBridge().removeWatchlistSymbol(symbol))}>
-                Remove
-              </button>
-            </li>
+            </Badge>
           ))}
-        </ul>
-      </fieldset>
+        </div>
+      </Card>
 
-      <fieldset>
-        <legend>Account status</legend>
-        <div>Sidecar: {status?.sidecar ?? "…"}</div>
-        <div>Kite session: {status?.kiteSession ?? "…"}</div>
-        {status?.driftWarning && <div className="warning">{status.driftWarning}</div>}
-      </fieldset>
+      <Card className="settings-section">
+        <h3>Account status</h3>
+        <StatusDot tone={sidecarTone(status?.sidecar)} label={`Sidecar: ${status?.sidecar ?? "…"}`} />
+        <StatusDot tone={kiteTone(status?.kiteSession)} label={`Kite session: ${status?.kiteSession ?? "…"}`} />
+        {status?.driftWarning && <Banner variant="warning">{status.driftWarning}</Banner>}
+      </Card>
     </section>
   );
 }
