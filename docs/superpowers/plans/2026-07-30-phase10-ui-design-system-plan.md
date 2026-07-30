@@ -793,7 +793,7 @@ git commit -m "feat(electron-app): add the Card primitive"
 
 **Interfaces:**
 - Consumes: `tokens.css` variables; `X` icon from `./icons` (Task 2).
-- Produces: `BadgeTone = "bullish" | "bearish" | "neutral" | "running" | "done" | "error"`; `Badge(props: BadgeProps): JSX.Element` where `BadgeProps` extends `React.HTMLAttributes<HTMLSpanElement>` with a required `tone: BadgeTone` and optional `onRemove?: () => void` / `removeLabel?: string` (renders a small `X`-icon remove button inside the badge when `onRemove` is supplied). Task 13 (sidebar mode tag), Task 15 (`AnalysisResultView` confluence stats), Task 16 (chat verdict), Task 17 (benchmark summary strip), and Task 18 (removable watchlist chips, via `onRemove`) all import this exact signature.
+- Produces: `BadgeTone = "bullish" | "bearish" | "neutral" | "running" | "done" | "error"`; `Badge(props: BadgeProps): JSX.Element` where `BadgeProps` extends `React.HTMLAttributes<HTMLSpanElement>` with a required `tone: BadgeTone` and optional `onRemove?: () => void` / `removeLabel?: string` (renders a small `X`-icon remove button inside the badge when `onRemove` is supplied). Also produces `directionTone(direction: string): BadgeTone` (maps `"bullish"`/`"bearish"` through, anything else to `"neutral"`) — a shared helper so Tasks 15 and 16 don't each redefine the same four-line mapping in their own file. Task 13 (sidebar mode tag), Task 15 (`AnalysisResultView` confluence stats, via `directionTone`), Task 16 (chat verdict, via `directionTone`), Task 17 (benchmark summary strip), and Task 18 (removable watchlist chips, via `onRemove`) all import this exact signature.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -803,7 +803,7 @@ Create `electron-app/test/renderer/ui/Badge.test.tsx`:
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Badge } from "../../../src/renderer/ui/Badge";
+import { Badge, directionTone } from "../../../src/renderer/ui/Badge";
 
 afterEach(cleanup);
 
@@ -831,6 +831,15 @@ describe("Badge", () => {
     const button = screen.getByRole("button", { name: "Remove NSE:INFY" });
     fireEvent.click(button);
     expect(onRemove).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("directionTone", () => {
+  it("maps bullish/bearish through and anything else to neutral", () => {
+    expect(directionTone("bullish")).toBe("bullish");
+    expect(directionTone("bearish")).toBe("bearish");
+    expect(directionTone("neutral")).toBe("neutral");
+    expect(directionTone("whatever")).toBe("neutral");
   });
 });
 ```
@@ -869,6 +878,12 @@ export function Badge({ tone, onRemove, removeLabel, className, children, ...res
       )}
     </span>
   );
+}
+
+export function directionTone(direction: string): BadgeTone {
+  if (direction === "bullish") return "bullish";
+  if (direction === "bearish") return "bearish";
+  return "neutral";
 }
 ```
 
@@ -3160,8 +3175,7 @@ Replace the whole contents of `electron-app/src/renderer/AnalysisResult.tsx`:
 import type { AnalysisResult, HistoryMessage } from "../main/ipc/rendererApi";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { Card } from "./ui/Card";
-import { Badge } from "./ui/Badge";
-import type { BadgeTone } from "./ui/Badge";
+import { Badge, directionTone } from "./ui/Badge";
 import "./AnalysisResult.css";
 
 export interface AnalysisResultViewProps {
@@ -3175,12 +3189,6 @@ export interface AnalysisResultViewProps {
 // reads a clean "+0.62".
 function formatWeightedVote(vote: number): string {
   return vote.toFixed(2);
-}
-
-function directionTone(direction: string): BadgeTone {
-  if (direction === "bullish") return "bullish";
-  if (direction === "bearish") return "bearish";
-  return "neutral";
 }
 
 export function AnalysisResultView({ result, history = [] }: AnalysisResultViewProps): JSX.Element | null {
@@ -3458,8 +3466,7 @@ import { MessageMarkdown } from "./MessageMarkdown";
 import { AgentActivityPanel } from "./AgentActivityPanel";
 import { TextField } from "./ui/TextField";
 import { Button } from "./ui/Button";
-import { Badge } from "./ui/Badge";
-import type { BadgeTone } from "./ui/Badge";
+import { Badge, directionTone } from "./ui/Badge";
 import { Banner } from "./ui/Banner";
 import { Send } from "./ui/icons";
 import "./ChatView.css";
@@ -3489,12 +3496,6 @@ type ChatMessage = UserMessage | AssistantMessage;
 
 function newRequestId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function directionTone(direction: string): BadgeTone {
-  if (direction === "bullish") return "bullish";
-  if (direction === "bearish") return "bearish";
-  return "neutral";
 }
 
 export function historyToChatMessages(messages: HistoryMessage[]): ChatMessage[] {
@@ -4965,6 +4966,6 @@ No commit for this task if all eight steps above pass clean (nothing changed). I
 - **`IntentLensSelector.tsx`** is confirmed out of scope by its absence from every P10§1/P10§6 mention (verified by grep) and is untouched by every task.
 - **The temporary double-theme-toggle window between Task 12 and Task 16** (`AppShell` gains its own `useChatTheme`/`ThemeToggle` while `ChatView` still owns its pre-existing copy) is named explicitly in Task 12's notes so a reviewer evaluating that task alone doesn't mistake it for an oversight — Task 16 is where P10§6.4 assigns the actual removal.
 - **`Badge`'s `"neutral"` tone as the generic/default chip color** (sidebar mode tags, Settings watchlist chips) is justified directly from P10§5.4's own use-site list, which names both of those alongside genuinely directional uses (chat verdict, confluence stats, benchmark summary) — confirming `"neutral"` is this system's default tone for non-directional labels, not an invented option.
-- **Type consistency check:** `StatusDotTone` (Task 7) and `NodeStatus` (already existing in `AgentActivityPanel.tsx`) are the same three-value union (`"running" | "done" | "error"`) by construction; Task 16's `TraceStepRow` passes `node.status` (a `NodeStatus`) directly into `StatusDot`'s `tone: StatusDotTone` prop with no adapter needed — verified structurally identical, not just similarly named. `BadgeTone` (Task 6) and the `directionTone()` helper duplicated in Task 15 (`AnalysisResultView`) and Task 16 (`ChatView`) both return the same three-value subset (`"bullish" | "bearish" | "neutral"`) for the same reason `AnalysisResultView` and `ChatView` are separate files with no shared parent component to hang a common helper off of without inventing a new shared module outside this plan's file list.
+- **Type consistency check:** `StatusDotTone` (Task 7) and `NodeStatus` (already existing in `AgentActivityPanel.tsx`) are the same three-value union (`"running" | "done" | "error"`) by construction; Task 16's `TraceStepRow` passes `node.status` (a `NodeStatus`) directly into `StatusDot`'s `tone: StatusDotTone` prop with no adapter needed — verified structurally identical, not just similarly named. `directionTone()` is defined once, in Task 6's `Badge.tsx` (exported alongside `BadgeTone`), and imported by both Task 15 (`AnalysisResultView`) and Task 16 (`ChatView`) rather than redefined in each file — resolved this way instead of the plan's earlier draft (which duplicated the four-line mapping per-file) after review flagged the duplication before implementation began.
 - **No task deletes or narrows any existing IPC-adjacent type.** `HistorySidebarProps` gained a field (Task 12/13); `InstrumentSearchProps.onSubmit` widened its return type (Task 15) — both are backward-compatible renderer-only prop changes, not `rendererApi.ts` changes, consistent with P10§7.1.
 - **No Rust-side or `rust-core/` task exists in this plan** — confirmed against P10§1: this phase is pure renderer/presentation work, matching P9B's own equivalent note.
