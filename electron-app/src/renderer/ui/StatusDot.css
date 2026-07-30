@@ -1,0 +1,29 @@
+.status-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--fg);
+}
+
+.status-dot-running .status-dot-icon {
+  color: var(--status-running);
+}
+
+.status-dot-done .status-dot-icon {
+  color: var(--status-done);
+}
+
+.status-dot-error .status-dot-icon {
+  color: var(--status-error);
+}
+
+.status-dot-icon-spin {
+  animation: status-dot-spin 1s linear infinite;
+}
+
+@keyframes status-dot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
