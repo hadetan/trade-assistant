@@ -14,4 +14,16 @@ describe("ModePicker", () => {
     fireEvent.click(screen.getByRole("button", { name: /engine-only/i }));
     expect(onSelect).toHaveBeenCalledWith("engine_only");
   });
+
+  it("shows an icon on each card", () => {
+    const { container } = render(<ModePicker onSelect={vi.fn()} />);
+    expect(container.querySelectorAll(".mode-card-icon")).toHaveLength(2);
+  });
+
+  it("selects a card via the keyboard (Enter) as well as a click", () => {
+    const onSelect = vi.fn();
+    render(<ModePicker onSelect={onSelect} />);
+    fireEvent.keyDown(screen.getByRole("button", { name: /engine-only/i }), { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith("engine_only");
+  });
 });

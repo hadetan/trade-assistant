@@ -1,0 +1,44 @@
+.mode-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  align-items: center;
+  padding: var(--space-6) 0;
+}
+
+.mode-picker-heading {
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.mode-picker-cards {
+  display: flex;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.mode-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: 260px;
+  text-align: center;
+}
+
+.mode-card-icon {
+  color: var(--accent);
+}
+
+.mode-card h3 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.mode-card p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  opacity: 0.8;
+}
