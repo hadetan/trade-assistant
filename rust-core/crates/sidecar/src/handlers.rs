@@ -275,19 +275,22 @@ pub fn handle_evaluate_scan_gate_stateless(request: EvaluateScanGateStatelessReq
     ScanGateResponse { id: request.id, decision: format!("{decision:?}"), error: None }
 }
 
-pub fn handle_list_algorithms(request: ListAlgorithmsRequest) -> ListAlgorithmsResponse {
-    let forecasters = registry::ensure_forecasters_linked();
-    let slow_ids: std::collections::HashSet<&str> = forecasters.iter().map(|a| a.id()).collect();
-
-    let mut algorithms: Vec<AlgorithmWire> = registry::all()
+fn tag_algorithms(fast_source: &[Box<dyn Algorithm>], slow_source: &[Box<dyn Algorithm>]) -> Vec<AlgorithmWire> {
+    let slow_ids: std::collections::HashSet<&str> = slow_source.iter().map(|a| a.id()).collect();
+    let mut algorithms: Vec<AlgorithmWire> = fast_source
         .iter()
         .filter(|a| !slow_ids.contains(a.id()))
         .map(|a| AlgorithmWire { id: a.id().to_string(), cost: "fast".to_string() })
         .collect();
-    for algo in &forecasters {
+    for algo in slow_source {
         algorithms.push(AlgorithmWire { id: algo.id().to_string(), cost: "slow".to_string() });
     }
     algorithms.sort_by(|a, b| a.id.cmp(&b.id));
+    algorithms
+}
+
+pub fn handle_list_algorithms(request: ListAlgorithmsRequest) -> ListAlgorithmsResponse {
+    let algorithms = tag_algorithms(&registry::all(), &registry::ensure_forecasters_linked());
     ListAlgorithmsResponse { id: request.id, algorithms }
 }
 
@@ -646,5 +649,26 @@ mod tests {
         let mut sorted_ids = ids.clone();
         sorted_ids.sort();
         assert_eq!(ids, sorted_ids, "handle_list_algorithms sorts its output by id");
+    }
+
+    #[test]
+    fn tag_algorithms_treats_any_slow_source_id_as_slow_even_if_the_fast_source_also_contains_it() {
+        // Two lists both built from registry::all() so they deliberately share an
+        // id -- a stand-in for the real scenario (a debug build where
+        // registry::all() and registry::ensure_forecasters_linked() both contain
+        // the same forecaster) without needing any forecaster Cargo feature
+        // enabled at all.
+        let fast_source = registry::all();
+        let overlapping_id = fast_source.first().expect("registry::all() is never empty").id().to_string();
+        let slow_source: Vec<Box<dyn Algorithm>> = registry::all()
+            .into_iter()
+            .filter(|a| a.id() == overlapping_id)
+            .collect();
+
+        let algorithms = tag_algorithms(&fast_source, &slow_source);
+
+        let matches: Vec<_> = algorithms.iter().filter(|w| w.id == overlapping_id).collect();
+        assert_eq!(matches.len(), 1, "an id present in both sources must appear exactly once");
+        assert_eq!(matches[0].cost, "slow", "any id present in the slow source must be tagged slow, even if the fast source also contains it");
     }
 }
