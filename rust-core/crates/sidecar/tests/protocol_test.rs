@@ -9,6 +9,7 @@ use sidecar::protocol::{
     EvaluateScanGateStatelessRequest, LakeCandlesResponse, LakeSymbolWire, LakeSymbolsResponse,
     ListLakeSymbolsRequest, ReadLakeCandlesRequest,
 };
+use sidecar::protocol::{AlgorithmWire, ListAlgorithmsRequest, ListAlgorithmsResponse};
 
 #[test]
 fn request_round_trips_from_json_line() {
@@ -380,4 +381,45 @@ fn encodes_a_tagged_benchmark_compute_response() {
     let line = encode_response(&SidecarResponse::BenchmarkCompute(benchmark_empty_response(22)));
     assert!(line.contains("\"type\":\"benchmark_compute\""));
     assert!(line.contains("\"id\":22"));
+}
+
+#[test]
+fn list_algorithms_request_payload_deserializes() {
+    let req: ListAlgorithmsRequest = serde_json::from_str(r#"{"id":40}"#).unwrap();
+    assert_eq!(req.id, 40);
+}
+
+#[test]
+fn algorithms_response_serializes_its_tagged_algorithm_list() {
+    let json = serde_json::to_string(&ListAlgorithmsResponse {
+        id: 40,
+        algorithms: vec![
+            AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string() },
+            AlgorithmWire { id: "kronos".to_string(), cost: "slow".to_string() },
+        ],
+    })
+    .unwrap();
+    assert!(json.contains("\"id\":40"));
+    assert!(json.contains("\"id\":\"sma\""));
+    assert!(json.contains("\"cost\":\"fast\""));
+    assert!(json.contains("\"cost\":\"slow\""));
+}
+
+#[test]
+fn parses_a_tagged_list_algorithms_request() {
+    match parse_request(r#"{"type":"list_algorithms","id":40}"#).unwrap() {
+        SidecarRequest::ListAlgorithms(request) => assert_eq!(request.id, 40),
+        _ => panic!("expected a list_algorithms request"),
+    }
+}
+
+#[test]
+fn encodes_a_tagged_algorithms_response() {
+    let line = encode_response(&SidecarResponse::Algorithms(ListAlgorithmsResponse {
+        id: 40,
+        algorithms: vec![AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string() }],
+    }));
+    assert!(!line.contains('\n'));
+    assert!(line.contains("\"type\":\"algorithms\""));
+    assert!(line.contains("\"id\":\"sma\""));
 }

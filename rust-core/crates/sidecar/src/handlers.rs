@@ -1,10 +1,10 @@
 use crate::protocol::{
-    benchmark_empty_response, AddWatchlistSymbolRequest, AlgoResultWire, BenchmarkComputeRequest,
-    BenchmarkComputeResponse, CandleWire, ComputeRequest, ComputeResponse, ConfluenceWire,
-    EvaluateScanGateRequest, EvaluateScanGateStatelessRequest, LakeCandlesResponse, LakeSymbolWire,
-    LakeSymbolsResponse, ListLakeSymbolsRequest, ListWatchlistRequest, PersistCandlesRequest,
-    PersistCandlesResponse, ReadLakeCandlesRequest, RemoveWatchlistSymbolRequest, ScanGateResponse,
-    WatchlistResponse,
+    benchmark_empty_response, AddWatchlistSymbolRequest, AlgoResultWire, AlgorithmWire,
+    BenchmarkComputeRequest, BenchmarkComputeResponse, CandleWire, ComputeRequest, ComputeResponse,
+    ConfluenceWire, EvaluateScanGateRequest, EvaluateScanGateStatelessRequest, LakeCandlesResponse,
+    LakeSymbolWire, LakeSymbolsResponse, ListAlgorithmsRequest, ListAlgorithmsResponse,
+    ListLakeSymbolsRequest, ListWatchlistRequest, PersistCandlesRequest, PersistCandlesResponse,
+    ReadLakeCandlesRequest, RemoveWatchlistSymbolRequest, ScanGateResponse, WatchlistResponse,
 };
 use algo_core::confluence::{compute_confluence, ScorecardSummary};
 use algo_core::scan_gate::{evaluate_scan_gate, GateThresholds};
@@ -270,6 +270,24 @@ pub fn handle_evaluate_scan_gate_stateless(request: EvaluateScanGateStatelessReq
     // corrupt the live proactive scanner's per-symbol gate memory.
     let decision = evaluate_scan_gate(prev.as_ref(), &curr, &GateThresholds::default());
     ScanGateResponse { id: request.id, decision: format!("{decision:?}"), error: None }
+}
+
+pub fn handle_list_algorithms(request: ListAlgorithmsRequest) -> ListAlgorithmsResponse {
+    // Mirrors all_for_binary()'s own union-and-dedup shape (registry.rs) rather
+    // than calling all_for_binary() and guessing which entries were forecasters
+    // from the outside -- cost tagging must happen while the two source lists
+    // are still separate.
+    let mut algorithms: Vec<AlgorithmWire> = registry::all()
+        .iter()
+        .map(|a| AlgorithmWire { id: a.id().to_string(), cost: "fast".to_string() })
+        .collect();
+    for algo in registry::ensure_forecasters_linked() {
+        if !algorithms.iter().any(|w| w.id == algo.id()) {
+            algorithms.push(AlgorithmWire { id: algo.id().to_string(), cost: "slow".to_string() });
+        }
+    }
+    algorithms.sort_by(|a, b| a.id.cmp(&b.id));
+    ListAlgorithmsResponse { id: request.id, algorithms }
 }
 
 #[cfg(test)]
@@ -575,5 +593,41 @@ mod tests {
             curr: confluence_wire(5, 2, 10, 0.12),
         });
         assert!(state.get_last_snapshot("NSE:INFY").unwrap().is_none());
+    }
+
+    #[test]
+    fn handle_list_algorithms_tags_every_fast_registry_id_fast() {
+        let response = handle_list_algorithms(ListAlgorithmsRequest { id: 40 });
+        assert_eq!(response.id, 40);
+        for algo in registry::all() {
+            let wire = response
+                .algorithms
+                .iter()
+                .find(|w| w.id == algo.id())
+                .unwrap_or_else(|| panic!("registry::all() id {} missing from the response", algo.id()));
+            assert_eq!(wire.cost, "fast");
+        }
+    }
+
+    #[test]
+    fn handle_list_algorithms_tags_forecaster_only_ids_slow_and_dedupes() {
+        let response = handle_list_algorithms(ListAlgorithmsRequest { id: 41 });
+        let fast_ids: std::collections::HashSet<&str> = registry::all().iter().map(|a| a.id()).collect();
+        for algo in registry::ensure_forecasters_linked() {
+            if fast_ids.contains(algo.id()) {
+                continue; // already covered by all(); never double-counted
+            }
+            let matches: Vec<_> = response.algorithms.iter().filter(|w| w.id == algo.id()).collect();
+            assert_eq!(matches.len(), 1, "forecaster id {} must appear exactly once", algo.id());
+            assert_eq!(matches[0].cost, "slow");
+        }
+        let ids: Vec<&str> = response.algorithms.iter().map(|w| w.id.as_str()).collect();
+        let mut deduped = ids.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(ids.len(), deduped.len(), "no duplicate ids in the response");
+        let mut sorted_ids = ids.clone();
+        sorted_ids.sort();
+        assert_eq!(ids, sorted_ids, "handle_list_algorithms sorts its output by id");
     }
 }

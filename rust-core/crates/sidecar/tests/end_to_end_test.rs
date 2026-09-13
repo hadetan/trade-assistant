@@ -460,3 +460,30 @@ fn a_malformed_benchmark_compute_between_two_valid_ones_does_not_kill_the_sideca
     assert!(ids.contains(&1), "the first valid request must be answered");
     assert!(ids.contains(&3), "the second valid request must be answered");
 }
+
+#[test]
+fn list_algorithms_answers_even_with_no_lake_root() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("sidecar binary must start");
+
+    let list = r#"{"type":"list_algorithms","id":1}"#;
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{list}").unwrap();
+    }
+    drop(child.stdin.take());
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let response = read_next_response(&mut reader);
+    child.wait().ok();
+
+    assert_eq!(response["type"], "algorithms");
+    assert_eq!(response["id"], 1);
+    let algorithms = response["algorithms"].as_array().unwrap();
+    assert!(!algorithms.is_empty());
+    assert!(algorithms.iter().all(|a| a["cost"] == "fast" || a["cost"] == "slow"));
+}
