@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const { createSeriesMarkers, remove, addSeries, subscribeClick } = vi.hoisted(() => ({
-  createSeriesMarkers: vi.fn(),
+  createSeriesMarkers: vi.fn(() => ({ setMarkers: vi.fn() })),
   remove: vi.fn(),
   addSeries: vi.fn(() => ({ setData: vi.fn() })),
   subscribeClick: vi.fn(),
@@ -72,5 +72,33 @@ describe("createBenchmarkChart", () => {
     const handle = createBenchmarkChart(container, resultWith([]), () => {});
     handle.dispose();
     expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("recolors already-created markers when data-theme changes anywhere in the document", async () => {
+    const setMarkers = vi.fn();
+    createSeriesMarkers.mockReturnValueOnce({ setMarkers });
+    const container = containerWithTokens();
+    createBenchmarkChart(container, resultWith(["correct"]), () => {});
+
+    container.style.setProperty("--bullish", "#000000");
+    container.setAttribute("data-theme", "light");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(setMarkers).toHaveBeenCalled();
+    const updated = setMarkers.mock.calls[setMarkers.mock.calls.length - 1][0] as Array<{ color: string }>;
+    expect(updated[0].color).toBe("#000000");
+  });
+
+  it("dispose() stops watching for further theme changes", async () => {
+    const setMarkers = vi.fn();
+    createSeriesMarkers.mockReturnValueOnce({ setMarkers });
+    const container = containerWithTokens();
+    const handle = createBenchmarkChart(container, resultWith(["correct"]), () => {});
+    handle.dispose();
+
+    container.setAttribute("data-theme", "light");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(setMarkers).not.toHaveBeenCalled();
   });
 });

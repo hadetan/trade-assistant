@@ -59,7 +59,17 @@ export function createBenchmarkChart(
     };
   }
 
-  createSeriesMarkers(candleSeries, result.decisionPoints.map(markerFor));
+  const seriesMarkers = createSeriesMarkers(candleSeries, result.decisionPoints.map(markerFor));
+
+  // The chart only recreates when `result` changes (see ResultsView), so a theme
+  // flip with a result already on screen would otherwise leave these canvas-baked
+  // colors on the old palette until the next run. `data-theme` lives on an
+  // ancestor (AppShell's root), not `container` itself, so watch the whole
+  // document subtree for that one attribute rather than assuming a fixed depth.
+  const themeObserver = new MutationObserver(() => {
+    seriesMarkers.setMarkers(result.decisionPoints.map(markerFor));
+  });
+  themeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-theme"], subtree: true });
 
   const byTime = new Map<number, DecisionPoint>(result.decisionPoints.map((p) => [p.ts, p]));
   chart.subscribeClick((param) => {
@@ -69,6 +79,7 @@ export function createBenchmarkChart(
 
   return {
     dispose(): void {
+      themeObserver.disconnect();
       chart.remove();
     },
   };
