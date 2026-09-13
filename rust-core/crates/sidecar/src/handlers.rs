@@ -10,7 +10,7 @@ use algo_core::confluence::{compute_confluence, ScorecardSummary};
 use algo_core::scan_gate::{evaluate_scan_gate, GateThresholds};
 use algo_core::{
     registry::{self, run_applicable, run_applicable_with_progress},
-    AlgoOutput, Horizon, MarketContext, Timeframe,
+    AlgoOutput, Algorithm, Horizon, MarketContext, Timeframe,
 };
 use backtest::frontier::context_at;
 use chrono::Utc;
@@ -233,7 +233,10 @@ pub fn handle_benchmark_compute(request: BenchmarkComputeRequest) -> BenchmarkCo
     // Anti-lookahead holds: context_at's as_of is the frontier bar's own ts, and
     // only series[0..=frontier] is in the window.
     let ctx = context_at(&candles, candles.len() - 1, &request.symbol, timeframe, horizon);
-    let algos = registry::all_for_binary();
+    let algos: Vec<Box<dyn Algorithm>> = registry::all_for_binary()
+        .into_iter()
+        .filter(|a| a.id() == request.algo_id)
+        .collect();
     let outputs = run_applicable(&algos, &ctx);
     let weights: HashMap<&str, f64> = HashMap::new();
     let confluence = compute_confluence(&outputs, &weights);
@@ -514,36 +517,52 @@ mod tests {
     }
 
     #[test]
-    fn handle_benchmark_compute_reaches_run_applicable_with_full_ohlcv() {
+    fn handle_benchmark_compute_filters_to_exactly_the_requested_algo_id() {
         let response = handle_benchmark_compute(BenchmarkComputeRequest {
             id: 30,
             symbol: "NSE:INFY".to_string(),
             timeframe: "day".to_string(),
             horizon: "positional".to_string(),
             candles: ohlcv_window(60),
+            algo_id: "obv".to_string(),
         });
         assert_eq!(response.id, 30);
-        // At least one volume/OHLCV-reading algorithm must produce a directional
-        // signal -- the proof that context_at's full OHLCV, not from_closes,
-        // reached run_applicable.
-        let volume_based = ["obv", "mfi", "cmf", "vwap", "accumulation_distribution", "volume_profile"];
-        assert!(
-            response.algo_results.iter().any(|r| volume_based.contains(&r.algo_id.as_str()) && r.direction != "Neutral"),
-            "a volume/OHLCV-based algorithm must be directional under full OHLCV; got {:?}",
-            response.algo_results.iter().map(|r| (r.algo_id.clone(), r.direction.clone())).collect::<Vec<_>>()
-        );
+        assert_eq!(response.algo_results.len(), 1);
+        assert_eq!(response.algo_results[0].algo_id, "obv");
+        // Proves context_at's full OHLCV, not from_closes, reached run_applicable:
+        // rising close AND rising volume (ohlcv_window) makes obv's on-balance-
+        // volume delta strictly positive, i.e. Bullish, never Neutral.
+        assert_ne!(response.algo_results[0].direction, "Neutral");
     }
 
     #[test]
-    fn handle_benchmark_compute_on_empty_candles_returns_a_zeroed_response() {
+    fn handle_benchmark_compute_with_an_unknown_algo_id_returns_a_zeroed_response_not_a_panic() {
         let response = handle_benchmark_compute(BenchmarkComputeRequest {
             id: 31,
             symbol: "NSE:INFY".to_string(),
             timeframe: "day".to_string(),
             horizon: "positional".to_string(),
-            candles: Vec::new(),
+            candles: ohlcv_window(60),
+            algo_id: "not_a_real_algo".to_string(),
         });
         assert_eq!(response.id, 31);
+        assert!(response.algo_results.is_empty());
+        assert_eq!(response.confluence.bullish_count, 0);
+        assert_eq!(response.confluence.bearish_count, 0);
+        assert_eq!(response.confluence.neutral_count, 0);
+    }
+
+    #[test]
+    fn handle_benchmark_compute_on_empty_candles_returns_a_zeroed_response() {
+        let response = handle_benchmark_compute(BenchmarkComputeRequest {
+            id: 29,
+            symbol: "NSE:INFY".to_string(),
+            timeframe: "day".to_string(),
+            horizon: "positional".to_string(),
+            candles: Vec::new(),
+            algo_id: "obv".to_string(),
+        });
+        assert_eq!(response.id, 29);
         assert!(response.algo_results.is_empty());
         assert_eq!(response.confluence.neutral_count, 0);
     }

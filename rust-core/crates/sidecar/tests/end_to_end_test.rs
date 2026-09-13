@@ -261,7 +261,7 @@ fn benchmark_and_lake_flow_over_stdin_stdout_with_a_lake_root() {
     let persist = r#"{"type":"persist_candles","id":1,"symbol":"NSE:INFY","timeframe":"day","source":"bhavcopy","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100},{"ts":200,"open":1.5,"high":2.5,"low":1.0,"close":2.0,"volume":120}]}"#;
     let list = r#"{"type":"list_lake_symbols","id":2}"#;
     let read = r#"{"type":"read_lake_candles","id":3,"symbol":"NSE:INFY","timeframe":"day","source":"bhavcopy"}"#;
-    let bench = r#"{"type":"benchmark_compute","id":4,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100},{"ts":200,"open":1.5,"high":2.5,"low":1.0,"close":2.0,"volume":120}]}"#;
+    let bench = r#"{"type":"benchmark_compute","id":4,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100},{"ts":200,"open":1.5,"high":2.5,"low":1.0,"close":2.0,"volume":120}],"algo_id":"sma"}"#;
     let gate = r#"{"type":"evaluate_scan_gate_stateless","id":5,"prev":null,"curr":{"bullish_count":8,"bearish_count":1,"neutral_count":2,"weighted_vote":0.5}}"#;
 
     {
@@ -304,7 +304,7 @@ fn benchmark_compute_answers_even_with_no_lake_root() {
         .spawn()
         .expect("sidecar binary must start");
 
-    let bench = r#"{"type":"benchmark_compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#;
+    let bench = r#"{"type":"benchmark_compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}],"algo_id":"sma"}"#;
     {
         let stdin = child.stdin.as_mut().unwrap();
         writeln!(stdin, "{bench}").unwrap();
@@ -336,9 +336,9 @@ fn a_benchmark_compute_with_an_out_of_range_timestamp_between_two_valid_ones_doe
         .spawn()
         .expect("sidecar binary must start");
 
-    let valid = r#"{"type":"benchmark_compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#;
-    let panics = r#"{"type":"benchmark_compute","id":2,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":9223372036854775807,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#;
-    let valid_2 = r#"{"type":"benchmark_compute","id":3,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":200,"open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":90}]}"#;
+    let valid = r#"{"type":"benchmark_compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}],"algo_id":"sma"}"#;
+    let panics = r#"{"type":"benchmark_compute","id":2,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":9223372036854775807,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}],"algo_id":"sma"}"#;
+    let valid_2 = r#"{"type":"benchmark_compute","id":3,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":200,"open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":90}],"algo_id":"sma"}"#;
 
     {
         let stdin = child.stdin.as_mut().unwrap();
@@ -425,12 +425,12 @@ fn a_malformed_benchmark_compute_between_two_valid_ones_does_not_kill_the_sideca
         .spawn()
         .expect("sidecar binary must start");
 
-    let valid = r#"{"type":"benchmark_compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#;
+    let valid = r#"{"type":"benchmark_compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}],"algo_id":"sma"}"#;
     // Well-typed tag but a candle missing required fields: serde rejects the line
     // (logged + skipped) or, if accepted, the handler is panic-isolated. Either
     // way the two valid requests must be answered and the process exit cleanly.
     let malformed = r#"{"type":"benchmark_compute","id":2,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100}]}"#;
-    let valid_2 = r#"{"type":"benchmark_compute","id":3,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":200,"open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":90}]}"#;
+    let valid_2 = r#"{"type":"benchmark_compute","id":3,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":200,"open":2.0,"high":3.0,"low":1.5,"close":2.5,"volume":90}],"algo_id":"sma"}"#;
 
     {
         let stdin = child.stdin.as_mut().unwrap();

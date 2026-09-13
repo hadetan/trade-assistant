@@ -226,15 +226,16 @@ fn read_lake_candles_request_payload_deserializes_with_its_source() {
 }
 
 #[test]
-fn benchmark_compute_request_payload_deserializes_its_candle_window() {
+fn benchmark_compute_request_payload_deserializes_its_candle_window_and_algo_id() {
     let req: BenchmarkComputeRequest = serde_json::from_str(
-        r#"{"id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#,
+        r#"{"id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}],"algo_id":"sma"}"#,
     )
     .unwrap();
     assert_eq!(req.id, 22);
     assert_eq!(req.horizon, "positional");
     assert_eq!(req.candles.len(), 1);
     assert_eq!(req.candles[0].volume, 100);
+    assert_eq!(req.algo_id, "sma");
 }
 
 #[test]
@@ -319,13 +320,14 @@ fn parses_a_tagged_read_lake_candles_request() {
 #[test]
 fn parses_a_tagged_benchmark_compute_request() {
     match parse_request(
-        r#"{"type":"benchmark_compute","id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#,
+        r#"{"type":"benchmark_compute","id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}],"algo_id":"sma"}"#,
     )
     .unwrap()
     {
         SidecarRequest::BenchmarkCompute(request) => {
             assert_eq!(request.id, 22);
             assert_eq!(request.candles.len(), 1);
+            assert_eq!(request.algo_id, "sma");
         }
         _ => panic!("expected a benchmark_compute request"),
     }

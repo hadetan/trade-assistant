@@ -148,6 +148,7 @@ pub struct BenchmarkComputeRequest {
     pub horizon: String,
     /// The visible window series[0..=frontier], ascending by ts.
     pub candles: Vec<CandleWire>,
+    pub algo_id: String,
 }
 
 #[derive(Debug, Deserialize)]
