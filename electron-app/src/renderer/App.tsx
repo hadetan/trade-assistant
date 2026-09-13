@@ -74,6 +74,10 @@ export function App(): JSX.Element {
     setSessionDetail(null);
     setShowBenchmark(false);
     setShowModePicker(true);
+    // Otherwise a failure from the previous session (login or analysis) stays on
+    // screen and reads as if it just happened in the brand-new one.
+    setLoginError(null);
+    setAnalysisError(null);
     void bridge().listSessions().then(setSessions);
   };
 
@@ -94,9 +98,12 @@ export function App(): JSX.Element {
 
   const onOpenSession = async (id: string): Promise<void> => {
     // The sidebar (and its history rows) is now always visible, so a click here can
-    // arrive while the mode picker or benchmark view is showing in the content pane.
+    // arrive while the mode picker or benchmark view is showing in the content pane,
+    // or while a prior session's login/analysis error is still on screen.
     setShowModePicker(false);
     setShowBenchmark(false);
+    setLoginError(null);
+    setAnalysisError(null);
     const detail = await bridge().getSession(id);
     setSessionDetail(detail);
     setActiveSession({ id: detail.id, mode: detail.response_mode });
@@ -172,7 +179,7 @@ export function App(): JSX.Element {
           {activeSession.mode === "engine_only" ? (
             <>
               <InstrumentSearch onSubmit={onAnalyze} />
-              {analysisError && <div className="error">{analysisError}</div>}
+              {analysisError && <Banner variant="error">{analysisError}</Banner>}
               {result && <AnalysisResultView result={result} history={history} />}
             </>
           ) : (

@@ -7,9 +7,12 @@ const tokensCss = readFileSync("src/renderer/ui/tokens.css", "utf8");
 
 describe("style.css / ChatView.css split", () => {
   it("keeps shared rules in style.css", () => {
-    expect(styleCss).toMatch(/\.error\s*{/);
     expect(styleCss).toMatch(/\.message-markdown/);
     expect(styleCss).toMatch(/\.mermaid/);
+  });
+
+  it("does not resurrect the retired raw .error div style (superseded by the Banner primitive)", () => {
+    expect(styleCss).not.toMatch(/\.error\s*{/);
   });
 
   it("does not add chat-specific rules to style.css", () => {

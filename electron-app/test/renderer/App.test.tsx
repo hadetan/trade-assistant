@@ -133,7 +133,44 @@ describe("App", () => {
     fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
     fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
     fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+    expect(await screen.findByRole("alert")).toBeTruthy();
     expect(await screen.findByText(/sidecar unreachable/)).toBeTruthy();
+  });
+
+  it("clears a prior analysis error when New session is chosen so it doesn't bleed into the next session", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      searchInstruments: vi.fn().mockResolvedValue({
+        data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
+      }),
+      runAnalysis: vi.fn().mockRejectedValue(new Error("sidecar unreachable")),
+    });
+    render(<App />);
+    await startEngineOnlyChat();
+    fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+    expect(await screen.findByText(/sidecar unreachable/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /new session/i }));
+    expect(screen.queryByText(/sidecar unreachable/)).toBeNull();
+  });
+
+  it("clears a prior session's login error when another history row is opened", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "s7", response_mode: "ai_assisted", created_at: "t", last_active_at: "t", preview: "prior ask" },
+      ]),
+      login: vi.fn().mockResolvedValue({ status: "error", message: "kite login failed" }),
+    });
+    render(<App />);
+    await startEngineOnlyChat();
+    fireEvent.click(await screen.findByRole("button", { name: /login to kite/i }));
+    expect(await screen.findByText(/kite login failed/i)).toBeTruthy();
+
+    fireEvent.click(await screen.findByText("prior ask"));
+    await waitFor(() => expect(screen.queryByText(/kite login failed/i)).toBeNull());
   });
 
   it("reopens an ai_assisted session, replays its transcript, and seeds the last-used lens", async () => {

@@ -6,11 +6,6 @@ body {
   color: var(--fg);
 }
 
-.error {
-  color: #b91c1c;
-  margin-top: 0.5rem;
-}
-
 .analysis-form,
 .analysis-result {
   margin-top: 1.25rem;
