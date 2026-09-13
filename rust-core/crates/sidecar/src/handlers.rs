@@ -276,18 +276,16 @@ pub fn handle_evaluate_scan_gate_stateless(request: EvaluateScanGateStatelessReq
 }
 
 pub fn handle_list_algorithms(request: ListAlgorithmsRequest) -> ListAlgorithmsResponse {
-    // Mirrors all_for_binary()'s own union-and-dedup shape (registry.rs) rather
-    // than calling all_for_binary() and guessing which entries were forecasters
-    // from the outside -- cost tagging must happen while the two source lists
-    // are still separate.
+    let forecasters = registry::ensure_forecasters_linked();
+    let slow_ids: std::collections::HashSet<&str> = forecasters.iter().map(|a| a.id()).collect();
+
     let mut algorithms: Vec<AlgorithmWire> = registry::all()
         .iter()
+        .filter(|a| !slow_ids.contains(a.id()))
         .map(|a| AlgorithmWire { id: a.id().to_string(), cost: "fast".to_string() })
         .collect();
-    for algo in registry::ensure_forecasters_linked() {
-        if !algorithms.iter().any(|w| w.id == algo.id()) {
-            algorithms.push(AlgorithmWire { id: algo.id().to_string(), cost: "slow".to_string() });
-        }
+    for algo in &forecasters {
+        algorithms.push(AlgorithmWire { id: algo.id().to_string(), cost: "slow".to_string() });
     }
     algorithms.sort_by(|a, b| a.id.cmp(&b.id));
     ListAlgorithmsResponse { id: request.id, algorithms }
