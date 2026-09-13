@@ -74,6 +74,18 @@ describe("AppShell", () => {
     expect(screen.getByText(/kite authenticated/i)).toBeTruthy();
   });
 
+  it("still reports the sidecar as down with the error tone once status is known", () => {
+    const { container } = renderShell({ status: { sidecar: "down", kiteSession: "authenticated", driftWarning: null } });
+    expect(container.querySelector(".status-dot-error")).toBeTruthy();
+  });
+
+  it("shows a loading tone, not an error tone, for the footer status dots before status has loaded", () => {
+    const { container } = renderShell({ status: null });
+    expect(screen.getByText(/sidecar …/i)).toBeTruthy();
+    expect(screen.getByText(/kite …/i)).toBeTruthy();
+    expect(container.querySelector(".status-dot-error")).toBeNull();
+  });
+
   it("renders dark by default and flips the app root's data-theme when the theme toggle is clicked", () => {
     const { container } = renderShell();
     const root = container.querySelector(".app-shell") as HTMLElement;

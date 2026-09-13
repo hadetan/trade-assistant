@@ -62,4 +62,12 @@ describe("SettingsWindow", () => {
     expect(await screen.findByText(/Sidecar: up/)).toBeTruthy();
     expect(await screen.findByText(/Kite session: authenticated/)).toBeTruthy();
   });
+
+  it("shows a loading tone, not an error tone, for the status dots before getAccountStatus resolves", () => {
+    installSettingsBridge();
+    const { container } = render(<SettingsWindow />);
+    expect(screen.getByText(/Sidecar: …/)).toBeTruthy();
+    expect(screen.getByText(/Kite session: …/)).toBeTruthy();
+    expect(container.querySelector(".status-dot-error")).toBeNull();
+  });
 });

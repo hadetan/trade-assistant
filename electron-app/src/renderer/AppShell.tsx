@@ -24,13 +24,15 @@ export interface AppShellProps {
 
 function sidecarTone(status: SidecarStatus | undefined): StatusDotTone {
   if (status === "up") return "done";
-  if (status === "restarting") return "running";
+  // undefined means the initial getStatus() call hasn't resolved yet — that's a
+  // loading state, not a failure, so it reads the same as an active restart.
+  if (status === "restarting" || status === undefined) return "running";
   return "error";
 }
 
 function kiteTone(status: KiteSessionStatus | undefined): StatusDotTone {
   if (status === "authenticated") return "done";
-  if (status === "needsLogin") return "running";
+  if (status === "needsLogin" || status === "unknown" || status === undefined) return "running";
   return "error";
 }
 
