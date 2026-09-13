@@ -54,7 +54,7 @@ export function createApp(): AppRuntime {
   // populates it from electron-app/.env, so this must run first.
   dotenv.config({ path: path.join(app.getAppPath(), ".env") });
   const config = loadKiteConfig();
-  const supervisor = new SidecarSupervisor({
+  const sidecarOptions = () => ({
     binaryPath: resolveSidecarBinaryPath({
       isPackaged: app.isPackaged,
       resourcesPath: process.resourcesPath,
@@ -63,6 +63,11 @@ export function createApp(): AppRuntime {
     }),
     lakeRoot: process.env.TRADE_ASSISTANT_LAKE ?? path.join(app.getPath("userData"), "candle-lake"),
   });
+  const supervisor = new SidecarSupervisor(sidecarOptions());
+  // Benchmark runs get their own sidecar process so cancelCurrent()'s hard-kill
+  // (and the shared supervisor's onExit, which rejects every pending request)
+  // can never collaterally abort an in-flight analysis, scan, or settings call.
+  const benchmarkSupervisor = new SidecarSupervisor(sidecarOptions());
   const sessionState = new KiteSessionState();
   const provider = new ClaudeCliProvider();
   const history = new HistoryStore({
@@ -240,11 +245,12 @@ export function createApp(): AppRuntime {
   });
   registerHistoryBridge({ ipcMain, history });
   registerSettingsBridge({ ipcMain, history, scanScheduler, sidecar: supervisor, getStatus: currentStatus });
-  registerBenchmarkBridge({ ipcMain, sidecar: supervisor });
+  registerBenchmarkBridge({ ipcMain, sidecar: benchmarkSupervisor });
 
   return {
     start: () => {
       supervisor.start();
+      benchmarkSupervisor.start();
       createMainWindow();
       tray = createTray({ showMainWindow, showSettingsWindow, quit: () => app.quit() });
     },
@@ -256,6 +262,7 @@ export function createApp(): AppRuntime {
       void session?.close().catch(() => {});
       history.close();
       supervisor.stop();
+      benchmarkSupervisor.stop();
       tray?.destroy();
       tray = null;
     },
