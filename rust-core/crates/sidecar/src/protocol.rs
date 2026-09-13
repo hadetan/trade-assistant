@@ -148,6 +148,7 @@ pub struct BenchmarkComputeRequest {
     pub horizon: String,
     /// The visible window series[0..=frontier], ascending by ts.
     pub candles: Vec<CandleWire>,
+    pub algo_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -155,6 +156,24 @@ pub struct EvaluateScanGateStatelessRequest {
     pub id: u64,
     pub prev: Option<ConfluenceWire>,
     pub curr: ConfluenceWire,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListAlgorithmsRequest {
+    pub id: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AlgorithmWire {
+    pub id: String,
+    /// "fast" | "slow" -- see handlers::handle_list_algorithms for the split.
+    pub cost: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListAlgorithmsResponse {
+    pub id: u64,
+    pub algorithms: Vec<AlgorithmWire>,
 }
 
 #[derive(Debug, Serialize)]
@@ -219,6 +238,7 @@ pub enum SidecarRequest {
     ReadLakeCandles(ReadLakeCandlesRequest),
     BenchmarkCompute(BenchmarkComputeRequest),
     EvaluateScanGateStateless(EvaluateScanGateStatelessRequest),
+    ListAlgorithms(ListAlgorithmsRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -231,6 +251,7 @@ pub enum SidecarResponse {
     LakeSymbols(LakeSymbolsResponse),
     LakeCandles(LakeCandlesResponse),
     BenchmarkCompute(BenchmarkComputeResponse),
+    Algorithms(ListAlgorithmsResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {

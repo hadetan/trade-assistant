@@ -6,10 +6,7 @@ import { generateDeterministicResponse } from "../analysis/deterministicResponse
 
 export type Outcome = "correct" | "incorrect" | "neutral";
 
-export type BenchmarkCadence =
-  | { mode: "session_close" }
-  | { mode: "stateless_gate" }
-  | { mode: "manual"; everyN: number };
+export type BenchmarkCadence = { mode: "session_close" } | { mode: "stateless_gate" };
 
 export interface DecisionPoint {
   frontierIndex: number;
@@ -30,7 +27,7 @@ export interface BenchmarkRunParams {
   timeframe: string;
   source: string;
   horizon: Horizon;
-  cadence: BenchmarkCadence;
+  algoId: string;
   lookaheadBars: number;
   fromTs: number;
   toTs: number;
@@ -40,6 +37,7 @@ export interface BenchmarkResult {
   params: BenchmarkRunParams;
   candles: CandleWire[];
   decisionPoints: DecisionPoint[];
+  cancelled: boolean;
 }
 
 export const NEUTRAL_BAND = 0.001; // mirrors algo_core::benchmark_classify::DEFAULT_NEUTRAL_BAND
@@ -79,33 +77,45 @@ export interface BenchmarkRunnerDeps {
   sidecar: Pick<SidecarSupervisor, "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless">;
 }
 
-export async function runBenchmark(deps: BenchmarkRunnerDeps, params: BenchmarkRunParams): Promise<BenchmarkResult> {
+export async function runBenchmark(
+  deps: BenchmarkRunnerDeps,
+  params: BenchmarkRunParams,
+  onProgress?: (index: number, total: number) => void,
+): Promise<BenchmarkResult> {
   const { candles } = await deps.sidecar.readLakeCandles(params.symbol, params.timeframe, params.source);
-  const series = candles.filter((c) => c.ts >= params.fromTs && c.ts <= params.toTs);
+  // No upper bound here: a day-timeframe entry's single selected day is only one
+  // bar, and scoring its outcome needs `lookaheadBars` MORE bars beyond it -- an
+  // upper-bounded series would silently produce zero decision points for every
+  // day-timeframe run. `toTs` instead bounds which bars are eligible *frontiers*
+  // in the loop below, not which bars exist in `series` at all.
+  const series = candles.filter((c) => c.ts >= params.fromTs);
+  const cadence = defaultCadenceForHorizon(params.horizon);
   const decisionPoints: DecisionPoint[] = [];
   let prevConfluence: ConfluenceWire | null = null;
+  let cancelled = false;
 
   try {
     for (let i = 0; i < series.length; i++) {
+      // A frontier must fall inside the requested window; `toTs` is exclusive
+      // (start of the next day) so a candle stamped exactly at that boundary is
+      // never mistaken for part of the selected day.
+      if (series[i].ts >= params.toTs) break;
       // Mirror run_replay's boundary: stop once no future bar exists at i+lookahead.
       if (i + params.lookaheadBars >= series.length) break;
+
+      onProgress?.(i, series.length);
 
       let compute: { algo_results: AlgoResultWire[]; confluence: ConfluenceWire } | null = null;
       let isDecisionPoint = false;
 
-      if (params.cadence.mode === "session_close") {
-        compute = await deps.sidecar.benchmarkCompute(params.symbol, params.timeframe, params.horizon, series.slice(0, i + 1));
+      if (cadence.mode === "session_close") {
+        compute = await deps.sidecar.benchmarkCompute(params.symbol, params.timeframe, params.horizon, series.slice(0, i + 1), params.algoId);
         isDecisionPoint = true;
-      } else if (params.cadence.mode === "manual") {
-        if (i % params.cadence.everyN === 0) {
-          compute = await deps.sidecar.benchmarkCompute(params.symbol, params.timeframe, params.horizon, series.slice(0, i + 1));
-          isDecisionPoint = true;
-        }
       } else {
         // stateless_gate: compute every frontier to feed the gate, thread the
         // per-run prevConfluence (never persisted -- a benchmark can never
         // corrupt the live scanner's scan_snapshots gate memory).
-        compute = await deps.sidecar.benchmarkCompute(params.symbol, params.timeframe, params.horizon, series.slice(0, i + 1));
+        compute = await deps.sidecar.benchmarkCompute(params.symbol, params.timeframe, params.horizon, series.slice(0, i + 1), params.algoId);
         const gate = await deps.sidecar.evaluateScanGateStateless(prevConfluence, compute.confluence);
         prevConfluence = compute.confluence;
         isDecisionPoint = gate.decision !== "NoChange";
@@ -146,11 +156,15 @@ export async function runBenchmark(deps: BenchmarkRunnerDeps, params: BenchmarkR
       });
     }
   } catch (error) {
-    // A mid-walk sidecar rejection stops the walk but preserves the partial run
-    // (P6§13); the initial readLakeCandles rejection is outside this try and
-    // rejects the whole run.
-    console.error(`benchmark: run stopped early: ${(error as Error).message}`);
+    // A hard-cancel (SidecarSupervisor.cancelCurrent) tags its rejection
+    // { cancelled: true } so the caller renders "Cancelled", not an error; any
+    // other mid-walk rejection stops the walk but preserves the partial run.
+    if ((error as { cancelled?: boolean }).cancelled === true) {
+      cancelled = true;
+    } else {
+      console.error(`benchmark: run stopped early: ${(error as Error).message}`);
+    }
   }
 
-  return { params, candles: series, decisionPoints };
+  return { params, candles: series, decisionPoints, cancelled };
 }

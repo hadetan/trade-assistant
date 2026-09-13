@@ -1,16 +1,16 @@
 use crate::protocol::{
-    benchmark_empty_response, AddWatchlistSymbolRequest, AlgoResultWire, BenchmarkComputeRequest,
-    BenchmarkComputeResponse, CandleWire, ComputeRequest, ComputeResponse, ConfluenceWire,
-    EvaluateScanGateRequest, EvaluateScanGateStatelessRequest, LakeCandlesResponse, LakeSymbolWire,
-    LakeSymbolsResponse, ListLakeSymbolsRequest, ListWatchlistRequest, PersistCandlesRequest,
-    PersistCandlesResponse, ReadLakeCandlesRequest, RemoveWatchlistSymbolRequest, ScanGateResponse,
-    WatchlistResponse,
+    benchmark_empty_response, AddWatchlistSymbolRequest, AlgoResultWire, AlgorithmWire,
+    BenchmarkComputeRequest, BenchmarkComputeResponse, CandleWire, ComputeRequest, ComputeResponse,
+    ConfluenceWire, EvaluateScanGateRequest, EvaluateScanGateStatelessRequest, LakeCandlesResponse,
+    LakeSymbolWire, LakeSymbolsResponse, ListAlgorithmsRequest, ListAlgorithmsResponse,
+    ListLakeSymbolsRequest, ListWatchlistRequest, PersistCandlesRequest, PersistCandlesResponse,
+    ReadLakeCandlesRequest, RemoveWatchlistSymbolRequest, ScanGateResponse, WatchlistResponse,
 };
 use algo_core::confluence::{compute_confluence, ScorecardSummary};
 use algo_core::scan_gate::{evaluate_scan_gate, GateThresholds};
 use algo_core::{
     registry::{self, run_applicable, run_applicable_with_progress},
-    AlgoOutput, Horizon, MarketContext, Timeframe,
+    AlgoOutput, Algorithm, Horizon, MarketContext, Timeframe,
 };
 use backtest::frontier::context_at;
 use chrono::Utc;
@@ -233,7 +233,10 @@ pub fn handle_benchmark_compute(request: BenchmarkComputeRequest) -> BenchmarkCo
     // Anti-lookahead holds: context_at's as_of is the frontier bar's own ts, and
     // only series[0..=frontier] is in the window.
     let ctx = context_at(&candles, candles.len() - 1, &request.symbol, timeframe, horizon);
-    let algos = registry::all_for_binary();
+    let algos: Vec<Box<dyn Algorithm>> = registry::all_for_binary()
+        .into_iter()
+        .filter(|a| a.id() == request.algo_id)
+        .collect();
     let outputs = run_applicable(&algos, &ctx);
     let weights: HashMap<&str, f64> = HashMap::new();
     let confluence = compute_confluence(&outputs, &weights);
@@ -270,6 +273,25 @@ pub fn handle_evaluate_scan_gate_stateless(request: EvaluateScanGateStatelessReq
     // corrupt the live proactive scanner's per-symbol gate memory.
     let decision = evaluate_scan_gate(prev.as_ref(), &curr, &GateThresholds::default());
     ScanGateResponse { id: request.id, decision: format!("{decision:?}"), error: None }
+}
+
+fn tag_algorithms(fast_source: &[Box<dyn Algorithm>], slow_source: &[Box<dyn Algorithm>]) -> Vec<AlgorithmWire> {
+    let slow_ids: std::collections::HashSet<&str> = slow_source.iter().map(|a| a.id()).collect();
+    let mut algorithms: Vec<AlgorithmWire> = fast_source
+        .iter()
+        .filter(|a| !slow_ids.contains(a.id()))
+        .map(|a| AlgorithmWire { id: a.id().to_string(), cost: "fast".to_string() })
+        .collect();
+    for algo in slow_source {
+        algorithms.push(AlgorithmWire { id: algo.id().to_string(), cost: "slow".to_string() });
+    }
+    algorithms.sort_by(|a, b| a.id.cmp(&b.id));
+    algorithms
+}
+
+pub fn handle_list_algorithms(request: ListAlgorithmsRequest) -> ListAlgorithmsResponse {
+    let algorithms = tag_algorithms(&registry::all(), &registry::ensure_forecasters_linked());
+    ListAlgorithmsResponse { id: request.id, algorithms }
 }
 
 #[cfg(test)]
@@ -496,36 +518,52 @@ mod tests {
     }
 
     #[test]
-    fn handle_benchmark_compute_reaches_run_applicable_with_full_ohlcv() {
+    fn handle_benchmark_compute_filters_to_exactly_the_requested_algo_id() {
         let response = handle_benchmark_compute(BenchmarkComputeRequest {
             id: 30,
             symbol: "NSE:INFY".to_string(),
             timeframe: "day".to_string(),
             horizon: "positional".to_string(),
             candles: ohlcv_window(60),
+            algo_id: "obv".to_string(),
         });
         assert_eq!(response.id, 30);
-        // At least one volume/OHLCV-reading algorithm must produce a directional
-        // signal -- the proof that context_at's full OHLCV, not from_closes,
-        // reached run_applicable.
-        let volume_based = ["obv", "mfi", "cmf", "vwap", "accumulation_distribution", "volume_profile"];
-        assert!(
-            response.algo_results.iter().any(|r| volume_based.contains(&r.algo_id.as_str()) && r.direction != "Neutral"),
-            "a volume/OHLCV-based algorithm must be directional under full OHLCV; got {:?}",
-            response.algo_results.iter().map(|r| (r.algo_id.clone(), r.direction.clone())).collect::<Vec<_>>()
-        );
+        assert_eq!(response.algo_results.len(), 1);
+        assert_eq!(response.algo_results[0].algo_id, "obv");
+        // Proves context_at's full OHLCV, not from_closes, reached run_applicable:
+        // rising close AND rising volume (ohlcv_window) makes obv's on-balance-
+        // volume delta strictly positive, i.e. Bullish, never Neutral.
+        assert_ne!(response.algo_results[0].direction, "Neutral");
     }
 
     #[test]
-    fn handle_benchmark_compute_on_empty_candles_returns_a_zeroed_response() {
+    fn handle_benchmark_compute_with_an_unknown_algo_id_returns_a_zeroed_response_not_a_panic() {
         let response = handle_benchmark_compute(BenchmarkComputeRequest {
             id: 31,
             symbol: "NSE:INFY".to_string(),
             timeframe: "day".to_string(),
             horizon: "positional".to_string(),
-            candles: Vec::new(),
+            candles: ohlcv_window(60),
+            algo_id: "not_a_real_algo".to_string(),
         });
         assert_eq!(response.id, 31);
+        assert!(response.algo_results.is_empty());
+        assert_eq!(response.confluence.bullish_count, 0);
+        assert_eq!(response.confluence.bearish_count, 0);
+        assert_eq!(response.confluence.neutral_count, 0);
+    }
+
+    #[test]
+    fn handle_benchmark_compute_on_empty_candles_returns_a_zeroed_response() {
+        let response = handle_benchmark_compute(BenchmarkComputeRequest {
+            id: 29,
+            symbol: "NSE:INFY".to_string(),
+            timeframe: "day".to_string(),
+            horizon: "positional".to_string(),
+            candles: Vec::new(),
+            algo_id: "obv".to_string(),
+        });
+        assert_eq!(response.id, 29);
         assert!(response.algo_results.is_empty());
         assert_eq!(response.confluence.neutral_count, 0);
     }
@@ -575,5 +613,62 @@ mod tests {
             curr: confluence_wire(5, 2, 10, 0.12),
         });
         assert!(state.get_last_snapshot("NSE:INFY").unwrap().is_none());
+    }
+
+    #[test]
+    fn handle_list_algorithms_tags_every_fast_registry_id_fast() {
+        let response = handle_list_algorithms(ListAlgorithmsRequest { id: 40 });
+        assert_eq!(response.id, 40);
+        for algo in registry::all() {
+            let wire = response
+                .algorithms
+                .iter()
+                .find(|w| w.id == algo.id())
+                .unwrap_or_else(|| panic!("registry::all() id {} missing from the response", algo.id()));
+            assert_eq!(wire.cost, "fast");
+        }
+    }
+
+    #[test]
+    fn handle_list_algorithms_tags_forecaster_only_ids_slow_and_dedupes() {
+        let response = handle_list_algorithms(ListAlgorithmsRequest { id: 41 });
+        let fast_ids: std::collections::HashSet<&str> = registry::all().iter().map(|a| a.id()).collect();
+        for algo in registry::ensure_forecasters_linked() {
+            if fast_ids.contains(algo.id()) {
+                continue; // already covered by all(); never double-counted
+            }
+            let matches: Vec<_> = response.algorithms.iter().filter(|w| w.id == algo.id()).collect();
+            assert_eq!(matches.len(), 1, "forecaster id {} must appear exactly once", algo.id());
+            assert_eq!(matches[0].cost, "slow");
+        }
+        let ids: Vec<&str> = response.algorithms.iter().map(|w| w.id.as_str()).collect();
+        let mut deduped = ids.clone();
+        deduped.sort();
+        deduped.dedup();
+        assert_eq!(ids.len(), deduped.len(), "no duplicate ids in the response");
+        let mut sorted_ids = ids.clone();
+        sorted_ids.sort();
+        assert_eq!(ids, sorted_ids, "handle_list_algorithms sorts its output by id");
+    }
+
+    #[test]
+    fn tag_algorithms_treats_any_slow_source_id_as_slow_even_if_the_fast_source_also_contains_it() {
+        // Two lists both built from registry::all() so they deliberately share an
+        // id -- a stand-in for the real scenario (a debug build where
+        // registry::all() and registry::ensure_forecasters_linked() both contain
+        // the same forecaster) without needing any forecaster Cargo feature
+        // enabled at all.
+        let fast_source = registry::all();
+        let overlapping_id = fast_source.first().expect("registry::all() is never empty").id().to_string();
+        let slow_source: Vec<Box<dyn Algorithm>> = registry::all()
+            .into_iter()
+            .filter(|a| a.id() == overlapping_id)
+            .collect();
+
+        let algorithms = tag_algorithms(&fast_source, &slow_source);
+
+        let matches: Vec<_> = algorithms.iter().filter(|w| w.id == overlapping_id).collect();
+        assert_eq!(matches.len(), 1, "an id present in both sources must appear exactly once");
+        assert_eq!(matches[0].cost, "slow", "any id present in the slow source must be tagged slow, even if the fast source also contains it");
     }
 }

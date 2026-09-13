@@ -41,6 +41,11 @@ export interface LakeSymbolEntry {
   horizon: Horizon; // derived from timeframe in the bridge
 }
 
+export interface AlgorithmEntry {
+  id: string;
+  cost: "fast" | "slow";
+}
+
 export type AnalysisMode = "engine_only" | "ai_assisted";
 
 export type AnalysisRunParams =
@@ -103,7 +108,10 @@ export interface RendererApi {
   listSessions(): Promise<SessionSummary[]>;
   getSession(id: string): Promise<SessionDetail>;
   listLakeSymbols(): Promise<LakeSymbolEntry[]>;
+  listAlgorithms(): Promise<AlgorithmEntry[]>;
   runBenchmark(params: BenchmarkRunParams): Promise<BenchmarkResult>;
+  cancelBenchmark(): Promise<void>;
+  onBenchmarkProgress(handler: (progress: { index: number; total: number }) => void): void;
   copyBenchmarkResult(text: string): Promise<void>;
 }
 
@@ -122,7 +130,10 @@ export function buildRendererApi(
     listSessions: () => invoke("history:listSessions") as Promise<SessionSummary[]>,
     getSession: (id) => invoke("history:getSession", { id }) as Promise<SessionDetail>,
     listLakeSymbols: () => invoke("benchmark:listLakeSymbols") as Promise<LakeSymbolEntry[]>,
+    listAlgorithms: () => invoke("benchmark:listAlgorithms") as Promise<AlgorithmEntry[]>,
     runBenchmark: (params) => invoke("benchmark:runBenchmark", params) as Promise<BenchmarkResult>,
+    cancelBenchmark: () => invoke("benchmark:cancelBenchmark") as Promise<void>,
+    onBenchmarkProgress: (handler) => subscribe("benchmark:progress", handler as (payload: unknown) => void),
     copyBenchmarkResult: (text) => invoke("benchmark:copyToClipboard", text) as Promise<void>,
   };
 }

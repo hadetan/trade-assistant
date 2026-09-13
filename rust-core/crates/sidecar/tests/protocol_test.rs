@@ -9,6 +9,7 @@ use sidecar::protocol::{
     EvaluateScanGateStatelessRequest, LakeCandlesResponse, LakeSymbolWire, LakeSymbolsResponse,
     ListLakeSymbolsRequest, ReadLakeCandlesRequest,
 };
+use sidecar::protocol::{AlgorithmWire, ListAlgorithmsRequest, ListAlgorithmsResponse};
 
 #[test]
 fn request_round_trips_from_json_line() {
@@ -225,15 +226,16 @@ fn read_lake_candles_request_payload_deserializes_with_its_source() {
 }
 
 #[test]
-fn benchmark_compute_request_payload_deserializes_its_candle_window() {
+fn benchmark_compute_request_payload_deserializes_its_candle_window_and_algo_id() {
     let req: BenchmarkComputeRequest = serde_json::from_str(
-        r#"{"id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#,
+        r#"{"id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}],"algo_id":"sma"}"#,
     )
     .unwrap();
     assert_eq!(req.id, 22);
     assert_eq!(req.horizon, "positional");
     assert_eq!(req.candles.len(), 1);
     assert_eq!(req.candles[0].volume, 100);
+    assert_eq!(req.algo_id, "sma");
 }
 
 #[test]
@@ -318,13 +320,14 @@ fn parses_a_tagged_read_lake_candles_request() {
 #[test]
 fn parses_a_tagged_benchmark_compute_request() {
     match parse_request(
-        r#"{"type":"benchmark_compute","id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}]}"#,
+        r#"{"type":"benchmark_compute","id":22,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":1710000000,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100}],"algo_id":"sma"}"#,
     )
     .unwrap()
     {
         SidecarRequest::BenchmarkCompute(request) => {
             assert_eq!(request.id, 22);
             assert_eq!(request.candles.len(), 1);
+            assert_eq!(request.algo_id, "sma");
         }
         _ => panic!("expected a benchmark_compute request"),
     }
@@ -380,4 +383,45 @@ fn encodes_a_tagged_benchmark_compute_response() {
     let line = encode_response(&SidecarResponse::BenchmarkCompute(benchmark_empty_response(22)));
     assert!(line.contains("\"type\":\"benchmark_compute\""));
     assert!(line.contains("\"id\":22"));
+}
+
+#[test]
+fn list_algorithms_request_payload_deserializes() {
+    let req: ListAlgorithmsRequest = serde_json::from_str(r#"{"id":40}"#).unwrap();
+    assert_eq!(req.id, 40);
+}
+
+#[test]
+fn algorithms_response_serializes_its_tagged_algorithm_list() {
+    let json = serde_json::to_string(&ListAlgorithmsResponse {
+        id: 40,
+        algorithms: vec![
+            AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string() },
+            AlgorithmWire { id: "kronos".to_string(), cost: "slow".to_string() },
+        ],
+    })
+    .unwrap();
+    assert!(json.contains("\"id\":40"));
+    assert!(json.contains("\"id\":\"sma\""));
+    assert!(json.contains("\"cost\":\"fast\""));
+    assert!(json.contains("\"cost\":\"slow\""));
+}
+
+#[test]
+fn parses_a_tagged_list_algorithms_request() {
+    match parse_request(r#"{"type":"list_algorithms","id":40}"#).unwrap() {
+        SidecarRequest::ListAlgorithms(request) => assert_eq!(request.id, 40),
+        _ => panic!("expected a list_algorithms request"),
+    }
+}
+
+#[test]
+fn encodes_a_tagged_algorithms_response() {
+    let line = encode_response(&SidecarResponse::Algorithms(ListAlgorithmsResponse {
+        id: 40,
+        algorithms: vec![AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string() }],
+    }));
+    assert!(!line.contains('\n'));
+    assert!(line.contains("\"type\":\"algorithms\""));
+    assert!(line.contains("\"id\":\"sma\""));
 }

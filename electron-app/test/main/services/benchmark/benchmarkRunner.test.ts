@@ -88,7 +88,7 @@ function baseParams(overrides: Partial<import("../../../../src/main/services/ben
     timeframe: "day",
     source: "bhavcopy",
     horizon: "positional" as const,
-    cadence: { mode: "session_close" as const },
+    algoId: "sma",
     lookaheadBars: 1,
     fromTs: 0,
     toTs: 1e12,
@@ -121,7 +121,7 @@ describe("runBenchmark frontier walk", () => {
     const deps: BenchmarkRunnerDeps = {
       sidecar: {
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf(closes) }),
-        benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[]) =>
+        benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[], _algoId: string) =>
           Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: perFrontier[window.length - 1] }),
         ),
         evaluateScanGateStateless: vi.fn().mockImplementation((prev: ConfluenceWire | null, curr: ConfluenceWire) => {
@@ -130,26 +130,11 @@ describe("runBenchmark frontier walk", () => {
         }),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ horizon: "intraday", cadence: { mode: "stateless_gate" }, lookaheadBars: 2 }));
+    const result = await runBenchmark(deps, baseParams({ horizon: "intraday", lookaheadBars: 2 }));
     expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([0, 2]);
     expect(gateArgs[0].prev).toBeNull();
     expect(gateArgs[1].prev).toEqual(gateArgs[0].curr);
     expect(gateArgs[2].prev).toEqual(gateArgs[1].curr);
-  });
-
-  it("manual everyN stride produces decision points only at every Nth index", async () => {
-    const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]) }),
-        benchmarkCompute,
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
-    const result = await runBenchmark(deps, baseParams({ cadence: { mode: "manual", everyN: 3 }, lookaheadBars: 2 }));
-    // N=10, L=2 -> eligible i in 0..7; every 3rd -> i in {0,3,6}.
-    expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([0, 3, 6]);
-    expect(benchmarkCompute).toHaveBeenCalledTimes(3);
   });
 
   it("skips a zero/negative frontier close without a marker but keeps walking", async () => {
@@ -215,6 +200,7 @@ describe("runBenchmark frontier walk", () => {
     };
     const result = await runBenchmark(deps, baseParams({ lookaheadBars: 1 }));
     expect(result.decisionPoints).toHaveLength(2); // the first two frontiers survived
+    expect(result.cancelled).toBe(false);
     consoleError.mockRestore();
   });
 
@@ -231,5 +217,68 @@ describe("runBenchmark frontier walk", () => {
     await expect(runBenchmark(deps, baseParams())).rejects.toThrow("lake read failed");
     expect(benchmarkCompute).not.toHaveBeenCalled();
     expect(evaluateScanGateStateless).not.toHaveBeenCalled();
+  });
+
+  it("invokes onProgress once per surviving loop iteration with the correct (index, total) pairs", async () => {
+    const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17]) }),
+        benchmarkCompute,
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+    const progress: Array<[number, number]> = [];
+    const result = await runBenchmark(deps, baseParams({ lookaheadBars: 3 }), (index, total) => progress.push([index, total]));
+    // N=8, L=3 -> eligible i in 0..4 (5 iterations), each reported against the full series length.
+    expect(progress).toEqual([[0, 8], [1, 8], [2, 8], [3, 8], [4, 8]]);
+    expect(result.decisionPoints).toHaveLength(5);
+  });
+
+  it("day-timeframe single-day window still scores an outcome using bars beyond toTs for lookahead", async () => {
+    // A day-timeframe lake entry has exactly one candle per selected day, so
+    // scoring its outcome needs `lookaheadBars` MORE candles after the window
+    // -- if `series` were bounded above by `toTs`, this would always produce
+    // zero decision points for every day-timeframe run.
+    const dayStart = 1_700_000_000;
+    const toTs = dayStart + 86_400;
+    const closes = [100, 101, 102, 103, 104, 105, 106]; // the selected day + 6 more trading days after it
+    const candles: CandleWire[] = closes.map((close, i) => ({
+      ts: dayStart + i * 86_400,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: 100,
+    }));
+    const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
+        benchmarkCompute,
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+    const result = await runBenchmark(deps, baseParams({ timeframe: "day", fromTs: dayStart, toTs, lookaheadBars: 5 }));
+    expect(result.decisionPoints.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("tags cancelled=true and keeps only the pre-cancellation decision points on a cancellation-tagged rejection", async () => {
+    let call = 0;
+    const benchmarkCompute = vi.fn().mockImplementation(() => {
+      call += 1;
+      if (call === 3) return Promise.reject(Object.assign(new Error("sidecar run cancelled"), { cancelled: true }));
+      return Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+    });
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17]) }),
+        benchmarkCompute,
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+    const result = await runBenchmark(deps, baseParams({ lookaheadBars: 1 }));
+    expect(result.cancelled).toBe(true);
+    expect(result.decisionPoints).toHaveLength(2);
   });
 });

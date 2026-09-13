@@ -1,13 +1,13 @@
 use sidecar::handlers::{
     handle_add_watchlist_symbol, handle_benchmark_compute, handle_evaluate_scan_gate,
-    handle_evaluate_scan_gate_stateless, handle_list_lake_symbols, handle_list_watchlist,
-    handle_persist, handle_read_lake_candles, handle_remove_watchlist_symbol,
+    handle_evaluate_scan_gate_stateless, handle_list_algorithms, handle_list_lake_symbols,
+    handle_list_watchlist, handle_persist, handle_read_lake_candles, handle_remove_watchlist_symbol,
     handle_request_with_progress,
 };
 use sidecar::protocol::{
     benchmark_empty_response, empty_response, encode_progress, encode_response, parse_request,
-    LakeCandlesResponse, LakeSymbolsResponse, PersistCandlesResponse, ScanGateResponse,
-    SidecarRequest, SidecarResponse, WatchlistResponse,
+    LakeCandlesResponse, LakeSymbolsResponse, ListAlgorithmsResponse, PersistCandlesResponse,
+    ScanGateResponse, SidecarRequest, SidecarResponse, WatchlistResponse,
 };
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
@@ -40,6 +40,7 @@ fn request_id(request: &SidecarRequest) -> u64 {
         SidecarRequest::ReadLakeCandles(r) => r.id,
         SidecarRequest::BenchmarkCompute(r) => r.id,
         SidecarRequest::EvaluateScanGateStateless(r) => r.id,
+        SidecarRequest::ListAlgorithms(r) => r.id,
     }
 }
 
@@ -55,6 +56,7 @@ fn request_step(request: &SidecarRequest) -> &'static str {
         SidecarRequest::ReadLakeCandles(_) => "read_lake_candles",
         SidecarRequest::BenchmarkCompute(_) => "benchmark_compute",
         SidecarRequest::EvaluateScanGateStateless(_) => "evaluate_scan_gate_stateless",
+        SidecarRequest::ListAlgorithms(_) => "list_algorithms",
     }
 }
 
@@ -258,6 +260,18 @@ fn main() {
                     Err(_) => {
                         eprintln!("sidecar: evaluate_scan_gate_stateless request {id} panicked");
                         SidecarResponse::ScanGate(ScanGateResponse { id, decision: "NoChange".to_string(), error: Some("evaluate_scan_gate_stateless panicked".to_string()) })
+                    }
+                }
+            }
+            SidecarRequest::ListAlgorithms(request) => {
+                // Needs no store: pure registry introspection, always answers.
+                let id = request.id;
+                let result = panic::catch_unwind(AssertUnwindSafe(|| handle_list_algorithms(request)));
+                match result {
+                    Ok(response) => SidecarResponse::Algorithms(response),
+                    Err(_) => {
+                        eprintln!("sidecar: list_algorithms request {id} panicked; returning an empty list");
+                        SidecarResponse::Algorithms(ListAlgorithmsResponse { id, algorithms: Vec::new() })
                     }
                 }
             }

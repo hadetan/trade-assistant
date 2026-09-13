@@ -8,6 +8,7 @@ import {
   ConfluenceWire,
   LakeCandlesResponseWire,
   LakeSymbolsResponseWire,
+  ListAlgorithmsResponseWire,
   PersistCandlesResponseWire,
   ScanGateResponseWire,
   SidecarProgressWire,
@@ -52,6 +53,7 @@ export class SidecarSupervisor extends EventEmitter {
   private readonly pending = new Map<number, Pending>();
   private stdoutBuffer = "";
   private stopped = false;
+  private cancelling = false;
 
   constructor(options: SidecarSupervisorOptions) {
     super();
@@ -71,6 +73,12 @@ export class SidecarSupervisor extends EventEmitter {
     for (const waiting of this.pending.values()) clearTimeout(waiting.timer);
     this.child?.kill();
     this.child = null;
+  }
+
+  cancelCurrent(): void {
+    if (!this.child) return;
+    this.cancelling = true;
+    this.child.kill();
   }
 
   compute(
@@ -125,8 +133,20 @@ export class SidecarSupervisor extends EventEmitter {
     return this.send({ type: "read_lake_candles", id: this.nextId, symbol, timeframe, source }) as Promise<LakeCandlesResponseWire>;
   }
 
-  benchmarkCompute(symbol: string, timeframe: string, horizon: string, candles: CandleWire[]): Promise<BenchmarkComputeResponseWire> {
-    return this.send({ type: "benchmark_compute", id: this.nextId, symbol, timeframe, horizon, candles }) as Promise<BenchmarkComputeResponseWire>;
+  benchmarkCompute(symbol: string, timeframe: string, horizon: string, candles: CandleWire[], algoId: string): Promise<BenchmarkComputeResponseWire> {
+    return this.send({
+      type: "benchmark_compute",
+      id: this.nextId,
+      symbol,
+      timeframe,
+      horizon,
+      candles,
+      algo_id: algoId,
+    }) as Promise<BenchmarkComputeResponseWire>;
+  }
+
+  listAlgorithms(): Promise<ListAlgorithmsResponseWire> {
+    return this.send({ type: "list_algorithms", id: this.nextId }) as Promise<ListAlgorithmsResponseWire>;
   }
 
   evaluateScanGateStateless(prev: ConfluenceWire | null, curr: ConfluenceWire): Promise<ScanGateResponseWire> {
@@ -193,7 +213,11 @@ export class SidecarSupervisor extends EventEmitter {
 
   private onExit(code: number | null): void {
     this.child = null;
-    const error = new Error(`sidecar exited (code ${code ?? "null"})`);
+    const wasCancelling = this.cancelling;
+    this.cancelling = false;
+    const error = wasCancelling
+      ? Object.assign(new Error("sidecar run cancelled"), { cancelled: true })
+      : new Error(`sidecar exited (code ${code ?? "null"})`);
     for (const waiting of this.pending.values()) {
       clearTimeout(waiting.timer);
       waiting.reject(error);
