@@ -242,6 +242,38 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_write_never_leaks_its_rows_into_the_next_successful_write() {
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        let original = vec![Candle { ts: 1, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }];
+        store.write_candles("NSE:INFY", "day", &original).unwrap();
+
+        // Same failure trick as the test above: block the tmp-file stage so the
+        // in-memory `candles` table is populated with this call's row but the
+        // COPY step never completes. The shared connection now holds a stale
+        // `candles` table after returning Err -- the next write must not leak
+        // it (CREATE OR REPLACE TABLE must fully replace, not merge with, that
+        // stale state).
+        let path = store.partition_path("NSE:INFY", "day");
+        let tmp_path = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
+        std::fs::create_dir(&tmp_path).unwrap();
+        let failed = store.write_candles(
+            "NSE:INFY",
+            "day",
+            &[Candle { ts: 2, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 2 }],
+        );
+        assert!(failed.is_err());
+        std::fs::remove_dir(&tmp_path).unwrap();
+
+        let next = vec![Candle { ts: 3, open: 3.0, high: 3.0, low: 3.0, close: 3.0, volume: 3 }];
+        store.write_candles("NSE:INFY", "day", &next).unwrap();
+
+        let read_back = store.read_candles("NSE:INFY", "day").unwrap();
+        assert_eq!(read_back, next, "a successful write after a failed one must contain only its own rows, none leaked from the failed attempt");
+    }
+
+    #[test]
     fn partition_path_sanitizes_quotes_and_traversal_sequences() {
         let dir = tempdir().unwrap();
         let store = CandleStore::open(dir.path()).unwrap();
