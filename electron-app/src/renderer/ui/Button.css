@@ -28,7 +28,7 @@
 
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .btn-secondary {
@@ -48,5 +48,5 @@
 
 .btn-danger {
   background: var(--status-error);
-  color: #fff;
+  color: var(--on-accent);
 }
