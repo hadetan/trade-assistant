@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { AnalysisResultView } from "../../src/renderer/AnalysisResult";
 import type { AnalysisResult, HistoryMessage } from "../../src/main/ipc/rendererApi";
@@ -20,12 +20,21 @@ const result: AnalysisResult = {
 };
 
 describe("AnalysisResultView", () => {
-  it("renders the prose through the markdown pipeline and the raw confluence numbers", async () => {
-    render(<AnalysisResultView result={result} />);
+  it("renders the prose through the markdown pipeline inside a Card", async () => {
+    const { container } = render(<AnalysisResultView result={result} />);
     expect(await screen.findByText(/Overall read: bullish/)).toBeTruthy();
-    expect(screen.getByText("bullish")).toBeTruthy();
-    expect(screen.getByText("0.62")).toBeTruthy();
+    expect(container.querySelector(".card")).toBeTruthy();
     expect(screen.queryByText(/Past turns in this session/i)).toBeNull();
+  });
+
+  it("renders the confluence counts as a Badge row using the direction/status tone palette", () => {
+    const { container } = render(<AnalysisResultView result={result} />);
+    const confluence = within(container.querySelector(".confluence") as HTMLElement);
+    expect(confluence.getByText(/bullish · high/i)).toBeTruthy();
+    expect(confluence.getByText(/4 bullish/)).toBeTruthy();
+    expect(confluence.getByText(/1 bearish/)).toBeTruthy();
+    expect(confluence.getByText(/0 neutral/)).toBeTruthy();
+    expect(confluence.getByText(/weighted vote 0\.62/)).toBeTruthy();
   });
 
   it("renders prior turns in a collapsible list when history is supplied", async () => {

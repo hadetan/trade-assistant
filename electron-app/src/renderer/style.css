@@ -1,27 +1,9 @@
 body {
   font-family: system-ui, sans-serif;
   margin: 0;
-  padding: 1.5rem;
-}
-
-.app h1 {
-  font-size: 1.25rem;
-}
-
-.status {
-  color: #444;
-  margin-bottom: 0.75rem;
-}
-
-.banners {
-  list-style: none;
-  padding: 0;
-  color: #92400e;
-}
-
-.error {
-  color: #b91c1c;
-  margin-top: 0.5rem;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--fg);
 }
 
 .analysis-form,

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const { createSeriesMarkers, remove, addSeries, subscribeClick } = vi.hoisted(() => ({
-  createSeriesMarkers: vi.fn(),
+  createSeriesMarkers: vi.fn(() => ({ setMarkers: vi.fn() })),
   remove: vi.fn(),
   addSeries: vi.fn(() => ({ setData: vi.fn() })),
   subscribeClick: vi.fn(),
@@ -47,21 +47,58 @@ function resultWith(outcomes: Array<BenchmarkResult["decisionPoints"][number]["o
   };
 }
 
+function containerWithTokens(): HTMLElement {
+  const container = document.createElement("div");
+  container.style.setProperty("--bullish", "#16a34a");
+  container.style.setProperty("--bearish", "#dc2626");
+  container.style.setProperty("--neutral", "#6b7280");
+  document.body.appendChild(container);
+  return container;
+}
+
 describe("createBenchmarkChart", () => {
-  it("passes one marker per decision point with a color matching each outcome", () => {
+  it("reads each marker's color from the container's --bullish/--bearish/--neutral custom properties", () => {
     createSeriesMarkers.mockClear();
-    const container = document.createElement("div");
+    const container = containerWithTokens();
     createBenchmarkChart(container, resultWith(["correct", "incorrect", "neutral"]), () => {});
     const markers = createSeriesMarkers.mock.calls[0][1] as Array<{ color: string }>;
     expect(markers).toHaveLength(3);
-    expect(markers.map((m) => m.color)).toEqual(["#26a69a", "#ef5350", "#9e9e9e"]);
+    expect(markers.map((m) => m.color)).toEqual(["#16a34a", "#dc2626", "#6b7280"]);
   });
 
   it("dispose() removes the chart", () => {
     remove.mockClear();
-    const container = document.createElement("div");
+    const container = containerWithTokens();
     const handle = createBenchmarkChart(container, resultWith([]), () => {});
     handle.dispose();
     expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it("recolors already-created markers when data-theme changes anywhere in the document", async () => {
+    const setMarkers = vi.fn();
+    createSeriesMarkers.mockReturnValueOnce({ setMarkers });
+    const container = containerWithTokens();
+    createBenchmarkChart(container, resultWith(["correct"]), () => {});
+
+    container.style.setProperty("--bullish", "#000000");
+    container.setAttribute("data-theme", "light");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(setMarkers).toHaveBeenCalled();
+    const updated = setMarkers.mock.calls[setMarkers.mock.calls.length - 1][0] as Array<{ color: string }>;
+    expect(updated[0].color).toBe("#000000");
+  });
+
+  it("dispose() stops watching for further theme changes", async () => {
+    const setMarkers = vi.fn();
+    createSeriesMarkers.mockReturnValueOnce({ setMarkers });
+    const container = containerWithTokens();
+    const handle = createBenchmarkChart(container, resultWith(["correct"]), () => {});
+    handle.dispose();
+
+    container.setAttribute("data-theme", "light");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(setMarkers).not.toHaveBeenCalled();
   });
 });

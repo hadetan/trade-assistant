@@ -23,10 +23,10 @@ describe("AgentActivityPanel", () => {
       { requestId: "r1", source: "intake", kind: "started", at: "t" },
       { requestId: "r1", source: "intake", kind: "done", at: "t" },
     ];
-    render(<AgentActivityPanel trace={trace} live={true} />);
+    const { container } = render(<AgentActivityPanel trace={trace} live={true} />);
     expect(screen.getByText("Agent activity")).toBeTruthy();
     expect(screen.getByText("Intake")).toBeTruthy();
-    expect(screen.getByText("▾")).toBeTruthy();
+    expect(container.querySelector(".agent-activity-lanes")).toBeTruthy();
   });
 
   it("collapses by default on history replay (live=false) and expands on click", () => {

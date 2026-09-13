@@ -93,12 +93,13 @@ describe("ChatView", () => {
     expect(screen.getByText(/bearish/i)).toBeTruthy();
   });
 
-  it("shows an error when the run rejects", async () => {
+  it("shows an error banner when the run rejects", async () => {
     installBridge({ runAnalysis: vi.fn().mockRejectedValue(new Error("claude down")) });
     render(<ChatView intentLens="selling" sessionId="sess-9" />);
     fireEvent.change(screen.getByLabelText(/ask about an instrument/i), { target: { value: "q" } });
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     expect(await screen.findByText(/claude down/)).toBeTruthy();
+    expect(screen.getByRole("alert")).toBeTruthy();
   });
 
   it("renders an Agent Activity panel once trace events arrive, live and open by default", async () => {
@@ -119,15 +120,6 @@ describe("ChatView", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
     expect(await screen.findByText("Agent activity")).toBeTruthy();
     expect(await screen.findByText("Intake")).toBeTruthy();
-  });
-
-  it("wires the theme toggle onto the chat-view root and flips data-theme on click", () => {
-    installBridge();
-    render(<ChatView intentLens="buying" sessionId="sess-9" />);
-    const section = document.querySelector(".chat-view") as HTMLElement;
-    expect(section.getAttribute("data-theme")).toBe("dark");
-    fireEvent.click(screen.getByRole("button", { name: /switch to light theme/i }));
-    expect(section.getAttribute("data-theme")).toBe("light");
   });
 });
 

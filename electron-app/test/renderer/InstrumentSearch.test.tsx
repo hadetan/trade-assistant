@@ -72,7 +72,7 @@ describe("InstrumentSearch", () => {
 
     fireEvent.change(screen.getByLabelText(/instrument search/i), { target: { value: "infy" } });
     fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
-    fireEvent.click(screen.getByLabelText(/positional/i));
+    fireEvent.click(screen.getByRole("button", { name: /positional/i }));
     fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
 
     await waitFor(() =>
@@ -83,7 +83,7 @@ describe("InstrumentSearch", () => {
     );
   });
 
-  it("shows an error message when the search fails instead of failing silently", async () => {
+  it("shows an error banner when the search fails instead of failing silently", async () => {
     installBridge({
       searchInstruments: vi.fn(async () => {
         throw new Error("network down");
@@ -94,5 +94,61 @@ describe("InstrumentSearch", () => {
     fireEvent.change(screen.getByLabelText(/instrument search/i), { target: { value: "infy" } });
 
     expect(await screen.findByText(/network down/)).toBeTruthy();
+    expect(screen.getByRole("alert")).toBeTruthy();
+  });
+
+  it("clears the search-error banner once the query is shortened back below two characters", async () => {
+    installBridge({
+      searchInstruments: vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    });
+    render(<InstrumentSearch onSubmit={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText(/instrument search/i), { target: { value: "infy" } });
+    expect(await screen.findByText(/network down/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/instrument search/i), { target: { value: "i" } });
+    await waitFor(() => expect(screen.queryByText(/network down/)).toBeNull());
+  });
+
+  it("swallows a rejected onSubmit instead of letting it escape as an unhandled rejection", async () => {
+    installBridge({
+      searchInstruments: vi.fn(async () => ({
+        data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
+      })),
+    });
+    const onSubmit = vi.fn().mockRejectedValue(new Error("run failed"));
+    render(<InstrumentSearch onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /analyze/i })).toHaveProperty("disabled", false),
+    );
+  });
+
+  it("disables Analyze and shows a spinner while the submit promise is in flight, then re-enables it", async () => {
+    installBridge({
+      searchInstruments: vi.fn(async () => ({
+        data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
+      })),
+    });
+    let resolveSubmit: () => void = () => {};
+    const onSubmit = vi.fn(() => new Promise<void>((resolve) => { resolveSubmit = resolve; }));
+    render(<InstrumentSearch onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    expect(screen.getByRole("button", { name: /analyze/i })).toHaveProperty("disabled", true);
+    resolveSubmit();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /analyze/i })).toHaveProperty("disabled", false),
+    );
   });
 });

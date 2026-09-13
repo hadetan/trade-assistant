@@ -1,5 +1,8 @@
 import type { AnalysisResult, HistoryMessage } from "../main/ipc/rendererApi";
 import { MessageMarkdown } from "./MessageMarkdown";
+import { Card } from "./ui/Card";
+import { Badge, directionTone } from "./ui/Badge";
+import "./AnalysisResult.css";
 
 export interface AnalysisResultViewProps {
   result: AnalysisResult;
@@ -17,16 +20,9 @@ function formatWeightedVote(vote: number): string {
 export function AnalysisResultView({ result, history = [] }: AnalysisResultViewProps): JSX.Element | null {
   if (result.mode !== "engine_only") return null;
   const { response } = result;
-  const stats: Array<[string, string | number]> = [
-    ["Direction", response.direction],
-    ["Conviction", response.conviction],
-    ["Bullish", response.confluence.bullish_count],
-    ["Bearish", response.confluence.bearish_count],
-    ["Neutral", response.confluence.neutral_count],
-    ["Weighted vote", formatWeightedVote(response.confluence.weighted_vote)],
-  ];
+
   return (
-    <section className="analysis-result">
+    <Card className="analysis-result">
       {history.length > 0 && (
         <details className="session-history">
           <summary>Past turns in this session</summary>
@@ -40,14 +36,15 @@ export function AnalysisResultView({ result, history = [] }: AnalysisResultViewP
         </details>
       )}
       <MessageMarkdown text={response.text} />
-      <dl className="confluence">
-        {stats.map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
-        ))}
-      </dl>
-    </section>
+      <div className="confluence">
+        <Badge tone={directionTone(response.direction)}>
+          {response.direction} · {response.conviction}
+        </Badge>
+        <Badge tone="bullish">{response.confluence.bullish_count} bullish</Badge>
+        <Badge tone="bearish">{response.confluence.bearish_count} bearish</Badge>
+        <Badge tone="neutral">{response.confluence.neutral_count} neutral</Badge>
+        <span className="confluence-vote">weighted vote {formatWeightedVote(response.confluence.weighted_vote)}</span>
+      </div>
+    </Card>
   );
 }

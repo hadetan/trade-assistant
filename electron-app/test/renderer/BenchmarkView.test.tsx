@@ -103,4 +103,17 @@ describe("BenchmarkView", () => {
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
     expect(await screen.findByText(/0 decision points/i)).toBeTruthy();
   });
+
+  it("shows a loading spinner while the lake list is in flight", () => {
+    render(<BenchmarkView api={api({ listLakeSymbols: vi.fn(() => new Promise(() => {})) })} />);
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("switches to the manual every-N field only after the Manual segment is selected", async () => {
+    render(<BenchmarkView api={api()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    expect(screen.queryByLabelText(/every n bars/i)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /manual every-n override/i }));
+    expect(screen.getByLabelText(/every n bars/i)).toBeTruthy();
+  });
 });

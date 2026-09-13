@@ -58,4 +58,10 @@ describe("ThemeToggle", () => {
     fireEvent.click(screen.getByRole("button"));
     expect(calls).toBe(1);
   });
+
+  it("renders a Lucide svg icon instead of a raw glyph character", () => {
+    const { container } = render(<ThemeToggle theme="dark" onToggle={() => {}} />);
+    expect(container.querySelector("button svg")).toBeTruthy();
+    expect(screen.getByRole("button").textContent).toBe("");
+  });
 });
