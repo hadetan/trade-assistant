@@ -220,10 +220,15 @@ describe("SidecarSupervisor", () => {
   it("resolves benchmarkCompute with algo_results and confluence", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [
-      { ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 },
-    ]);
-    await requestsSeen;
+    const pending = supervisor.benchmarkCompute(
+      "NSE:INFY",
+      "day",
+      "positional",
+      [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }],
+      "sma",
+    );
+    const requests = await requestsSeen;
+    expect(requests[0].algo_id).toBe("sma");
     children[0].stdout.write(
       `${JSON.stringify({ type: "benchmark_compute", id: 1, algo_results: [], confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 } })}\n`,
     );
@@ -254,7 +259,7 @@ describe("SidecarSupervisor", () => {
     const supervisor = new SidecarSupervisor({ binaryPath: "/fake/sidecar", lakeRoot: "/fake/lake", spawnFn, requestTimeoutMs: 20 });
     supervisor.start();
     await expect(
-      supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]),
+      supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }], "sma"),
     ).rejects.toThrow(/sidecar request 1 timed out after 20ms/);
   });
 
@@ -287,5 +292,38 @@ describe("SidecarSupervisor", () => {
       seen = id;
     });
     expect(seen).toBe(1);
+  });
+
+  it("resolves listAlgorithms with an algorithms response carrying the matching id", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.listAlgorithms();
+    await requestsSeen;
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "algorithms", id: 1, algorithms: [{ id: "sma", cost: "fast" }] })}\n`,
+    );
+    const response = await pending;
+    expect(response.type).toBe("algorithms");
+    expect(response.algorithms[0].id).toBe("sma");
+  });
+
+  it("cancelCurrent kills the child and rejects pending requests with error.cancelled === true", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+
+    supervisor.cancelCurrent();
+
+    await expect(pending).rejects.toMatchObject({ cancelled: true, message: "sidecar run cancelled" });
+    expect(children[0].killed).toBe(true);
+  });
+
+  it("respawns after a cancelCurrent kill, same as an unexpected exit", async () => {
+    const { supervisor, children } = makeSupervisor();
+
+    supervisor.cancelCurrent();
+
+    // Respawn is on a RESTART_BACKOFF_MS timer, so wait past it before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(children.length).toBe(2);
   });
 });

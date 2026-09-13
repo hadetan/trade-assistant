@@ -94,6 +94,17 @@ export interface SidecarProgressWire {
   status: "running" | "done";
 }
 
+export interface AlgorithmWire {
+  id: string;
+  cost: "fast" | "slow";
+}
+
+export interface ListAlgorithmsResponseWire {
+  type: "algorithms";
+  id: number;
+  algorithms: AlgorithmWire[];
+}
+
 export type SidecarResponseWire =
   | ComputeResponseWire
   | PersistCandlesResponseWire
@@ -101,7 +112,8 @@ export type SidecarResponseWire =
   | ScanGateResponseWire
   | LakeSymbolsResponseWire
   | LakeCandlesResponseWire
-  | BenchmarkComputeResponseWire;
+  | BenchmarkComputeResponseWire
+  | ListAlgorithmsResponseWire;
 
 export type SidecarRequestWire =
   | { type: "compute"; id: number; symbol: string; timeframe: string; closes: number[] }
@@ -112,8 +124,9 @@ export type SidecarRequestWire =
   | { type: "evaluate_scan_gate"; id: number; symbol: string; confluence: ConfluenceWire }
   | { type: "list_lake_symbols"; id: number }
   | { type: "read_lake_candles"; id: number; symbol: string; timeframe: string; source: string }
-  | { type: "benchmark_compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[] }
-  | { type: "evaluate_scan_gate_stateless"; id: number; prev: ConfluenceWire | null; curr: ConfluenceWire };
+  | { type: "benchmark_compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[]; algo_id: string }
+  | { type: "evaluate_scan_gate_stateless"; id: number; prev: ConfluenceWire | null; curr: ConfluenceWire }
+  | { type: "list_algorithms"; id: number };
 
 export function encodeRequest(request: SidecarRequestWire): string {
   return `${JSON.stringify(request)}\n`;
