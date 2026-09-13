@@ -33,6 +33,7 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
     setSelected(null);
     if (query.trim().length < 2) {
       setResults([]);
+      setSearchError(null);
       return;
     }
     let cancelled = false;
@@ -56,6 +57,11 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
     setRunning(true);
     try {
       await onSubmit(selected, horizon);
+    } catch {
+      // A run failure is the caller's own state to own and surface (App renders it
+      // via a Banner keyed off its analysisError) — this catch exists only so a
+      // rejected onSubmit never escapes as an unhandled rejection from this
+      // fire-and-forget onClick handler.
     } finally {
       setRunning(false);
     }
