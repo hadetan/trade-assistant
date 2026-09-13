@@ -326,4 +326,33 @@ describe("SidecarSupervisor", () => {
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(children.length).toBe(2);
   });
+
+  it("cancelCurrent with no live child does not set stale cancel-flag to leak into a later unrelated crash", async () => {
+    const children: FakeChild[] = [];
+    const spawnFn = (_command: string, _args: string[]) => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as ReturnType<typeof spawnFn>;
+    };
+    const supervisor = new SidecarSupervisor({ binaryPath: "/fake/sidecar", lakeRoot: "/fake/lake", spawnFn });
+
+    // Call cancelCurrent before start() — child is null, should be a no-op with the fix.
+    supervisor.cancelCurrent();
+
+    // Now start the supervisor and spawn a child.
+    supervisor.start();
+    expect(children.length).toBe(1);
+
+    // Spawn a pending request so we can capture the exit error.
+    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+
+    // Cause the child to exit unexpectedly (not via cancelCurrent).
+    children[0].emit("exit", 1, null);
+
+    // The child's exit should NOT be tagged as cancelled, because the earlier
+    // cancelCurrent() was a no-op (no live child to cancel).
+    const error = await pending.catch((e) => e);
+    expect((error as any).cancelled).not.toBe(true);
+    expect(error.message).toMatch(/sidecar exited/);
+  });
 });

@@ -76,8 +76,9 @@ export class SidecarSupervisor extends EventEmitter {
   }
 
   cancelCurrent(): void {
+    if (!this.child) return;
     this.cancelling = true;
-    this.child?.kill();
+    this.child.kill();
   }
 
   compute(
