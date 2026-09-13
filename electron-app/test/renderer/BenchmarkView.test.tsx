@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../src/renderer/benchmarkChart", () => ({ createBenchmarkChart: vi.fn(() => ({ dispose: vi.fn() })) }));
 
 import { BenchmarkView } from "../../src/renderer/BenchmarkView";
-import type { BenchmarkResult, LakeSymbolEntry, RendererApi } from "../../src/main/ipc/rendererApi";
+import type { AlgorithmEntry, BenchmarkResult, LakeSymbolEntry, RendererApi } from "../../src/main/ipc/rendererApi";
 
 afterEach(cleanup);
 
@@ -19,18 +19,28 @@ const DAY_ENTRY: LakeSymbolEntry = {
   horizon: "positional",
 };
 
-function api(overrides: Partial<Pick<RendererApi, "listLakeSymbols" | "runBenchmark" | "copyBenchmarkResult">> = {}) {
+const ALGORITHMS: AlgorithmEntry[] = [
+  { id: "sma", cost: "fast" },
+  { id: "kronos", cost: "slow" },
+];
+
+function api(
+  overrides: Partial<Pick<RendererApi, "listLakeSymbols" | "listAlgorithms" | "runBenchmark" | "cancelBenchmark" | "copyBenchmarkResult" | "onBenchmarkProgress">> = {},
+) {
   return {
     listLakeSymbols: vi.fn().mockResolvedValue([DAY_ENTRY]),
+    listAlgorithms: vi.fn().mockResolvedValue(ALGORITHMS),
     runBenchmark: vi.fn(),
+    cancelBenchmark: vi.fn().mockResolvedValue(undefined),
     copyBenchmarkResult: vi.fn().mockResolvedValue(undefined),
+    onBenchmarkProgress: vi.fn(),
     ...overrides,
   };
 }
 
-function resultWith(outcomes: Array<BenchmarkResult["decisionPoints"][number]["outcome"]>): BenchmarkResult {
+function resultWith(outcomes: Array<BenchmarkResult["decisionPoints"][number]["outcome"]>, cancelled = false): BenchmarkResult {
   return {
-    params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", cadence: { mode: "session_close" }, lookaheadBars: 5, fromTs: 0, toTs: 0 },
+    params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "sma", lookaheadBars: 5, fromTs: 0, toTs: 0 },
     candles: [{ ts: 1, open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 }],
     decisionPoints: outcomes.map((outcome, i) => ({
       frontierIndex: i,
@@ -45,7 +55,13 @@ function resultWith(outcomes: Array<BenchmarkResult["decisionPoints"][number]["o
       confluence: { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 },
       outcome,
     })),
+    cancelled,
   };
+}
+
+async function selectEntryAndAlgo(): Promise<void> {
+  fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /^sma/i }));
 }
 
 describe("BenchmarkView", () => {
@@ -62,34 +78,54 @@ describe("BenchmarkView", () => {
     expect(option.textContent).toMatch(/240/);
   });
 
-  it("prefills the horizon-appropriate cadence and lookahead on selection", async () => {
+  it("renders the algorithm picker tagged fast/slow and tags a forecaster as an ML forecaster", async () => {
+    render(<BenchmarkView api={api()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    expect(await screen.findByText(/kronos/i)).toBeTruthy();
+    expect(screen.getByText(/slow \(ml forecaster\)/i)).toBeTruthy();
+  });
+
+  it("prefills the lookahead default and the single date field on selection", async () => {
     render(<BenchmarkView api={api()} />);
     fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
     const lookahead = (await screen.findByLabelText(/lookahead bars/i)) as HTMLInputElement;
     expect(lookahead.value).toBe("5"); // positional default
-    expect(screen.getByText(/session_close/i)).toBeTruthy();
+    const date = (await screen.findByLabelText(/^date$/i)) as HTMLInputElement;
+    expect(date.value).toBe(new Date(DAY_ENTRY.fromTs * 1000).toISOString().slice(0, 10));
   });
 
-  it("runs the benchmark with the assembled params", async () => {
+  it("keeps the Run button disabled until an algorithm is selected", async () => {
+    render(<BenchmarkView api={api()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    const runButton = await screen.findByRole("button", { name: /run benchmark/i });
+    expect(runButton).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: /^sma/i }));
+    expect(runButton).toHaveProperty("disabled", false);
+  });
+
+  it("runs the benchmark with the assembled params including the selected algorithm and single-day window", async () => {
     const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith([])) });
     render(<BenchmarkView api={deps} />);
-    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    await selectEntryAndAlgo();
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
     await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
-    expect(deps.runBenchmark.mock.calls[0][0]).toMatchObject({
+    const dayStart = Math.floor(new Date(`${new Date(DAY_ENTRY.fromTs * 1000).toISOString().slice(0, 10)}T00:00:00Z`).getTime() / 1000);
+    expect(deps.runBenchmark.mock.calls[0][0]).toEqual({
       symbol: "NSE:INFY",
       timeframe: "day",
       source: "bhavcopy",
       horizon: "positional",
-      cadence: { mode: "session_close" },
+      algoId: "sma",
       lookaheadBars: 5,
+      fromTs: dayStart,
+      toTs: dayStart + 86_400,
     });
   });
 
   it("renders the summary strip counts and hit-rate after a run", async () => {
     const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith(["correct", "correct", "incorrect", "neutral"])) });
     render(<BenchmarkView api={deps} />);
-    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    await selectEntryAndAlgo();
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
     // 2 correct / (2 correct + 1 incorrect) = 67%.
     expect(await screen.findByText(/67%/)).toBeTruthy();
@@ -99,9 +135,17 @@ describe("BenchmarkView", () => {
   it("shows a zero-decision-points strip instead of dividing by zero", async () => {
     const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith([])) });
     render(<BenchmarkView api={deps} />);
-    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    await selectEntryAndAlgo();
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
     expect(await screen.findByText(/0 decision points/i)).toBeTruthy();
+  });
+
+  it("renders a Cancelled banner in place of an error when the result is cancelled", async () => {
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith([], true)) });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    expect(await screen.findByText(/cancelled — partial results/i)).toBeTruthy();
   });
 
   it("shows a loading spinner while the lake list is in flight", () => {
@@ -109,11 +153,31 @@ describe("BenchmarkView", () => {
     expect(screen.getByRole("status")).toBeTruthy();
   });
 
-  it("switches to the manual every-N field only after the Manual segment is selected", async () => {
-    render(<BenchmarkView api={api()} />);
-    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
-    expect(screen.queryByLabelText(/every n bars/i)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: /manual every-n override/i }));
-    expect(screen.getByLabelText(/every n bars/i)).toBeTruthy();
+  it("shows a fixed progress pill reflecting onBenchmarkProgress updates while running", async () => {
+    let progressHandler: ((p: { index: number; total: number }) => void) | undefined;
+    const runBenchmark = vi.fn(() => new Promise<BenchmarkResult>(() => {})); // never resolves -- keeps `running` true
+    const deps = api({
+      runBenchmark,
+      onBenchmarkProgress: vi.fn((handler: (p: { index: number; total: number }) => void) => {
+        progressHandler = handler;
+      }),
+    });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(runBenchmark).toHaveBeenCalledTimes(1));
+    progressHandler?.({ index: 3, total: 10 });
+    expect(await screen.findByText(/bar 3\/10/i)).toBeTruthy();
+  });
+
+  it("calls cancelBenchmark when Stop is clicked while a run is in flight", async () => {
+    const runBenchmark = vi.fn(() => new Promise<BenchmarkResult>(() => {}));
+    const deps = api({ runBenchmark });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(runBenchmark).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole("button", { name: /^stop$/i }));
+    expect(deps.cancelBenchmark).toHaveBeenCalledTimes(1);
   });
 });
