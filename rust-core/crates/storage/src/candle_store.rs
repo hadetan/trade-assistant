@@ -24,6 +24,16 @@ pub struct LakeSymbolEntry {
     pub candle_count: usize,
 }
 
+// `Connection` wraps a `RefCell`, so it is `Send` but not `Sync` -- holding
+// one here makes `CandleStore` lose the `Sync` (and therefore `Arc`'s `Send`)
+// it had when this struct was just a `PathBuf`. That's accepted, not
+// overlooked: every construction site in this workspace (sidecar's
+// single-threaded stdin loop, the one-shot ingest/replay CLIs, tests) owns
+// one `CandleStore` on one thread for its whole lifetime -- nothing shares
+// it via `Arc`. Reaching for a `Mutex<Connection>` to preserve `Sync` no
+// caller needs would reintroduce the lock-contention cost this struct exists
+// to remove. See docs/superpowers/specs/2026-09-13-candlestore-connection-reuse-design.md
+// CSR§7 for the full reasoning.
 pub struct CandleStore {
     root: PathBuf,
     conn: Connection,
