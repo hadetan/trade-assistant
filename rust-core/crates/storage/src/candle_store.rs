@@ -132,7 +132,6 @@ impl CandleStore {
         candles: &[Candle],
     ) -> Result<()> {
         let path = self.sourced_partition_path(symbol, timeframe, source);
-        let is_new_partition = !path.exists();
         // Read-merge-write keyed on ts: existing partition + incoming, incoming
         // wins on duplicate ts, output sorted ascending. Makes re-ingesting the
         // same day idempotent and lets day-by-day bhavcopy pulls accumulate.
@@ -143,16 +142,20 @@ impl CandleStore {
         }
         let ordered: Vec<Candle> = merged.into_values().collect();
         self.write_partition(&path, &ordered)?;
-        if is_new_partition {
-            lake_manifest::append_partition_key(
-                &self.root,
-                &LakePartitionKey {
-                    symbol: symbol.to_string(),
-                    timeframe: timeframe.to_string(),
-                    source: source.to_string(),
-                },
-            )?;
-        }
+        let from_ts = ordered.first().map(|c| c.ts).unwrap_or(0);
+        let to_ts = ordered.last().map(|c| c.ts).unwrap_or(0);
+        let candle_count = ordered.len();
+        lake_manifest::append_partition_key(
+            &self.root,
+            &LakePartitionKey {
+                symbol: symbol.to_string(),
+                timeframe: timeframe.to_string(),
+                source: source.to_string(),
+                from_ts,
+                to_ts,
+                candle_count,
+            },
+        )?;
         Ok(())
     }
 
@@ -160,40 +163,23 @@ impl CandleStore {
         self.read_partition(&self.sourced_partition_path(symbol, timeframe, source))
     }
 
-    fn partition_bounds(&self, path: &Path) -> Result<(i64, i64, usize)> {
-        let path_str = Self::escape_sql_literal(&path.to_string_lossy());
-        let conn = Connection::open_in_memory()?;
-        let (min_ts, max_ts, count): (i64, i64, i64) = conn.query_row(
-            &format!("SELECT min(ts), max(ts), count(*) FROM read_parquet('{path_str}')"),
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        Ok((min_ts, max_ts, count as usize))
-    }
-
     pub fn list_symbols(&self) -> Result<Vec<LakeSymbolEntry>> {
         let keys = lake_manifest::read_partition_keys(&self.root)?;
-        let mut entries = Vec::new();
-        for key in keys {
-            let path = self.sourced_partition_path(&key.symbol, &key.timeframe, &key.source);
-            // Defensive: a manifested key whose partition file is gone is skipped
-            // rather than erroring the whole listing.
-            if !path.exists() {
-                continue;
-            }
-            let (from_ts, to_ts, candle_count) = self.partition_bounds(&path)?;
-            entries.push(LakeSymbolEntry {
+        // Defensive: a manifested key whose partition file is gone is skipped
+        // rather than erroring the whole listing.
+        let mut entries: Vec<LakeSymbolEntry> = keys
+            .into_iter()
+            .filter(|key| self.sourced_partition_path(&key.symbol, &key.timeframe, &key.source).exists())
+            .map(|key| LakeSymbolEntry {
                 symbol: key.symbol,
                 timeframe: key.timeframe,
                 source: key.source,
-                from_ts,
-                to_ts,
-                candle_count,
-            });
-        }
-        entries.sort_by(|a, b| {
-            (&a.symbol, &a.timeframe, &a.source).cmp(&(&b.symbol, &b.timeframe, &b.source))
-        });
+                from_ts: key.from_ts,
+                to_ts: key.to_ts,
+                candle_count: key.candle_count,
+            })
+            .collect();
+        entries.sort_by(|a, b| (&a.symbol, &a.timeframe, &a.source).cmp(&(&b.symbol, &b.timeframe, &b.source)));
         Ok(entries)
     }
 }
@@ -271,5 +257,35 @@ mod tests {
         assert!(!filename.contains('/'), "filename must not contain a path separator: {filename}");
         assert!(!filename.contains('\\'), "filename must not contain a path separator: {filename}");
         assert!(!filename.contains(".."), "filename must not contain a traversal sequence: {filename}");
+    }
+
+    #[test]
+    fn list_symbols_reflects_cumulative_bounds_after_two_disjoint_writes() {
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                "day",
+                "bhavcopy",
+                &[Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }],
+            )
+            .unwrap();
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                "day",
+                "bhavcopy",
+                &[Candle { ts: 200, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 2 }],
+            )
+            .unwrap();
+
+        let entries = store.list_symbols().unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].from_ts, 100, "bounds must cover the first write's earliest candle");
+        assert_eq!(entries[0].to_ts, 200, "bounds must cover the second write's latest candle, not just the first write's");
+        assert_eq!(entries[0].candle_count, 2, "count must be cumulative across both writes");
     }
 }
