@@ -148,6 +148,22 @@ describe("BenchmarkView", () => {
     expect(await screen.findByText(/cancelled — partial results/i)).toBeTruthy();
   });
 
+  it("shows a validation error instead of calling runBenchmark when the date field is cleared", async () => {
+    const deps = api();
+    const { container } = render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    const dateField = (await screen.findByLabelText(/^date$/i)) as HTMLInputElement;
+    fireEvent.change(dateField, { target: { value: "" } });
+    // fireEvent.submit dispatches the submit event directly, bypassing the
+    // native `required` constraint-validation gate a real button click would
+    // hit first -- this exercises the app-level guard in onRun on its own.
+    const form = container.querySelector("form");
+    if (!form) throw new Error("expected a form element");
+    fireEvent.submit(form);
+    expect(await screen.findByText(/pick a date before running/i)).toBeTruthy();
+    expect(deps.runBenchmark).not.toHaveBeenCalled();
+  });
+
   it("shows a loading spinner while the lake list is in flight", () => {
     render(<BenchmarkView api={api({ listLakeSymbols: vi.fn(() => new Promise(() => {})) })} />);
     expect(screen.getByRole("status")).toBeTruthy();

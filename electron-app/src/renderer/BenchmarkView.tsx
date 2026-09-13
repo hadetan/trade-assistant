@@ -106,11 +106,15 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
 
   const onRun = async (): Promise<void> => {
     if (!selected || !selectedAlgoId) return;
+    const dayStart = fromDate(date);
+    if (!date || Number.isNaN(dayStart)) {
+      setError("Pick a date before running.");
+      return;
+    }
     setRunning(true);
     setError(null);
     setProgress(null);
     try {
-      const dayStart = fromDate(date);
       const run = await api.runBenchmark({
         symbol: selected.symbol,
         timeframe: selected.timeframe,
@@ -213,6 +217,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
                   Date
                   <TextField
                     type="date"
+                    required
                     min={toDate(selected.fromTs)}
                     max={toDate(selected.toTs)}
                     value={date}

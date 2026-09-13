@@ -83,7 +83,12 @@ export async function runBenchmark(
   onProgress?: (index: number, total: number) => void,
 ): Promise<BenchmarkResult> {
   const { candles } = await deps.sidecar.readLakeCandles(params.symbol, params.timeframe, params.source);
-  const series = candles.filter((c) => c.ts >= params.fromTs && c.ts <= params.toTs);
+  // No upper bound here: a day-timeframe entry's single selected day is only one
+  // bar, and scoring its outcome needs `lookaheadBars` MORE bars beyond it -- an
+  // upper-bounded series would silently produce zero decision points for every
+  // day-timeframe run. `toTs` instead bounds which bars are eligible *frontiers*
+  // in the loop below, not which bars exist in `series` at all.
+  const series = candles.filter((c) => c.ts >= params.fromTs);
   const cadence = defaultCadenceForHorizon(params.horizon);
   const decisionPoints: DecisionPoint[] = [];
   let prevConfluence: ConfluenceWire | null = null;
@@ -91,6 +96,10 @@ export async function runBenchmark(
 
   try {
     for (let i = 0; i < series.length; i++) {
+      // A frontier must fall inside the requested window; `toTs` is exclusive
+      // (start of the next day) so a candle stamped exactly at that boundary is
+      // never mistaken for part of the selected day.
+      if (series[i].ts >= params.toTs) break;
       // Mirror run_replay's boundary: stop once no future bar exists at i+lookahead.
       if (i + params.lookaheadBars >= series.length) break;
 

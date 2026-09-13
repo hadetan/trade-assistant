@@ -235,6 +235,34 @@ describe("runBenchmark frontier walk", () => {
     expect(result.decisionPoints).toHaveLength(5);
   });
 
+  it("day-timeframe single-day window still scores an outcome using bars beyond toTs for lookahead", async () => {
+    // A day-timeframe lake entry has exactly one candle per selected day, so
+    // scoring its outcome needs `lookaheadBars` MORE candles after the window
+    // -- if `series` were bounded above by `toTs`, this would always produce
+    // zero decision points for every day-timeframe run.
+    const dayStart = 1_700_000_000;
+    const toTs = dayStart + 86_400;
+    const closes = [100, 101, 102, 103, 104, 105, 106]; // the selected day + 6 more trading days after it
+    const candles: CandleWire[] = closes.map((close, i) => ({
+      ts: dayStart + i * 86_400,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: 100,
+    }));
+    const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
+        benchmarkCompute,
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+    const result = await runBenchmark(deps, baseParams({ timeframe: "day", fromTs: dayStart, toTs, lookaheadBars: 5 }));
+    expect(result.decisionPoints.length).toBeGreaterThanOrEqual(1);
+  });
+
   it("tags cancelled=true and keeps only the pre-cancellation decision points on a cancellation-tagged rejection", async () => {
     let call = 0;
     const benchmarkCompute = vi.fn().mockImplementation(() => {
