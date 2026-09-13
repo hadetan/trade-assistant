@@ -1,6 +1,6 @@
 use crate::error::{Result, StorageError};
 use crate::lake_manifest::{self, LakePartitionKey};
-use duckdb::{params, Connection};
+use duckdb::{params, Config, Connection};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -26,12 +26,15 @@ pub struct LakeSymbolEntry {
 
 pub struct CandleStore {
     root: PathBuf,
+    conn: Connection,
 }
 
 impl CandleStore {
     pub fn open(root: &Path) -> Result<Self> {
         std::fs::create_dir_all(root).map_err(StorageError::Io)?;
-        Ok(Self { root: root.to_path_buf() })
+        let config = Config::default().threads(1)?.enable_object_cache(false)?;
+        let conn = Connection::open_in_memory_with_flags(config)?;
+        Ok(Self { root: root.to_path_buf(), conn })
     }
 
     /// Restrict a partition-key component (symbol/timeframe) to a safe character
@@ -69,8 +72,7 @@ impl CandleStore {
             return Ok(Vec::new());
         }
         let path_str = Self::escape_sql_literal(&path.to_string_lossy());
-        let conn = Connection::open_in_memory()?;
-        let mut stmt = conn.prepare(&format!(
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT ts, open, high, low, close, volume FROM read_parquet('{path_str}') ORDER BY ts ASC"
         ))?;
         let rows = stmt.query_map([], |row| {
@@ -87,11 +89,10 @@ impl CandleStore {
     }
 
     fn write_partition(&self, path: &Path, candles: &[Candle]) -> Result<()> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(
-            "CREATE TABLE candles (ts BIGINT, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT)",
+        self.conn.execute_batch(
+            "CREATE OR REPLACE TABLE candles (ts BIGINT, open DOUBLE, high DOUBLE, low DOUBLE, close DOUBLE, volume BIGINT)",
         )?;
-        let mut appender = conn.appender("candles")?;
+        let mut appender = self.conn.appender("candles")?;
         for candle in candles {
             appender.append_row(params![
                 candle.ts, candle.open, candle.high, candle.low, candle.close, candle.volume
@@ -101,7 +102,7 @@ impl CandleStore {
 
         let tmp_path = PathBuf::from(format!("{}.tmp", path.to_string_lossy()));
         let tmp_path_str = Self::escape_sql_literal(&tmp_path.to_string_lossy());
-        conn.execute(&format!("COPY candles TO '{tmp_path_str}' (FORMAT PARQUET)"), [])?;
+        self.conn.execute(&format!("COPY candles TO '{tmp_path_str}' (FORMAT PARQUET)"), [])?;
         // Rename is atomic on the same filesystem, so a crash mid-COPY (or mid
         // re-ingest merge) leaves the previous partition intact instead of a
         // half-written file at `path`.
@@ -287,5 +288,74 @@ mod tests {
         assert_eq!(entries[0].from_ts, 100, "bounds must cover the first write's earliest candle");
         assert_eq!(entries[0].to_ts, 200, "bounds must cover the second write's latest candle, not just the first write's");
         assert_eq!(entries[0].candle_count, 2, "count must be cumulative across both writes");
+    }
+
+    #[test]
+    fn two_different_symbols_written_to_the_same_store_read_back_independently() {
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                "day",
+                "bhavcopy",
+                &[Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 10 }],
+            )
+            .unwrap();
+        store
+            .write_sourced_candles(
+                "NSE:TCS",
+                "day",
+                "bhavcopy",
+                &[
+                    Candle { ts: 200, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 20 },
+                    Candle { ts: 300, open: 3.0, high: 3.0, low: 3.0, close: 3.0, volume: 30 },
+                ],
+            )
+            .unwrap();
+
+        let infy = store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap();
+        let tcs = store.read_sourced_candles("NSE:TCS", "day", "bhavcopy").unwrap();
+
+        assert_eq!(infy.len(), 1, "NSE:INFY must keep exactly its own one candle");
+        assert_eq!(infy[0].ts, 100);
+        assert_eq!(tcs.len(), 2, "NSE:TCS must keep exactly its own two candles");
+        assert_eq!(tcs.iter().map(|c| c.ts).collect::<Vec<_>>(), vec![200, 300]);
+    }
+
+    #[test]
+    fn write_then_read_then_write_again_round_trips_against_the_shared_connection() {
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                "day",
+                "bhavcopy",
+                &[Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 10 }],
+            )
+            .unwrap();
+
+        let first_read = store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap();
+        assert_eq!(first_read.len(), 1);
+        assert_eq!(first_read[0].ts, 100);
+
+        // write_sourced_candles itself does read_partition-then-write_partition
+        // internally; this second call forces that same sequence to run again
+        // against the store's one persistent connection.
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                "day",
+                "bhavcopy",
+                &[Candle { ts: 200, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 20 }],
+            )
+            .unwrap();
+
+        let second_read = store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap();
+        assert_eq!(second_read.len(), 2, "must have merged, not replaced, the first candle");
+        assert_eq!(second_read.iter().map(|c| c.ts).collect::<Vec<_>>(), vec![100, 200]);
     }
 }
