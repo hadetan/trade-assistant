@@ -1,4 +1,7 @@
 .theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 1.75rem;
   height: 1.75rem;
   border-radius: 999px;
@@ -6,7 +9,5 @@
   background: var(--code-bg);
   color: var(--fg);
   cursor: pointer;
-  font-size: 0.9rem;
-  line-height: 1;
   margin-left: auto;
 }

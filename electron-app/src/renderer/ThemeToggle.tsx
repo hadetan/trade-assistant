@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./ThemeToggle.css";
+import { Sun, Moon } from "./ui/icons";
 
 const THEME_KEY = "chatTheme";
 export type ChatTheme = "dark" | "light";
@@ -26,7 +27,7 @@ export function ThemeToggle({ theme, onToggle }: { theme: ChatTheme; onToggle: (
       onClick={onToggle}
       aria-label={`switch to ${theme === "dark" ? "light" : "dark"} theme`}
     >
-      {theme === "dark" ? "☀" : "☾"}
+      {theme === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
     </button>
   );
 }
