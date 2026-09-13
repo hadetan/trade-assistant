@@ -2,17 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
-  it("exposes exactly the twelve bridge methods and never leaks the raw transport", () => {
+  it("exposes exactly the fifteen bridge methods and never leaks the raw transport", () => {
     const api = buildRendererApi(vi.fn().mockResolvedValue({}), vi.fn());
     expect(Object.keys(api).sort()).toEqual([
+      "cancelBenchmark",
       "copyBenchmarkResult",
       "createSession",
       "getSession",
       "getStatus",
+      "listAlgorithms",
       "listLakeSymbols",
       "listSessions",
       "login",
       "onBanner",
+      "onBenchmarkProgress",
       "onTrace",
       "runAnalysis",
       "runBenchmark",
@@ -59,6 +62,20 @@ describe("buildRendererApi", () => {
     };
     await buildRendererApi(invoke, vi.fn()).runAnalysis(params);
     expect(invoke).toHaveBeenCalledWith("analysis:run", params);
+  });
+
+  it("routes listAlgorithms through benchmark:listAlgorithms", async () => {
+    const invoke = vi.fn().mockResolvedValue([{ id: "sma", cost: "fast" }]);
+    const entries = await buildRendererApi(invoke, vi.fn()).listAlgorithms();
+    expect(invoke).toHaveBeenCalledWith("benchmark:listAlgorithms");
+    expect(entries[0].id).toBe("sma");
+  });
+
+  it("subscribes onBenchmarkProgress to the benchmark:progress channel", () => {
+    const subscribe = vi.fn();
+    const handler = vi.fn();
+    buildRendererApi(vi.fn(), subscribe).onBenchmarkProgress(handler);
+    expect(subscribe).toHaveBeenCalledWith("benchmark:progress", handler);
   });
 });
 
