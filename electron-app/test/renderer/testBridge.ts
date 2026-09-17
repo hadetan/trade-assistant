@@ -9,6 +9,7 @@ export function installBridge(overrides: Partial<RendererApi> = {}): RendererApi
     login: vi.fn().mockResolvedValue({ status: "authenticated" }),
     searchInstruments: vi.fn().mockResolvedValue({ data: [] }),
     runAnalysis: vi.fn(),
+    checkReadiness: vi.fn().mockResolvedValue({ ok: true }),
     createSession: vi.fn().mockResolvedValue({
       id: "session-1",
       response_mode: "engine_only",

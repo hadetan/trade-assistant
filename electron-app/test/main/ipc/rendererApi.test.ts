@@ -2,10 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
-  it("exposes exactly the fifteen bridge methods and never leaks the raw transport", () => {
+  it("exposes exactly the sixteen bridge methods and never leaks the raw transport", () => {
     const api = buildRendererApi(vi.fn().mockResolvedValue({}), vi.fn());
     expect(Object.keys(api).sort()).toEqual([
       "cancelBenchmark",
+      "checkReadiness",
       "copyBenchmarkResult",
       "createSession",
       "getSession",
@@ -112,5 +113,15 @@ describe("buildRendererApi history wiring", () => {
     const invoke = vi.fn().mockResolvedValue({ id: "s1", response_mode: "ai_assisted", messages: [] });
     await buildRendererApi(invoke, vi.fn()).getSession("s1");
     expect(invoke).toHaveBeenCalledWith("history:getSession", { id: "s1" });
+  });
+
+  it("routes checkReadiness through analysis:checkReadiness", async () => {
+    const invoke = vi.fn().mockResolvedValue({ ok: true });
+    const params = {
+      instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+      interval: "5minute" as const,
+    };
+    expect(await buildRendererApi(invoke, vi.fn()).checkReadiness(params)).toEqual({ ok: true });
+    expect(invoke).toHaveBeenCalledWith("analysis:checkReadiness", params);
   });
 });

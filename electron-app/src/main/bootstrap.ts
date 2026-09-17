@@ -242,6 +242,7 @@ export function createApp(): AppRuntime {
     history,
     sendTrace: makeTraceSender(sendToRenderer),
     markNeedsLogin: () => sessionState.markNeedsLogin(),
+    kiteStatus: () => sessionState.status,
   });
   registerHistoryBridge({ ipcMain, history });
   registerSettingsBridge({ ipcMain, history, scanScheduler, sidecar: supervisor, getStatus: currentStatus });

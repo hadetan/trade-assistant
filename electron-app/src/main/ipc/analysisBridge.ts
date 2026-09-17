@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { IpcMain } from "electron";
-import type { AnalysisRunParams, AnalysisResult, LoginResult, TraceEmitter, TraceEvent } from "./rendererApi";
+import type {
+  AnalysisRunParams,
+  AnalysisResult,
+  LoginResult,
+  TraceEmitter,
+  TraceEvent,
+  ReadinessResult,
+  ReadinessCheckParams,
+  KiteSessionStatus,
+} from "./rendererApi";
 import type { KiteClient } from "../services/kite/kiteClient";
 import type { KiteSession } from "../services/kite/kiteLogin";
 import type { SidecarSupervisor } from "../services/sidecar/sidecarSupervisor";
@@ -8,6 +17,8 @@ import type { SidecarProgressWire } from "../services/sidecar/sidecarProtocol";
 import type { AiAssistedProvider } from "../services/claude/provider";
 import type { HistoryStore } from "../services/history/historyStore";
 import { assembleEnvelope } from "../services/analysis/analysisEnvelope";
+import { assembleWarmedEnvelope } from "../services/analysis/warmedEnvelope";
+import { checkEngineOnlyReadiness } from "../services/market/readinessGate";
 import { generateDeterministicResponse } from "../services/analysis/deterministicResponseGenerator";
 import { horizonToFetchParams } from "../services/analysis/horizonFetchParams";
 import { looksLikeSessionExpiry } from "../services/kite/kiteSessionState";
@@ -17,13 +28,27 @@ export type { HorizonFetchParams } from "../services/analysis/horizonFetchParams
 
 export interface RunAnalysisDeps {
   kite: KiteClient;
-  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles">;
+  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles" | "readLakeCandles" | "listAlgorithms">;
   history: Pick<HistoryStore, "appendMessage">;
+  checkReadiness: typeof checkEngineOnlyReadiness;
+  assembleEnvelope: typeof assembleWarmedEnvelope;
+  kiteStatus: () => KiteSessionStatus;
   now?: () => Date;
 }
 
 export function describeEngineOnlyQuery(params: Extract<AnalysisRunParams, { mode: "engine_only" }>): string {
-  return `${params.instrument.symbol} · ${params.horizon} · ${params.intent_lens}`;
+  return `${params.instrument.symbol} · ${params.interval} · ${params.intent_lens}`;
+}
+
+export function describeReadiness(readiness: Extract<ReadinessResult, { ok: false }>): string {
+  switch (readiness.reason) {
+    case "kite_not_connected":
+      return "Connect your Kite account to fetch live candles.";
+    case "insufficient_history":
+      return `Warming up history: ${readiness.have} of ${readiness.need} candles so far.`;
+    case "market_closed":
+      return `NSE is closed. Trading resumes ${new Date(readiness.nextOpenAt * 1000).toISOString()}.`;
+  }
 }
 
 export async function runAnalysisRequest(
@@ -37,24 +62,56 @@ export async function runAnalysisRequest(
     renderedText: describeEngineOnlyQuery(params),
     structuredPayload: params,
   });
-  const { timeframe, from, to } = horizonToFetchParams(params.horizon, now);
-  const envelope = await assembleEnvelope(
+
+  const instrumentRef = {
+    symbol: params.instrument.symbol,
+    exchange: params.instrument.exchange,
+    segment: params.instrument.segment,
+    kite_token_asof: params.instrument.instrumentToken,
+  };
+
+  const readiness = await deps.checkReadiness(
+    { kiteStatus: deps.kiteStatus, kite: deps.kite, sidecar: deps.sidecar },
+    {
+      symbol: params.instrument.symbol,
+      instrumentToken: params.instrument.instrumentToken,
+      interval: params.interval,
+      now,
+    },
+  );
+  if (!readiness.ok) {
+    const blocked: AnalysisResult = {
+      mode: "engine_only_blocked",
+      instrument: instrumentRef,
+      interval: params.interval,
+      readiness,
+    };
+    // Persisted like any other assistant turn, so reopening the session replays
+    // what blocked it before the gate re-runs against right now (P13§7).
+    deps.history.appendMessage({
+      sessionId: params.sessionId,
+      role: "assistant",
+      renderedText: describeReadiness(readiness),
+      structuredPayload: blocked,
+    });
+    return blocked;
+  }
+
+  const envelope = await deps.assembleEnvelope(
     { kite: deps.kite, sidecar: deps.sidecar },
     {
       trigger: "reactive",
       instrument: params.instrument,
-      timeframe,
-      horizon_requested: params.horizon,
+      interval: params.interval,
       intent_lens: params.intent_lens,
-      from,
-      to,
+      now,
     },
   );
   const response = generateDeterministicResponse(envelope);
   const result: AnalysisResult = {
     mode: "engine_only",
     instrument: envelope.instrument,
-    horizon: params.horizon,
+    interval: params.interval,
     response,
     algo_results: envelope.algo_results,
   };
@@ -173,11 +230,12 @@ export interface AnalysisBridgeDeps {
   ipcMain: Pick<IpcMain, "handle">;
   login: () => Promise<LoginResult>;
   getSession: () => KiteSession | null;
-  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles" | "on" | "off">;
+  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles" | "readLakeCandles" | "listAlgorithms" | "on" | "off">;
   provider: AiAssistedProvider;
   history: Pick<HistoryStore, "appendMessage" | "getClaudeSessionId" | "setClaudeSessionId">;
   sendTrace: (event: TraceEvent) => void;
   markNeedsLogin: () => void;
+  kiteStatus: () => KiteSessionStatus;
   now?: () => Date;
 }
 
@@ -203,6 +261,17 @@ export function registerAnalysisBridge(deps: AnalysisBridgeDeps): void {
   deps.ipcMain.handle("kite:searchInstruments", (_event, args: { query: string }) =>
     guardSessionExpiry(deps.markNeedsLogin, requireSession(deps.getSession).kite.searchInstruments(args.query)),
   );
+  deps.ipcMain.handle("analysis:checkReadiness", (_event, args: ReadinessCheckParams): Promise<ReadinessResult> =>
+    checkEngineOnlyReadiness(
+      { kiteStatus: deps.kiteStatus, kite: deps.getSession()?.kite ?? null, sidecar: deps.sidecar },
+      {
+        symbol: args.instrument.symbol,
+        instrumentToken: args.instrument.instrumentToken,
+        interval: args.interval,
+        now: deps.now?.() ?? new Date(),
+      },
+    ),
+  );
   deps.ipcMain.handle("analysis:run", (_event, params: AnalysisRunParams) => {
     const kite = requireSession(deps.getSession).kite;
     if (params.mode === "ai_assisted") {
@@ -217,7 +286,18 @@ export function registerAnalysisBridge(deps: AnalysisBridgeDeps): void {
     }
     return guardSessionExpiry(
       deps.markNeedsLogin,
-      runAnalysisRequest({ kite, sidecar: deps.sidecar, history: deps.history, now: deps.now }, params),
+      runAnalysisRequest(
+        {
+          kite,
+          sidecar: deps.sidecar,
+          history: deps.history,
+          checkReadiness: checkEngineOnlyReadiness,
+          assembleEnvelope: assembleWarmedEnvelope,
+          kiteStatus: deps.kiteStatus,
+          now: deps.now,
+        },
+        params,
+      ),
     );
   });
 }
