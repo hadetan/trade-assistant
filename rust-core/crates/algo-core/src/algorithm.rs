@@ -25,11 +25,10 @@ pub enum Timeframe {
 
 /// What an `Algorithm::compute()` call needs. `closes` is the only series
 /// every algorithm can rely on; `opens`/`highs`/`lows`/`volumes`/`timestamps`
-/// are aligned 1:1 with `closes` when the caller has OHLCV data (backtest),
-/// else empty (e.g. the closes-only live sidecar path, Q2) -- so any
-/// algorithm reading them MUST guard on their length first (see the no-op
-/// guard convention in the algorithm-catalog plan). `options`/`chain`/`peer`/
-/// `higher_tf` are likewise absent unless the caller has that context.
+/// are aligned 1:1 with `closes` when the caller has OHLCV data, else empty --
+/// so any algorithm reading them MUST guard on their length first (see the
+/// no-op guard convention in the algorithm-catalog plan). `options`/`chain`/
+/// `peer`/`higher_tf` are likewise absent unless the caller has that context.
 pub struct MarketContext {
     pub symbol: String,
     pub timeframe: Timeframe,

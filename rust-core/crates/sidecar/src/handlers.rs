@@ -231,8 +231,8 @@ pub fn handle_benchmark_compute(request: BenchmarkComputeRequest) -> BenchmarkCo
     }
     let timeframe = parse_timeframe(&request.timeframe);
     let horizon = parse_horizon(&request.horizon);
-    // Full OHLCV context at the last visible bar -- richer than the live
-    // Compute handler's closes-only from_closes path (which is left unchanged).
+    // Full OHLCV context at the last visible bar, the same assembly
+    // handle_request_with_progress uses for the live path (P13§1).
     // Anti-lookahead holds: context_at's as_of is the frontier bar's own ts, and
     // only series[0..=frontier] is in the window.
     let ctx = context_at(&candles, candles.len() - 1, &request.symbol, timeframe, horizon);
