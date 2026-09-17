@@ -168,6 +168,10 @@ pub struct AlgorithmWire {
     pub id: String,
     /// "fast" | "slow" -- see handlers::handle_list_algorithms for the split.
     pub cost: String,
+    /// The algorithm's own Algorithm::required_lookback(). The Electron side
+    /// sizes its warm-up backfill against the maximum of these (P13§4.2), so a
+    /// newly linked model widens the fetch window without a code change here.
+    pub required_lookback: usize,
 }
 
 #[derive(Debug, Serialize)]

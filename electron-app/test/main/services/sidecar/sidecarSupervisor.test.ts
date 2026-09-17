@@ -300,11 +300,12 @@ describe("SidecarSupervisor", () => {
     const pending = supervisor.listAlgorithms();
     await requestsSeen;
     children[0].stdout.write(
-      `${JSON.stringify({ type: "algorithms", id: 1, algorithms: [{ id: "sma", cost: "fast" }] })}\n`,
+      `${JSON.stringify({ type: "algorithms", id: 1, algorithms: [{ id: "sma", cost: "fast", required_lookback: 20 }] })}\n`,
     );
     const response = await pending;
     expect(response.type).toBe("algorithms");
     expect(response.algorithms[0].id).toBe("sma");
+    expect(response.algorithms[0].required_lookback).toBe(20);
   });
 
   it("cancelCurrent kills the child and rejects pending requests with error.cancelled === true", async () => {

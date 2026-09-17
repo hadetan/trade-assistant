@@ -97,6 +97,7 @@ export interface SidecarProgressWire {
 export interface AlgorithmWire {
   id: string;
   cost: "fast" | "slow";
+  required_lookback: number;
 }
 
 export interface ListAlgorithmsResponseWire {

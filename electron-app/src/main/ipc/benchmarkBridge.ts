@@ -26,7 +26,7 @@ export function registerBenchmarkBridge(deps: BenchmarkBridgeDeps): void {
   });
   deps.ipcMain.handle("benchmark:listAlgorithms", async (): Promise<AlgorithmEntry[]> => {
     const { algorithms } = await deps.sidecar.listAlgorithms();
-    return algorithms.map((a) => ({ id: a.id, cost: a.cost as "fast" | "slow" }));
+    return algorithms.map((a) => ({ id: a.id, cost: a.cost as "fast" | "slow", requiredLookback: a.required_lookback }));
   });
   deps.ipcMain.handle("benchmark:runBenchmark", (event, params: BenchmarkRunParams) =>
     runBenchmark({ sidecar: deps.sidecar }, params, (index, total) =>

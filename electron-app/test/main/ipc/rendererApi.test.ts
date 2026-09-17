@@ -65,7 +65,7 @@ describe("buildRendererApi", () => {
   });
 
   it("routes listAlgorithms through benchmark:listAlgorithms", async () => {
-    const invoke = vi.fn().mockResolvedValue([{ id: "sma", cost: "fast" }]);
+    const invoke = vi.fn().mockResolvedValue([{ id: "sma", cost: "fast", requiredLookback: 20 }]);
     const entries = await buildRendererApi(invoke, vi.fn()).listAlgorithms();
     expect(invoke).toHaveBeenCalledWith("benchmark:listAlgorithms");
     expect(entries[0].id).toBe("sma");

@@ -280,10 +280,18 @@ fn tag_algorithms(fast_source: &[Box<dyn Algorithm>], slow_source: &[Box<dyn Alg
     let mut algorithms: Vec<AlgorithmWire> = fast_source
         .iter()
         .filter(|a| !slow_ids.contains(a.id()))
-        .map(|a| AlgorithmWire { id: a.id().to_string(), cost: "fast".to_string() })
+        .map(|a| AlgorithmWire {
+            id: a.id().to_string(),
+            cost: "fast".to_string(),
+            required_lookback: a.required_lookback(),
+        })
         .collect();
     for algo in slow_source {
-        algorithms.push(AlgorithmWire { id: algo.id().to_string(), cost: "slow".to_string() });
+        algorithms.push(AlgorithmWire {
+            id: algo.id().to_string(),
+            cost: "slow".to_string(),
+            required_lookback: algo.required_lookback(),
+        });
     }
     algorithms.sort_by(|a, b| a.id.cmp(&b.id));
     algorithms
@@ -670,5 +678,26 @@ mod tests {
         let matches: Vec<_> = algorithms.iter().filter(|w| w.id == overlapping_id).collect();
         assert_eq!(matches.len(), 1, "an id present in both sources must appear exactly once");
         assert_eq!(matches[0].cost, "slow", "any id present in the slow source must be tagged slow, even if the fast source also contains it");
+    }
+
+    #[test]
+    fn handle_list_algorithms_reports_each_algorithms_own_required_lookback() {
+        let response = handle_list_algorithms(ListAlgorithmsRequest { id: 42 });
+        for algo in registry::all_for_binary() {
+            let wire = response
+                .algorithms
+                .iter()
+                .find(|w| w.id == algo.id())
+                .unwrap_or_else(|| panic!("id {} missing from the response", algo.id()));
+            assert_eq!(
+                wire.required_lookback,
+                algo.required_lookback(),
+                "required_lookback for {} must be the algorithm's own, not a constant",
+                algo.id()
+            );
+        }
+        // At least one algorithm in every build declares a non-zero lookback --
+        // proves the field is populated, not uniformly defaulted to 0.
+        assert!(response.algorithms.iter().any(|w| w.required_lookback > 0));
     }
 }

@@ -20,8 +20,8 @@ const DAY_ENTRY: LakeSymbolEntry = {
 };
 
 const ALGORITHMS: AlgorithmEntry[] = [
-  { id: "sma", cost: "fast" },
-  { id: "kronos", cost: "slow" },
+  { id: "sma", cost: "fast", requiredLookback: 20 },
+  { id: "kronos", cost: "slow", requiredLookback: 256 },
 ];
 
 function api(

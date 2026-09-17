@@ -396,8 +396,8 @@ fn algorithms_response_serializes_its_tagged_algorithm_list() {
     let json = serde_json::to_string(&ListAlgorithmsResponse {
         id: 40,
         algorithms: vec![
-            AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string() },
-            AlgorithmWire { id: "kronos".to_string(), cost: "slow".to_string() },
+            AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string(), required_lookback: 20 },
+            AlgorithmWire { id: "kronos".to_string(), cost: "slow".to_string(), required_lookback: 256 },
         ],
     })
     .unwrap();
@@ -405,6 +405,8 @@ fn algorithms_response_serializes_its_tagged_algorithm_list() {
     assert!(json.contains("\"id\":\"sma\""));
     assert!(json.contains("\"cost\":\"fast\""));
     assert!(json.contains("\"cost\":\"slow\""));
+    assert!(json.contains("\"required_lookback\":20"));
+    assert!(json.contains("\"required_lookback\":256"));
 }
 
 #[test]
@@ -419,9 +421,10 @@ fn parses_a_tagged_list_algorithms_request() {
 fn encodes_a_tagged_algorithms_response() {
     let line = encode_response(&SidecarResponse::Algorithms(ListAlgorithmsResponse {
         id: 40,
-        algorithms: vec![AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string() }],
+        algorithms: vec![AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string(), required_lookback: 20 }],
     }));
     assert!(!line.contains('\n'));
     assert!(line.contains("\"type\":\"algorithms\""));
     assert!(line.contains("\"id\":\"sma\""));
+    assert!(line.contains("\"required_lookback\":20"));
 }

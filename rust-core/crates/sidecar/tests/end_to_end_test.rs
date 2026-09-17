@@ -486,4 +486,5 @@ fn list_algorithms_answers_even_with_no_lake_root() {
     let algorithms = response["algorithms"].as_array().unwrap();
     assert!(!algorithms.is_empty());
     assert!(algorithms.iter().all(|a| a["cost"] == "fast" || a["cost"] == "slow"));
+    assert!(algorithms.iter().all(|a| a["required_lookback"].is_u64()));
 }

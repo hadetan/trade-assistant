@@ -58,15 +58,15 @@ describe("registerBenchmarkBridge", () => {
       type: "algorithms",
       id: 1,
       algorithms: [
-        { id: "sma", cost: "fast" },
-        { id: "kronos", cost: "slow" },
+        { id: "sma", cost: "fast", required_lookback: 20 },
+        { id: "kronos", cost: "slow", required_lookback: 256 },
       ],
     });
     const handlers = harness(sidecar);
     const entries = await handlers.get("benchmark:listAlgorithms")!(fakeEvent(), undefined);
     expect(entries).toEqual([
-      { id: "sma", cost: "fast" },
-      { id: "kronos", cost: "slow" },
+      { id: "sma", cost: "fast", requiredLookback: 20 },
+      { id: "kronos", cost: "slow", requiredLookback: 256 },
     ]);
   });
 

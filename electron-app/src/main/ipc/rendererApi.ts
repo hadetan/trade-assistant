@@ -44,6 +44,7 @@ export interface LakeSymbolEntry {
 export interface AlgorithmEntry {
   id: string;
   cost: "fast" | "slow";
+  requiredLookback: number;
 }
 
 export type AnalysisMode = "engine_only" | "ai_assisted";
