@@ -117,7 +117,7 @@ export type SidecarResponseWire =
   | ListAlgorithmsResponseWire;
 
 export type SidecarRequestWire =
-  | { type: "compute"; id: number; symbol: string; timeframe: string; closes: number[] }
+  | { type: "compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[] }
   | { type: "persist_candles"; id: number; symbol: string; timeframe: string; source: string; candles: CandleWire[] }
   | { type: "add_watchlist_symbol"; id: number; symbol: string }
   | { type: "remove_watchlist_symbol"; id: number; symbol: string }

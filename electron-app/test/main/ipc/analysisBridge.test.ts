@@ -33,7 +33,7 @@ function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedPr
 
 function sidecarWithProgress() {
   const bus = new EventEmitter();
-  const compute = vi.fn(async (_s: string, _t: string, _c: number[], onRequestId?: (id: number) => void) => {
+  const compute = vi.fn(async (_s: string, _t: string, _h: string, _c: unknown[], onRequestId?: (id: number) => void) => {
     onRequestId?.(42);
     return computeResponse();
   });
@@ -95,7 +95,16 @@ describe("runAnalysisRequest", () => {
     if (result.mode !== "engine_only") throw new Error("mode");
     expect(result.response.direction).toBe("bullish");
     expect(result.algo_results[0].algo_id).toBe("rsi");
-    expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "day", [104, 107], undefined);
+    expect(sidecar.compute).toHaveBeenCalledWith(
+      "NSE:INFY",
+      "day",
+      "positional",
+      [
+        { ts: 1767292200, open: 100, high: 105, low: 99, close: 104, volume: 5000 },
+        { ts: 1767378600, open: 104, high: 108, low: 103, close: 107, volume: 6000 },
+      ],
+      undefined,
+    );
   });
 
   it("writes the user message before analysis and the assistant message only after success", async () => {
@@ -206,7 +215,7 @@ describe("runAiAssistedRequest", () => {
     const sidecar = sidecarWithProgress();
     const sends: Array<{ source: string; kind: string; detail?: string }> = [];
     // emit an unowned id BEFORE the owned compute registers 42, and owned ones after
-    sidecar.compute.mockImplementationOnce(async (_s, _t, _c, onRequestId?: (id: number) => void) => {
+    sidecar.compute.mockImplementationOnce(async (_s, _t, _h, _c, onRequestId?: (id: number) => void) => {
       (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 999, step: "compute", status: "running" }); // unowned → ignored
       onRequestId?.(42);
       (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 42, step: "compute", status: "running" });

@@ -84,11 +84,12 @@ export class SidecarSupervisor extends EventEmitter {
   compute(
     symbol: string,
     timeframe: string,
-    closes: number[],
+    horizon: string,
+    candles: CandleWire[],
     onRequestId?: (id: number) => void,
   ): Promise<ComputeResponseWire> {
     return this.send(
-      { type: "compute", id: this.nextId, symbol, timeframe, closes },
+      { type: "compute", id: this.nextId, symbol, timeframe, horizon, candles },
       onRequestId,
     ) as Promise<ComputeResponseWire>;
   }

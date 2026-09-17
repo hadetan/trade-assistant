@@ -29,7 +29,16 @@ describe("assembleEnvelope", () => {
     expect(envelope.algo_results[0].symbol).toBe("NSE:INFY");
     expect(envelope.confluence.weighted_vote).toBe(1);
     expect(envelope.overlays).toEqual({});
-    expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "day", [104, 107], undefined);
+    expect(sidecar.compute).toHaveBeenCalledWith(
+      "NSE:INFY",
+      "day",
+      "positional",
+      [
+        { ts: 1767292200, open: 100, high: 105, low: 99, close: 104, volume: 5000 },
+        { ts: 1767378600, open: 104, high: 108, low: 103, close: 107, volume: 6000 },
+      ],
+      undefined,
+    );
   });
 
   it("propagates a persist failure (P4§5.2) instead of returning a false envelope", async () => {
@@ -110,5 +119,25 @@ describe("assembleEnvelope", () => {
     await assertion;
     expect(traced).toEqual([{ source: "sidecar", kind: "error", detail: "sidecar compute timed out after 20000ms" }]);
     vi.useRealTimers();
+  });
+
+  it("sends intraday as the horizon whenever the request is not explicitly positional", async () => {
+    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
+    const sidecar = mockSidecar();
+
+    await assembleEnvelope(
+      { kite, sidecar: sidecar as never },
+      {
+        trigger: "reactive",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        timeframe: "5minute",
+        horizon_requested: "auto",
+        intent_lens: "buying",
+        from: "2026-01-01",
+        to: "2026-01-03",
+      },
+    );
+
+    expect((sidecar.compute as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][2]).toBe("intraday");
   });
 });

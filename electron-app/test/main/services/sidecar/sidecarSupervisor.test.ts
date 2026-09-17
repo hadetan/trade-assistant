@@ -51,7 +51,7 @@ describe("SidecarSupervisor", () => {
   it("resolves a compute request with the response carrying the matching id", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     await requestsSeen;
     children[0].stdout.write(
@@ -65,7 +65,7 @@ describe("SidecarSupervisor", () => {
 
   it("routes interleaved out-of-order responses to the correct waiting promise", async () => {
     const { supervisor, children } = makeSupervisor();
-    const first = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const first = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
     const second = supervisor.persistCandles("NSE:INFY", "day", [
       { ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 },
     ]);
@@ -81,7 +81,7 @@ describe("SidecarSupervisor", () => {
 
   it("rejects in-flight requests and respawns when the child exits unexpectedly", async () => {
     const { supervisor, children } = makeSupervisor();
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     children[0].emit("exit", 1, null);
 
@@ -94,7 +94,7 @@ describe("SidecarSupervisor", () => {
   it("logs and skips a malformed JSON line without crashing, then still resolves later requests", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { supervisor, children } = makeSupervisor();
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     expect(() => children[0].stdout.write("{not valid json\n")).not.toThrow();
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
@@ -125,7 +125,7 @@ describe("SidecarSupervisor", () => {
     });
     supervisor.start();
 
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     await expect(pending).rejects.toThrow(/sidecar request 1 timed out after 20ms/);
     // No leak: a late response for id 1 must find no pending entry and be dropped.
@@ -267,7 +267,7 @@ describe("SidecarSupervisor", () => {
     const { supervisor, children } = makeSupervisor();
     const progress: unknown[] = [];
     supervisor.on("progress", (p) => progress.push(p));
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
     children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "compute", status: "running" })}\n`);
     children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "rsi", status: "running" })}\n`);
     children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "rsi", status: "done" })}\n`);
@@ -288,7 +288,7 @@ describe("SidecarSupervisor", () => {
   it("fires onRequestId synchronously with the allocated id before any progress can arrive", () => {
     const { supervisor } = makeSupervisor();
     let seen: number | undefined;
-    supervisor.compute("NSE:INFY", "day", [1, 2, 3], (id) => {
+    supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }], (id) => {
       seen = id;
     });
     expect(seen).toBe(1);
@@ -310,7 +310,7 @@ describe("SidecarSupervisor", () => {
 
   it("cancelCurrent kills the child and rejects pending requests with error.cancelled === true", async () => {
     const { supervisor, children } = makeSupervisor();
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     supervisor.cancelCurrent();
 
@@ -345,7 +345,7 @@ describe("SidecarSupervisor", () => {
     expect(children.length).toBe(1);
 
     // Spawn a pending request so we can capture the exit error.
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     // Cause the child to exit unexpectedly (not via cancelCurrent).
     children[0].emit("exit", 1, null);
