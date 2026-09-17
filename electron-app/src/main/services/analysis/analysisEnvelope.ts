@@ -32,7 +32,7 @@ export interface AssembleEnvelopeParams {
 
 export const KITE_FETCH_TIMEOUT_MS = 15000;
 
-function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout;
   const guard = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
