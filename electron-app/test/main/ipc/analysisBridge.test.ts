@@ -376,4 +376,14 @@ describe("runAnalysisRequest readiness gate", () => {
     expect((result as { interval: string }).interval).toBe("5minute");
     expect(deps.assembleEnvelope).toHaveBeenCalledTimes(1);
   });
+
+  it("leaves the user's message with no assistant reply when assembleEnvelope throws after the gate passes", async () => {
+    const deps = gateDeps({ ok: true });
+    deps.assembleEnvelope = vi.fn().mockRejectedValue(new Error("boom"));
+
+    await expect(runAnalysisRequest(deps as never, PARAMS)).rejects.toThrow("boom");
+
+    expect(deps.history.appendMessage).toHaveBeenCalledTimes(1);
+    expect(deps.history.appendMessage).toHaveBeenCalledWith(expect.objectContaining({ role: "user" }));
+  });
 });
