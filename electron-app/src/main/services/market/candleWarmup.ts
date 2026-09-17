@@ -52,6 +52,9 @@ function extractRawCandles(response: unknown): RawKiteCandle[] {
 
 export async function topUpCandles(deps: TopUpDeps, params: TopUpParams): Promise<TopUpResult> {
   const existing = await deps.sidecar.readLakeCandles(params.symbol, params.interval, WARMUP_SOURCE);
+  if (existing.error != null) {
+    throw new Error(`warming ${params.symbol} ${params.interval} failed: ${existing.error}`);
+  }
   const lastTs = existing.candles.length === 0 ? null : existing.candles[existing.candles.length - 1].ts;
   const backfilled = lastTs === null;
 
@@ -89,5 +92,8 @@ export async function topUpCandles(deps: TopUpDeps, params: TopUpParams): Promis
   }
 
   const merged = await deps.sidecar.readLakeCandles(params.symbol, params.interval, WARMUP_SOURCE);
+  if (merged.error != null) {
+    throw new Error(`warming ${params.symbol} ${params.interval} failed: ${merged.error}`);
+  }
   return { candles: merged.candles, fetched: fetched.length, backfilled };
 }

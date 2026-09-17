@@ -107,4 +107,37 @@ describe("topUpCandles", () => {
       /warming NSE:INFY 5minute failed: disk full/,
     );
   });
+
+  it("propagates the initial lake read's error instead of treating it as an empty partition", async () => {
+    const kite = kiteReturning([]);
+    const sidecar = {
+      readLakeCandles: vi.fn(async () => ({ type: "lake_candles" as const, id: 1, candles: [], error: "duckdb: read failed" })),
+      persistCandles: vi.fn(),
+    };
+
+    await expect(topUpCandles({ kite, sidecar }, params)).rejects.toThrow(
+      /warming NSE:INFY 5minute failed: duckdb: read failed/,
+    );
+    expect(kite.getHistoricalData).not.toHaveBeenCalled();
+    expect(sidecar.persistCandles).not.toHaveBeenCalled();
+  });
+
+  it("propagates the post-persist re-read's error instead of reporting a stale merged lake", async () => {
+    const kite = kiteReturning([["2026-09-17T09:15:00+0530", 1, 2, 0.5, 1.5, 10]]);
+    const sidecar = {
+      readLakeCandles: vi
+        .fn()
+        .mockResolvedValueOnce({ type: "lake_candles" as const, id: 1, candles: [] })
+        .mockResolvedValueOnce({ type: "lake_candles" as const, id: 2, candles: [], error: "duckdb: read failed" }),
+      persistCandles: vi.fn(async (_s: string, _t: string, candles: CandleWire[]) => ({
+        type: "persist_candles" as const,
+        id: 1,
+        written: candles.length,
+      })),
+    };
+
+    await expect(topUpCandles({ kite, sidecar }, params)).rejects.toThrow(
+      /warming NSE:INFY 5minute failed: duckdb: read failed/,
+    );
+  });
 });
