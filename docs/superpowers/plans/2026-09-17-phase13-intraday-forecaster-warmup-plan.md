@@ -2997,8 +2997,8 @@ Mirrors the Phase 6/11/12 precedent: an automatable golden path plus live follow
 
 **Automatable (mocked bridge + `npm start`):**
 - Creating an Engine-Only session shows three interval buttons (5-minute / 10-minute / 15-minute), 5-minute preselected, and no Positional option anywhere.
-- Running with Kite disconnected shows exactly one message ("Connect your Kite account…") and no confluence badges, no partial result.
-- Reopening a previously-blocked session re-issues `analysis:checkReadiness` (visible in the main-process log) rather than replaying the stored message.
+- Running with Kite disconnected shows the existing login prompt (`requireSession` rejects before the gate ever runs, so the `kite_not_connected` readiness branch itself is reached only via `analysis:checkReadiness` on a reopen where the renderer's cached status and the main process's session state briefly disagree — not via a fresh `analysis:run`). Either way, no confluence badges and no partial result appear.
+- Reopening a previously-blocked session re-issues `analysis:checkReadiness` (observable via the renderer devtools' IPC/network trace, since no console log currently exists on this path) rather than replaying the stored message.
 - A benchmark run over a single day inside a long lake partition reports an advancing `bar i/N` where `N` is the day's own frontier count, and the chart still shows only that day.
 
 **Live follow-ups (real sidecar binary + a real Kite session — never a blocker for calling Phase 13 done):**
