@@ -1,7 +1,8 @@
-import type { AnalysisResult, HistoryMessage } from "../main/ipc/rendererApi";
+import type { AnalysisResult, HistoryMessage, ReadinessResult } from "../main/ipc/rendererApi";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { Card } from "./ui/Card";
 import { Badge, directionTone } from "./ui/Badge";
+import { Banner } from "./ui/Banner";
 import "./AnalysisResult.css";
 
 export interface AnalysisResultViewProps {
@@ -17,7 +18,21 @@ function formatWeightedVote(vote: number): string {
   return vote.toFixed(2);
 }
 
+export function readinessMessage(readiness: Extract<ReadinessResult, { ok: false }>): string {
+  switch (readiness.reason) {
+    case "kite_not_connected":
+      return "Connect your Kite account to fetch live candles for this symbol.";
+    case "insufficient_history":
+      return `Warming up history — ${readiness.have} of ${readiness.need} candles so far. This symbol needs more trading history before any forecast can run.`;
+    case "market_closed":
+      return `NSE is closed. Trading resumes ${new Date(readiness.nextOpenAt * 1000).toLocaleString()}.`;
+  }
+}
+
 export function AnalysisResultView({ result, history = [] }: AnalysisResultViewProps): JSX.Element | null {
+  if (result.mode === "engine_only_blocked") {
+    return <Banner variant="info">{readinessMessage(result.readiness)}</Banner>;
+  }
   if (result.mode !== "engine_only") return null;
   const { response } = result;
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import type { Horizon, InstrumentSelection } from "../main/ipc/rendererApi";
+import type { CandleInterval, InstrumentSelection } from "../main/ipc/rendererApi";
+import { CANDLE_INTERVALS, CANDLE_INTERVAL_LABEL } from "../main/services/market/candleInterval";
 import { bridge } from "./bridge";
 import { parseInstruments } from "./instrumentParsing";
 import { TextField } from "./ui/TextField";
@@ -11,18 +12,16 @@ import "./InstrumentSearch.css";
 export { parseInstruments };
 
 export interface InstrumentSearchProps {
-  onSubmit: (instrument: InstrumentSelection, horizon: Horizon) => void | Promise<void>;
+  onSubmit: (instrument: InstrumentSelection, interval: CandleInterval) => void | Promise<void>;
 }
 
 const SEARCH_DEBOUNCE_MS = 300;
-const HORIZON_LABEL: Record<Horizon, string> = { intraday: "Intraday", positional: "Positional" };
-const HORIZONS: Horizon[] = ["intraday", "positional"];
 
 export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Element {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<InstrumentSelection[]>([]);
   const [selected, setSelected] = useState<InstrumentSelection | null>(null);
-  const [horizon, setHorizon] = useState<Horizon>("intraday");
+  const [interval, setInterval] = useState<CandleInterval>("5minute");
   const [searchError, setSearchError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
 
@@ -56,7 +55,7 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
     if (!selected || running) return;
     setRunning(true);
     try {
-      await onSubmit(selected, horizon);
+      await onSubmit(selected, interval);
     } catch {
       // A run failure is the caller's own state to own and surface (App renders it
       // via a Banner keyed off its analysisError) — this catch exists only so a
@@ -92,16 +91,16 @@ export function InstrumentSearch({ onSubmit }: InstrumentSearchProps): JSX.Eleme
           ))}
         </ul>
       )}
-      <div className="horizon-toggle" role="group" aria-label="Horizon">
-        {HORIZONS.map((value) => (
+      <div className="horizon-toggle" role="group" aria-label="Candle interval">
+        {CANDLE_INTERVALS.map((value) => (
           <Button
             key={value}
-            variant={horizon === value ? "primary" : "secondary"}
+            variant={interval === value ? "primary" : "secondary"}
             size="sm"
-            aria-pressed={horizon === value}
-            onClick={() => setHorizon(value)}
+            aria-pressed={interval === value}
+            onClick={() => setInterval(value)}
           >
-            {HORIZON_LABEL[value]}
+            {CANDLE_INTERVAL_LABEL[value]}
           </Button>
         ))}
       </div>

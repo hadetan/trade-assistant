@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ModePicker } from "./ModePicker";
 import { IntentLensSelector } from "./IntentLensSelector";
 import { InstrumentSearch } from "./InstrumentSearch";
-import { AnalysisResultView } from "./AnalysisResult";
+import { AnalysisResultView, readinessMessage } from "./AnalysisResult";
 import { ChatView, historyToChatMessages } from "./ChatView";
 import { BenchmarkView } from "./BenchmarkView";
 import { AppShell } from "./AppShell";
@@ -18,10 +18,11 @@ import type {
   AnalysisRunParams,
   AppStatus,
   BannerEvent,
+  CandleInterval,
   HistoryMessage,
-  Horizon,
   InstrumentSelection,
   IntentLens,
+  ReadinessResult,
   SessionDetail,
   SessionSummary,
 } from "../main/ipc/rendererApi";
@@ -53,6 +54,15 @@ export function App(): JSX.Element {
   const [loggingIn, setLoggingIn] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<Extract<ReadinessResult, { ok: false }> | null>(null);
+  // `result` (below) is re-derived from `sessionDetail` on every render, so a
+  // freshly-run analysis that comes back blocked and a stale stored blocked turn
+  // from a prior visit are indistinguishable by `result.mode` alone. This flag is
+  // the one place that distinction is tracked: true only when reopening found the
+  // *last stored* turn blocked but a *fresh* check now passes, so the stale one
+  // must not be replayed (P13§2 decision 4 applies to a leftover failure banner
+  // exactly as much as a fresh one). Reset on every new analysis and every reopen.
+  const [suppressStaleBlocked, setSuppressStaleBlocked] = useState(false);
 
   useEffect(() => {
     void bridge().getStatus().then(setStatus);
@@ -104,6 +114,8 @@ export function App(): JSX.Element {
     setShowBenchmark(false);
     setLoginError(null);
     setAnalysisError(null);
+    setReadiness(null);
+    setSuppressStaleBlocked(false);
     const detail = await bridge().getSession(id);
     setSessionDetail(detail);
     setActiveSession({ id: detail.id, mode: detail.response_mode });
@@ -111,6 +123,16 @@ export function App(): JSX.Element {
     if (lastUserMessage) {
       const payload = lastUserMessage.structured_payload as AnalysisRunParams;
       setIntentLens(payload.intent_lens);
+      // The gate is re-evaluated as of right now, not replayed from whenever this
+      // session was last open: data and market state both move (P13§2 decision 5).
+      if (payload.mode === "engine_only") {
+        const fresh = await bridge().checkReadiness({ instrument: payload.instrument, interval: payload.interval });
+        setReadiness(fresh.ok ? null : fresh);
+        const lastAssistantMessage = [...detail.messages].reverse().find((m) => m.role === "assistant");
+        const storedResultWasBlocked =
+          (lastAssistantMessage?.structured_payload as AnalysisResult | undefined)?.mode === "engine_only_blocked";
+        setSuppressStaleBlocked(fresh.ok && storedResultWasBlocked);
+      }
     }
   };
 
@@ -127,11 +149,13 @@ export function App(): JSX.Element {
     }
   };
 
-  const onAnalyze = async (instrument: InstrumentSelection, horizon: Horizon): Promise<void> => {
+  const onAnalyze = async (instrument: InstrumentSelection, interval: CandleInterval): Promise<void> => {
     if (!activeSession) return;
     setAnalysisError(null);
+    setReadiness(null);
+    setSuppressStaleBlocked(false);
     try {
-      await bridge().runAnalysis({ mode: "engine_only", sessionId: activeSession.id, instrument, horizon, intent_lens: intentLens });
+      await bridge().runAnalysis({ mode: "engine_only", sessionId: activeSession.id, instrument, interval, intent_lens: intentLens });
       setSessionDetail(await bridge().getSession(activeSession.id));
     } catch (error) {
       setAnalysisError((error as Error).message);
@@ -180,7 +204,10 @@ export function App(): JSX.Element {
             <>
               <InstrumentSearch onSubmit={onAnalyze} />
               {analysisError && <Banner variant="error">{analysisError}</Banner>}
-              {result && <AnalysisResultView result={result} history={history} />}
+              {readiness && <Banner variant="info">{readinessMessage(readiness)}</Banner>}
+              {!readiness && result && !(suppressStaleBlocked && result.mode === "engine_only_blocked") && (
+                <AnalysisResultView result={result} history={history} />
+              )}
             </>
           ) : (
             <ChatView

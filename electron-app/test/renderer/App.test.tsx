@@ -97,7 +97,7 @@ describe("App", () => {
       runAnalysis: vi.fn().mockResolvedValue({
         mode: "engine_only",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
-        horizon: "positional",
+        interval: "5minute",
         response: { direction: "bullish", conviction: "high", text: "Overall read: bullish.", confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 } },
         algo_results: [],
       }),
@@ -107,14 +107,14 @@ describe("App", () => {
     fireEvent.click(await screen.findByLabelText(/selling stance/i));
     fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
     fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
-    fireEvent.click(screen.getByRole("button", { name: /positional/i }));
+    fireEvent.click(screen.getByRole("button", { name: /15-minute/i }));
     fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
     await waitFor(() =>
       expect(bridge.runAnalysis).toHaveBeenCalledWith({
         mode: "engine_only",
         sessionId: "session-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
-        horizon: "positional",
+        interval: "15minute",
         intent_lens: "selling",
       }),
     );
@@ -227,5 +227,127 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /new session/i }));
     fireEvent.click(await screen.findByRole("button", { name: /ai-assisted/i }));
     expect(await screen.findByLabelText(/ask about an instrument/i)).toBeTruthy();
+  });
+
+  it("renders the blocked reason and no analysis result when a run is gated", async () => {
+    const bridge = installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      searchInstruments: vi.fn(async () => ({
+        data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
+      })),
+      runAnalysis: vi.fn().mockResolvedValue({
+        mode: "engine_only_blocked",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+        interval: "5minute",
+        readiness: { ok: false, reason: "insufficient_history", have: 180, need: 256 },
+      }),
+      getSession: vi.fn().mockResolvedValue({
+        id: "session-1",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "assistant",
+            rendered_text: "blocked",
+            structured_payload: {
+              mode: "engine_only_blocked",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              readiness: { ok: false, reason: "insufficient_history", have: 180, need: 256 },
+            },
+          },
+        ],
+      }),
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /new session/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /engine-only/i }));
+    fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    expect(await screen.findByText(/180 of 256 candles/i)).toBeTruthy();
+    expect(bridge.runAnalysis).toHaveBeenCalled();
+  });
+
+  it("re-runs the readiness gate fresh when an existing engine_only session is reopened", async () => {
+    const bridge = installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "s7", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "s7",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "NSE:INFY · 5minute · buying",
+            structured_payload: {
+              mode: "engine_only",
+              sessionId: "s7",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+              interval: "5minute",
+              intent_lens: "buying",
+            },
+          },
+        ],
+      }),
+      checkReadiness: vi.fn().mockResolvedValue({ ok: false, reason: "kite_not_connected" }),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+
+    await waitFor(() =>
+      expect(bridge.checkReadiness).toHaveBeenCalledWith({
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        interval: "5minute",
+      }),
+    );
+    expect(await screen.findByText(/connect your kite account/i)).toBeTruthy();
+  });
+
+  it("does not replay a stale blocked message once a reopened session's fresh readiness check passes", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "s8", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "s8",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "NSE:INFY · 5minute · buying",
+            structured_payload: {
+              mode: "engine_only",
+              sessionId: "s8",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+              interval: "5minute",
+              intent_lens: "buying",
+            },
+          },
+          {
+            role: "assistant",
+            rendered_text: "blocked",
+            structured_payload: {
+              mode: "engine_only_blocked",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              readiness: { ok: false, reason: "market_closed", nextOpenAt: 1_790_000_000 },
+            },
+          },
+        ],
+      }),
+      // The session was blocked when last stored; reopening it now finds the market open.
+      checkReadiness: vi.fn().mockResolvedValue({ ok: true }),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+
+    await waitFor(() => expect(screen.queryByText(/nse is closed/i)).toBeNull());
+    expect(screen.queryByText(/nse is closed/i)).toBeNull();
   });
 });
