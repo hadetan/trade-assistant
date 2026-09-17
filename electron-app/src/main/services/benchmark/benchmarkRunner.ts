@@ -83,26 +83,29 @@ export async function runBenchmark(
   onProgress?: (index: number, total: number) => void,
 ): Promise<BenchmarkResult> {
   const { candles } = await deps.sidecar.readLakeCandles(params.symbol, params.timeframe, params.source);
-  // No upper bound here: a day-timeframe entry's single selected day is only one
-  // bar, and scoring its outcome needs `lookaheadBars` MORE bars beyond it -- an
-  // upper-bounded series would silently produce zero decision points for every
-  // day-timeframe run. `toTs` instead bounds which bars are eligible *frontiers*
-  // in the loop below, not which bars exist in `series` at all.
-  const series = candles.filter((c) => c.ts >= params.fromTs);
-  // onProgress's denominator must reflect eligible frontiers, not `series.length`
-  // (which can run to the end of the lake) -- otherwise a single-day window in a
-  // long-lived symbol reports progress against thousands of irrelevant future bars.
+  // The FULL lake partition is the compute window: each frontier's
+  // series.slice(0, i + 1) must legitimately reach back before fromTs, or
+  // registry::run_applicable's lookback gate silently drops every algorithm
+  // whose required_lookback() exceeds it (P13§8).
+  const series = candles;
+  // A separate index governs eligibility as a *frontier*: only bars inside
+  // [fromTs, toTs) are decision points, and only those render on the chart.
+  const windowStartIndex = series.findIndex((c) => c.ts >= params.fromTs);
+  const firstFrontier = windowStartIndex === -1 ? series.length : windowStartIndex;
   const windowEndIndex = series.findIndex((c) => c.ts >= params.toTs);
   const boundByWindow = windowEndIndex === -1 ? series.length : windowEndIndex;
+  // No upper bound from toTs on `series` itself: a day-timeframe entry's single
+  // selected day is one bar, and scoring its outcome needs `lookaheadBars` MORE
+  // bars beyond it.
   const boundByLookahead = Math.max(0, series.length - params.lookaheadBars);
-  const progressTotal = Math.min(boundByWindow, boundByLookahead);
+  const progressTotal = Math.max(0, Math.min(boundByWindow, boundByLookahead) - firstFrontier);
   const cadence = defaultCadenceForHorizon(params.horizon);
   const decisionPoints: DecisionPoint[] = [];
   let prevConfluence: ConfluenceWire | null = null;
   let cancelled = false;
 
   try {
-    for (let i = 0; i < series.length; i++) {
+    for (let i = firstFrontier; i < series.length; i++) {
       // A frontier must fall inside the requested window; `toTs` is exclusive
       // (start of the next day) so a candle stamped exactly at that boundary is
       // never mistaken for part of the selected day.
@@ -110,7 +113,7 @@ export async function runBenchmark(
       // Mirror run_replay's boundary: stop once no future bar exists at i+lookahead.
       if (i + params.lookaheadBars >= series.length) break;
 
-      onProgress?.(i, progressTotal);
+      onProgress?.(i - firstFrontier, progressTotal);
 
       let compute: { algo_results: AlgoResultWire[]; confluence: ConfluenceWire } | null = null;
       let isDecisionPoint = false;
@@ -173,5 +176,5 @@ export async function runBenchmark(
     }
   }
 
-  return { params, candles: series, decisionPoints, cancelled };
+  return { params, candles: series.slice(firstFrontier), decisionPoints, cancelled };
 }

@@ -268,6 +268,64 @@ describe("runBenchmark frontier walk", () => {
     expect(progress).toEqual([[0, 1]]);
   });
 
+  it("computes a window-start frontier against the lake history BEFORE fromTs, not a truncated window", async () => {
+    // 40 bars of lake history, but only the last 3 fall inside the selected
+    // window. Before this fix the first frontier saw 1 bar and every algorithm
+    // with a real required_lookback was silently dropped by run_applicable.
+    const dayStart = 1_700_000_000;
+    const candles: CandleWire[] = Array.from({ length: 40 }, (_, i) => ({
+      ts: dayStart + i * DAY_SECONDS,
+      open: 100 + i,
+      high: 100 + i,
+      low: 100 + i,
+      close: 100 + i,
+      volume: 100,
+    }));
+    const fromTs = candles[37].ts;
+    const windows: number[] = [];
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
+        benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[]) => {
+          windows.push(window.length);
+          return Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+        }),
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+    const result = await runBenchmark(deps, baseParams({ fromTs, toTs: 1e12, lookaheadBars: 1 }));
+    // Frontiers 37 and 38 are eligible (39 has no bar at i+1); each is handed
+    // everything up to and including itself, reaching back before fromTs.
+    expect(windows).toEqual([38, 39]);
+    // The chart still shows only the selected window.
+    expect(result.candles).toHaveLength(3);
+    expect(result.candles[0].ts).toBe(fromTs);
+  });
+
+  it("reports progress from zero at the window's first frontier, not from its lake index", async () => {
+    const dayStart = 1_700_000_000;
+    const candles: CandleWire[] = Array.from({ length: 40 }, (_, i) => ({
+      ts: dayStart + i * DAY_SECONDS,
+      open: 100 + i,
+      high: 100 + i,
+      low: 100 + i,
+      close: 100 + i,
+      volume: 100,
+    }));
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
+        benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+    const progress: Array<[number, number]> = [];
+    await runBenchmark(deps, baseParams({ fromTs: candles[37].ts, toTs: 1e12, lookaheadBars: 1 }), (index, total) =>
+      progress.push([index, total]),
+    );
+    expect(progress).toEqual([[0, 2], [1, 2]]);
+  });
+
   it("day-timeframe single-day window still scores an outcome using bars beyond toTs for lookahead", async () => {
     // A day-timeframe lake entry has exactly one candle per selected day, so
     // scoring its outcome needs `lookaheadBars` MORE candles after the window
