@@ -18,6 +18,7 @@ pub enum Horizon {
 pub enum Timeframe {
     Minute,
     FiveMinute,
+    TenMinute,
     FifteenMinute,
     Day,
 }

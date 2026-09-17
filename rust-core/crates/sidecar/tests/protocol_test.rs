@@ -13,7 +13,7 @@ use sidecar::protocol::{AlgorithmWire, ListAlgorithmsRequest, ListAlgorithmsResp
 
 #[test]
 fn request_round_trips_from_json_line() {
-    let line = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0]}"#;
+    let line = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":10},{"ts":200,"open":101.0,"high":101.0,"low":101.0,"close":101.0,"volume":10},{"ts":300,"open":102.0,"high":102.0,"low":102.0,"close":102.0,"volume":10}]}"#;
 
     let request = match parse_request(line).unwrap() {
         SidecarRequest::Compute(request) => request,
@@ -22,7 +22,9 @@ fn request_round_trips_from_json_line() {
 
     assert_eq!(request.id, 1);
     assert_eq!(request.symbol, "NSE:INFY");
-    assert_eq!(request.closes, vec![100.0, 101.0, 102.0]);
+    assert_eq!(request.horizon, "positional");
+    assert_eq!(request.candles.len(), 3);
+    assert_eq!(request.candles[2].close, 102.0);
 }
 
 #[test]

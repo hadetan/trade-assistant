@@ -5,7 +5,10 @@ pub struct ComputeRequest {
     pub id: u64,
     pub symbol: String,
     pub timeframe: String,
-    pub closes: Vec<f64>,
+    /// "intraday" | "positional".
+    pub horizon: String,
+    /// Full OHLCV, ascending by ts; the last element is the frontier bar.
+    pub candles: Vec<CandleWire>,
 }
 
 #[derive(Debug, Serialize)]
@@ -298,12 +301,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_tagged_compute_request() {
-        let line = r#"{"type":"compute","id":5,"symbol":"NSE:INFY","timeframe":"day","closes":[1.0,2.0]}"#;
+    fn parses_a_tagged_compute_request_carrying_full_ohlcv_and_a_horizon() {
+        let line = r#"{"type":"compute","id":5,"symbol":"NSE:INFY","timeframe":"5minute","horizon":"intraday","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10}]}"#;
         match parse_request(line).unwrap() {
             SidecarRequest::Compute(request) => {
                 assert_eq!(request.id, 5);
-                assert_eq!(request.closes, vec![1.0, 2.0]);
+                assert_eq!(request.horizon, "intraday");
+                assert_eq!(request.candles.len(), 1);
+                assert_eq!(request.candles[0].volume, 10);
             }
             _ => panic!("expected a compute request"),
         }
