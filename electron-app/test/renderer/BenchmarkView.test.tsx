@@ -140,6 +140,22 @@ describe("BenchmarkView", () => {
     expect(await screen.findByText(/0 decision points/i)).toBeTruthy();
   });
 
+  it("auto-opens the first decision point's explanation instead of hiding it behind an undiscoverable click", async () => {
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith(["neutral"])) });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    expect(await screen.findByText(/bullish \(medium conviction\) — neutral/i)).toBeTruthy();
+  });
+
+  it("hints that other markers on the chart can be clicked for their own explanation", async () => {
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith(["neutral", "correct"])) });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    expect(await screen.findByText(/click a marker/i)).toBeTruthy();
+  });
+
   it("renders a Cancelled banner in place of an error when the result is cancelled", async () => {
     const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith([], true)) });
     render(<BenchmarkView api={deps} />);
@@ -167,6 +183,24 @@ describe("BenchmarkView", () => {
   it("shows a loading spinner while the lake list is in flight", () => {
     render(<BenchmarkView api={api({ listLakeSymbols: vi.fn(() => new Promise(() => {})) })} />);
     expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("marks the clicked lake entry as selected so a click is never visually silent", async () => {
+    render(<BenchmarkView api={api()} />);
+    const option = await screen.findByRole("button", { name: /NSE:INFY/ });
+    expect(option).toHaveProperty("ariaPressed", "false");
+    fireEvent.click(option);
+    expect(option).toHaveProperty("ariaPressed", "true");
+  });
+
+  it("shows an error instead of hanging on the spinner forever when the initial lake fetch rejects", async () => {
+    render(<BenchmarkView api={api({ listLakeSymbols: vi.fn().mockRejectedValue(new Error("sidecar unreachable")) })} />);
+    expect(await screen.findByText(/sidecar unreachable/i)).toBeTruthy();
+  });
+
+  it("shows an error instead of hanging on the spinner forever when the initial algorithm fetch rejects", async () => {
+    render(<BenchmarkView api={api({ listAlgorithms: vi.fn().mockRejectedValue(new Error("sidecar unreachable")) })} />);
+    expect(await screen.findByText(/sidecar unreachable/i)).toBeTruthy();
   });
 
   it("shows a fixed progress pill reflecting onBenchmarkProgress updates while running", async () => {

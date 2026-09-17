@@ -89,6 +89,13 @@ export async function runBenchmark(
   // day-timeframe run. `toTs` instead bounds which bars are eligible *frontiers*
   // in the loop below, not which bars exist in `series` at all.
   const series = candles.filter((c) => c.ts >= params.fromTs);
+  // onProgress's denominator must reflect eligible frontiers, not `series.length`
+  // (which can run to the end of the lake) -- otherwise a single-day window in a
+  // long-lived symbol reports progress against thousands of irrelevant future bars.
+  const windowEndIndex = series.findIndex((c) => c.ts >= params.toTs);
+  const boundByWindow = windowEndIndex === -1 ? series.length : windowEndIndex;
+  const boundByLookahead = Math.max(0, series.length - params.lookaheadBars);
+  const progressTotal = Math.min(boundByWindow, boundByLookahead);
   const cadence = defaultCadenceForHorizon(params.horizon);
   const decisionPoints: DecisionPoint[] = [];
   let prevConfluence: ConfluenceWire | null = null;
@@ -103,7 +110,7 @@ export async function runBenchmark(
       // Mirror run_replay's boundary: stop once no future bar exists at i+lookahead.
       if (i + params.lookaheadBars >= series.length) break;
 
-      onProgress?.(i, series.length);
+      onProgress?.(i, progressTotal);
 
       let compute: { algo_results: AlgoResultWire[]; confluence: ConfluenceWire } | null = null;
       let isDecisionPoint = false;

@@ -27,7 +27,12 @@ export function createBenchmarkChart(
 ): BenchmarkChartHandle {
   const chart = createChart(container, { autoSize: true });
 
-  const candleSeries = chart.addSeries(CandlestickSeries);
+  // lightweight-charts draws a dashed "last value" line on every series by default.
+  // Left on, the candle series' last-close line and the volume series' last-bar
+  // line look identical to a model's forecast/target line with no label
+  // distinguishing them -- hide both; the popover (click a marker) is the one
+  // place forecast info is meant to come from.
+  const candleSeries = chart.addSeries(CandlestickSeries, { priceLineVisible: false });
   candleSeries.setData(
     result.candles.map((c: CandleWire) => ({
       time: c.ts as UTCTimestamp,
@@ -38,7 +43,11 @@ export function createBenchmarkChart(
     })),
   );
 
-  const volumeSeries = chart.addSeries(HistogramSeries, { priceScaleId: "volume" });
+  const volumeSeries = chart.addSeries(HistogramSeries, {
+    priceScaleId: "volume",
+    priceLineVisible: false,
+    priceFormat: { type: "volume" },
+  });
   volumeSeries.setData(result.candles.map((c: CandleWire) => ({ time: c.ts as UTCTimestamp, value: c.volume })));
 
   // Canvas fillStyle needs a resolved color, not a var() reference — reading the

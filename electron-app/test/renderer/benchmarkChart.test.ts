@@ -67,6 +67,17 @@ describe("createBenchmarkChart", () => {
     expect(markers.map((m) => m.color)).toEqual(["#16a34a", "#dc2626", "#6b7280"]);
   });
 
+  it("hides the candle and volume series' built-in last-value lines instead of rendering them as unlabeled forecast-looking lines", () => {
+    addSeries.mockClear();
+    const container = containerWithTokens();
+    createBenchmarkChart(container, resultWith([]), () => {});
+    const candleOptions = addSeries.mock.calls[0][1] as { priceLineVisible?: boolean } | undefined;
+    const volumeOptions = addSeries.mock.calls[1][1] as { priceLineVisible?: boolean; priceFormat?: { type: string } };
+    expect(candleOptions?.priceLineVisible).toBe(false);
+    expect(volumeOptions.priceLineVisible).toBe(false);
+    expect(volumeOptions.priceFormat?.type).toBe("volume");
+  });
+
   it("dispose() removes the chart", () => {
     remove.mockClear();
     const container = containerWithTokens();

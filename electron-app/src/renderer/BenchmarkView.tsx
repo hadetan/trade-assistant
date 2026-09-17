@@ -51,6 +51,11 @@ function ResultsView({ api, result }: { api: BenchmarkApi; result: BenchmarkResu
   useEffect(() => {
     const container = chartRef.current;
     if (!container) return;
+    // Open the first decision point's explanation up front -- the popover only
+    // otherwise appears on a chart-marker click, an interaction nothing in the UI
+    // hints at, which made a run's result look unexplained even though the model's
+    // own forecast text was there all along.
+    setSelected(result.decisionPoints[0] ?? null);
     const handle = createBenchmarkChart(container, result, setSelected);
     return () => handle.dispose();
   }, [result]);
@@ -62,6 +67,9 @@ function ResultsView({ api, result }: { api: BenchmarkApi; result: BenchmarkResu
       <Button variant="ghost" onClick={() => void api.copyBenchmarkResult(JSON.stringify(result))}>
         <Copy size={14} aria-hidden="true" /> Copy raw result
       </Button>
+      {result.decisionPoints.length > 0 && (
+        <p className="benchmark-chart-hint">Click a marker on the chart to see what the algorithm predicted for that bar.</p>
+      )}
       <div className="benchmark-chart" ref={chartRef} />
       {selected && (
         <Card className="benchmark-popover">
@@ -89,13 +97,32 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [progress, setProgress] = useState<{ index: number; total: number } | null>(null);
+  const setupRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    void api.listLakeSymbols().then(setEntries);
-    void api.listAlgorithms().then(setAlgorithms);
+    // Without a .catch() here, a rejection leaves entries/algorithms null forever --
+    // the view is stuck on the loading spinner with no indication anything failed.
+    api
+      .listLakeSymbols()
+      .then(setEntries)
+      .catch((e) => setLoadError((e as Error).message));
+    api
+      .listAlgorithms()
+      .then(setAlgorithms)
+      .catch((e) => setLoadError((e as Error).message));
     api.onBenchmarkProgress(setProgress);
   }, [api]);
+
+  // The setup card renders below the full lake-entry list inside a scrolling pane,
+  // so on a long list a click can land off-screen with no visible change.
+  useEffect(() => {
+    // jsdom (unit tests) doesn't implement scrollIntoView -- guard rather than crash.
+    if (selected && typeof setupRef.current?.scrollIntoView === "function") {
+      setupRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [selected]);
 
   const onSelectEntry = (entry: LakeSymbolEntry): void => {
     setSelected(entry);
@@ -138,6 +165,9 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
     void api.cancelBenchmark();
   };
 
+  if (loadError) {
+    return <Banner variant="error">Failed to load benchmark data: {loadError}</Banner>;
+  }
   if (entries === null || algorithms === null) {
     return (
       <div className="benchmark-loading">
@@ -175,7 +205,12 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
           <ul className="benchmark-picker">
             {entries.map((entry) => (
               <li key={`${entry.symbol}_${entry.timeframe}_${entry.source}`}>
-                <button type="button" className="benchmark-picker-item" onClick={() => onSelectEntry(entry)}>
+                <button
+                  type="button"
+                  className={`benchmark-picker-item${selected === entry ? " benchmark-picker-item-selected" : ""}`}
+                  aria-pressed={selected === entry}
+                  onClick={() => onSelectEntry(entry)}
+                >
                   {entry.symbol} · {entry.timeframe} · {entry.source} · {entry.horizon} · {toDate(entry.fromTs)}–{toDate(entry.toTs)} · {entry.candleCount} bars
                 </button>
               </li>
@@ -183,53 +218,55 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
           </ul>
 
           {selected && (
-            <Card>
-              <form
-                className="benchmark-setup"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void onRun();
-                }}
-              >
-                <p>
-                  Horizon: <strong>{selected.horizon}</strong> (derived from timeframe)
-                </p>
-                <fieldset className="benchmark-algo-picker">
-                  <legend>Algorithm</legend>
-                  {algorithms.map((algo) => (
-                    <Button
-                      key={algo.id}
-                      type="button"
-                      variant={selectedAlgoId === algo.id ? "primary" : "secondary"}
-                      size="sm"
-                      aria-pressed={selectedAlgoId === algo.id}
-                      onClick={() => setSelectedAlgoId(algo.id)}
-                    >
-                      {algo.id} · {algo.cost === "slow" ? "slow (ML forecaster)" : "fast"}
-                    </Button>
-                  ))}
-                </fieldset>
-                <label className="benchmark-field">
-                  Lookahead bars
-                  <TextField type="number" min={1} value={lookaheadBars} onChange={(e) => setLookaheadBars(Number(e.target.value))} />
-                </label>
-                <label className="benchmark-field">
-                  Date
-                  <TextField
-                    type="date"
-                    required
-                    min={toDate(selected.fromTs)}
-                    max={toDate(selected.toTs)}
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                  />
-                </label>
-                <Button type="submit" disabled={running || !selectedAlgoId}>
-                  {running && <Spinner size={14} />} {running ? "Running…" : "Run benchmark"}
-                </Button>
-                {error && <Banner variant="error">{error}</Banner>}
-              </form>
-            </Card>
+            <div ref={setupRef}>
+              <Card>
+                <form
+                  className="benchmark-setup"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void onRun();
+                  }}
+                >
+                  <p>
+                    Horizon: <strong>{selected.horizon}</strong> (derived from timeframe)
+                  </p>
+                  <fieldset className="benchmark-algo-picker">
+                    <legend>Algorithm</legend>
+                    {algorithms.map((algo) => (
+                      <Button
+                        key={algo.id}
+                        type="button"
+                        variant={selectedAlgoId === algo.id ? "primary" : "secondary"}
+                        size="sm"
+                        aria-pressed={selectedAlgoId === algo.id}
+                        onClick={() => setSelectedAlgoId(algo.id)}
+                      >
+                        {algo.id} · {algo.cost === "slow" ? "slow (ML forecaster)" : "fast"}
+                      </Button>
+                    ))}
+                  </fieldset>
+                  <label className="benchmark-field">
+                    Lookahead bars
+                    <TextField type="number" min={1} value={lookaheadBars} onChange={(e) => setLookaheadBars(Number(e.target.value))} />
+                  </label>
+                  <label className="benchmark-field">
+                    Date
+                    <TextField
+                      type="date"
+                      required
+                      min={toDate(selected.fromTs)}
+                      max={toDate(selected.toTs)}
+                      value={date}
+                      onChange={(e) => setDate(e.target.value)}
+                    />
+                  </label>
+                  <Button type="submit" disabled={running || !selectedAlgoId}>
+                    {running && <Spinner size={14} />} {running ? "Running…" : "Run benchmark"}
+                  </Button>
+                  {error && <Banner variant="error">{error}</Banner>}
+                </form>
+              </Card>
+            </div>
           )}
         </>
       )}

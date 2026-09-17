@@ -77,6 +77,7 @@ describe("summarize", () => {
 });
 
 const BULLISH: ConfluenceWire = { bullish_count: 8, bearish_count: 1, neutral_count: 1, weighted_vote: 0.5 };
+const DAY_SECONDS = 86_400;
 
 function seriesOf(closes: number[]): CandleWire[] {
   return closes.map((close, i) => ({ ts: 1_000 + i, open: close, high: close, low: close, close, volume: 100 }));
@@ -230,9 +231,41 @@ describe("runBenchmark frontier walk", () => {
     };
     const progress: Array<[number, number]> = [];
     const result = await runBenchmark(deps, baseParams({ lookaheadBars: 3 }), (index, total) => progress.push([index, total]));
-    // N=8, L=3 -> eligible i in 0..4 (5 iterations), each reported against the full series length.
-    expect(progress).toEqual([[0, 8], [1, 8], [2, 8], [3, 8], [4, 8]]);
+    // N=8, L=3 -> eligible i in 0..4 (5 iterations), each reported against that same
+    // eligible-frontier count (toTs is unbounded here, so the lookahead bound wins).
+    expect(progress).toEqual([[0, 5], [1, 5], [2, 5], [3, 5], [4, 5]]);
     expect(result.decisionPoints).toHaveLength(5);
+  });
+
+  it("bounds onProgress's total to the eligible window, not the entire remaining lake series", async () => {
+    // A day-timeframe lake entry's selected window is one day, but `series` (built
+    // from `fromTs` with no upper bound) can carry many more trading days behind
+    // it -- onProgress must not report that whole tail as "total work" when only
+    // one frontier actually falls inside the window.
+    const dayStart = 1_700_000_000;
+    const toTs = dayStart + DAY_SECONDS;
+    const closes = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109];
+    const candles: CandleWire[] = closes.map((close, i) => ({
+      ts: dayStart + i * DAY_SECONDS,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: 100,
+    }));
+    const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
+        benchmarkCompute,
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+    const progress: Array<[number, number]> = [];
+    await runBenchmark(deps, baseParams({ timeframe: "day", fromTs: dayStart, toTs, lookaheadBars: 2 }), (index, total) =>
+      progress.push([index, total]),
+    );
+    expect(progress).toEqual([[0, 1]]);
   });
 
   it("day-timeframe single-day window still scores an outcome using bars beyond toTs for lookahead", async () => {
