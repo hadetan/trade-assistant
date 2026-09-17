@@ -1,17 +1,15 @@
-import type { KiteClient } from "../kite/kiteClient";
 import type { SidecarSupervisor } from "../sidecar/sidecarSupervisor";
 import type { AnalysisEnvelope, IntentLens } from "./contracts";
 import type { InstrumentSelection } from "./analysisEnvelope";
 import type { TraceEmitter } from "../../ipc/rendererApi";
 import type { CandleInterval } from "../market/candleInterval";
+import type { WarmedCandles } from "../market/readinessGate";
 import { maxRequiredLookback } from "../market/backfillSizing";
-import { topUpCandles } from "../market/candleWarmup";
 import { PERSONA_TIMEOUTS_MS } from "../claude/claudeCliProvider";
-import { KITE_FETCH_TIMEOUT_MS, withTimeout } from "./analysisEnvelope";
+import { withTimeout } from "./analysisEnvelope";
 
 export interface WarmedEnvelopeDeps {
-  kite: Pick<KiteClient, "getHistoricalData">;
-  sidecar: Pick<SidecarSupervisor, "compute" | "persistCandles" | "readLakeCandles" | "listAlgorithms">;
+  sidecar: Pick<SidecarSupervisor, "compute">;
 }
 
 export interface WarmedEnvelopeParams {
@@ -19,7 +17,6 @@ export interface WarmedEnvelopeParams {
   instrument: InstrumentSelection;
   interval: CandleInterval;
   intent_lens: IntentLens;
-  now: Date;
   onComputeId?: (id: number) => void;
   onTrace?: TraceEmitter;
 }
@@ -32,27 +29,15 @@ export async function requiredBarsFor(sidecar: Pick<SidecarSupervisor, "listAlgo
   return maxRequiredLookback(algorithms.map((a) => ({ requiredLookback: a.required_lookback })));
 }
 
+// `warmed` is produced by checkEngineOnlyReadiness's successful gate check, not
+// re-fetched here -- the gate already ran the exact same Kite fetch and lake
+// read/write for this symbol/interval to prove enough history exists.
 export async function assembleWarmedEnvelope(
   deps: WarmedEnvelopeDeps,
   params: WarmedEnvelopeParams,
+  warmed: WarmedCandles,
 ): Promise<AnalysisEnvelope> {
-  const requiredBars = await requiredBarsFor(deps.sidecar);
-  const { candles } = await withTimeout(
-    topUpCandles(
-      { kite: deps.kite, sidecar: deps.sidecar },
-      {
-        symbol: params.instrument.symbol,
-        instrumentToken: params.instrument.instrumentToken,
-        interval: params.interval,
-        requiredBars,
-        now: params.now,
-      },
-    ),
-    KITE_FETCH_TIMEOUT_MS,
-    "kite fetch",
-  );
-
-  const window = candles.slice(Math.max(0, candles.length - requiredBars));
+  const window = warmed.candles.slice(Math.max(0, warmed.candles.length - warmed.requiredBars));
 
   let compute;
   try {

@@ -1,5 +1,6 @@
 import type { KiteClient } from "../kite/kiteClient";
 import type { SidecarSupervisor } from "../sidecar/sidecarSupervisor";
+import type { CandleWire } from "../sidecar/sidecarProtocol";
 import type { KiteSessionStatus } from "../../ipc/rendererApi";
 import { requiredBarsFor } from "../analysis/warmedEnvelope";
 import { topUpCandles } from "./candleWarmup";
@@ -7,8 +8,16 @@ import { isHolidayCalendarCovered, isWithinSessionHours, nextSessionOpen } from 
 import { NSE_HOLIDAY_CALENDAR_SOURCE } from "./nseHolidays";
 import type { CandleInterval } from "./candleInterval";
 
+// What the gate already fetched to prove the lake was warm enough, handed
+// forward so assembleWarmedEnvelope doesn't re-run the same Kite fetch and
+// lake read/write for the same symbol/interval right after the gate passes.
+export interface WarmedCandles {
+  candles: CandleWire[];
+  requiredBars: number;
+}
+
 export type ReadinessResult =
-  | { ok: true }
+  | { ok: true; warmed: WarmedCandles }
   | { ok: false; reason: "kite_not_connected" }
   | { ok: false; reason: "insufficient_history"; have: number; need: number }
   | { ok: false; reason: "market_closed"; nextOpenAt: number };
@@ -68,5 +77,5 @@ export async function checkEngineOnlyReadiness(
     return { ok: false, reason: "market_closed", nextOpenAt: nextSessionOpen(params.now) };
   }
 
-  return { ok: true };
+  return { ok: true, warmed: { candles, requiredBars: need } };
 }

@@ -9,6 +9,9 @@ import {
 import { KiteClient } from "../../../src/main/services/kite/kiteClient";
 import type { KiteSession } from "../../../src/main/services/kite/kiteLogin";
 import type { AiAssistedProvider } from "../../../src/main/services/claude/provider";
+import { checkEngineOnlyReadiness } from "../../../src/main/services/market/readinessGate";
+import { assembleWarmedEnvelope } from "../../../src/main/services/analysis/warmedEnvelope";
+import type { CandleWire } from "../../../src/main/services/sidecar/sidecarProtocol";
 import { computeResponse, historicalResponse, mockSidecar } from "../../fixtures/sidecarFixtures";
 
 function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedProvider {
@@ -359,7 +362,7 @@ describe("runAnalysisRequest readiness gate", () => {
   });
 
   it("runs the warmed envelope and returns an ordinary engine_only result when the gate passes", async () => {
-    const deps = gateDeps({ ok: true });
+    const deps = gateDeps({ ok: true, warmed: { candles: [], requiredBars: 256 } });
     deps.assembleEnvelope = vi.fn().mockResolvedValue({
       trigger: "reactive",
       instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
@@ -378,12 +381,61 @@ describe("runAnalysisRequest readiness gate", () => {
   });
 
   it("leaves the user's message with no assistant reply when assembleEnvelope throws after the gate passes", async () => {
-    const deps = gateDeps({ ok: true });
+    const deps = gateDeps({ ok: true, warmed: { candles: [], requiredBars: 256 } });
     deps.assembleEnvelope = vi.fn().mockRejectedValue(new Error("boom"));
 
     await expect(runAnalysisRequest(deps as never, PARAMS)).rejects.toThrow("boom");
 
     expect(deps.history.appendMessage).toHaveBeenCalledTimes(1);
     expect(deps.history.appendMessage).toHaveBeenCalledWith(expect.objectContaining({ role: "user" }));
+  });
+
+  it("warms the lake only ONCE for a full readiness-gate-then-analysis run, not once per stage", async () => {
+    // Wires the REAL gate and REAL envelope assembler (not mocks), so this
+    // actually proves the fix: without it, both stages call topUpCandles
+    // independently and this doubles the Kite fetch and the lake read/write.
+    const lastTs = Math.floor(new Date("2026-09-17T10:55:00+05:30").getTime() / 1000);
+    let stored: CandleWire[] = [
+      { ts: lastTs - 300, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+      { ts: lastTs, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+    ];
+    const readLakeCandles = vi.fn(async () => ({ type: "lake_candles" as const, id: 1, candles: [...stored] }));
+    const persistCandles = vi.fn(async (_s: string, _t: string, candles: CandleWire[]) => {
+      stored = [...stored, ...candles].sort((a, b) => a.ts - b.ts);
+      return { type: "persist_candles" as const, id: 1, written: candles.length };
+    });
+    const kite = {
+      getHistoricalData: vi.fn().mockResolvedValue({
+        data: { candles: [["2026-09-17T11:00:00+0530", 1, 2, 0.5, 1.5, 10]] },
+      }),
+    };
+    const sidecar = {
+      readLakeCandles,
+      persistCandles,
+      listAlgorithms: vi.fn().mockResolvedValue({
+        type: "algorithms" as const,
+        id: 1,
+        algorithms: [{ id: "rsi", cost: "fast" as const, required_lookback: 3 }],
+      }),
+      compute: vi.fn().mockResolvedValue(computeResponse()),
+    };
+
+    const result = await runAnalysisRequest(
+      {
+        kite,
+        sidecar,
+        history: { appendMessage: vi.fn() },
+        checkReadiness: checkEngineOnlyReadiness,
+        assembleEnvelope: assembleWarmedEnvelope,
+        kiteStatus: () => "authenticated" as const,
+        now: () => new Date("2026-09-17T11:00:00+05:30"),
+      } as never,
+      PARAMS,
+    );
+
+    expect(result.mode).toBe("engine_only");
+    expect(kite.getHistoricalData).toHaveBeenCalledTimes(1);
+    expect(readLakeCandles).toHaveBeenCalledTimes(2);
+    expect(persistCandles).toHaveBeenCalledTimes(1);
   });
 });

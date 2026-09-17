@@ -6,7 +6,6 @@ import {
 import { computeResponse } from "../../../fixtures/sidecarFixtures";
 import type { CandleWire } from "../../../../src/main/services/sidecar/sidecarProtocol";
 
-const NOW = new Date("2026-09-17T14:00:00+05:30");
 const INSTRUMENT = { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" };
 
 function lakeOf(count: number): CandleWire[] {
@@ -20,16 +19,8 @@ function lakeOf(count: number): CandleWire[] {
   }));
 }
 
-function depsWith(lake: CandleWire[], algorithms = [{ id: "sma", cost: "fast", required_lookback: 20 }, { id: "kronos", cost: "slow", required_lookback: 256 }]) {
-  return {
-    kite: { getHistoricalData: vi.fn().mockResolvedValue({ data: { candles: [] } }) },
-    sidecar: {
-      listAlgorithms: vi.fn().mockResolvedValue({ type: "algorithms", id: 1, algorithms }),
-      readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: lake }),
-      persistCandles: vi.fn().mockResolvedValue({ type: "persist_candles", id: 1, written: 0 }),
-      compute: vi.fn().mockResolvedValue(computeResponse()),
-    },
-  };
+function depsWith(compute = vi.fn().mockResolvedValue(computeResponse())) {
+  return { sidecar: { compute } };
 }
 
 describe("requiredBarsFor", () => {
@@ -50,68 +41,56 @@ describe("requiredBarsFor", () => {
 });
 
 describe("assembleWarmedEnvelope", () => {
-  it("sends the lake's trailing required-bars window as candles, not a fresh Kite closes array", async () => {
-    const deps = depsWith(lakeOf(400));
+  it("sends the warmed data's trailing required-bars window as candles, not the full lake", async () => {
+    const deps = depsWith();
 
-    await assembleWarmedEnvelope(deps as never, {
-      trigger: "reactive",
-      instrument: INSTRUMENT,
-      interval: "5minute",
-      intent_lens: "buying",
-      now: NOW,
-    });
+    await assembleWarmedEnvelope(
+      deps as never,
+      { trigger: "reactive", instrument: INSTRUMENT, interval: "5minute", intent_lens: "buying" },
+      { candles: lakeOf(400), requiredBars: 256 },
+    );
 
     const [symbol, timeframe, horizon, candles] = deps.sidecar.compute.mock.calls[0];
     expect(symbol).toBe("NSE:INFY");
     expect(timeframe).toBe("5minute");
     expect(horizon).toBe("intraday");
-    // requiredBars is 256 here, so the trailing 256 of the 400 stored bars.
     expect(candles).toHaveLength(256);
     expect((candles as CandleWire[])[255].ts).toBe(1_700_000_000 + 399 * 300);
     expect((candles as CandleWire[])[0].volume).toBe(1_000 + 144);
   });
 
-  it("sends everything the lake has when it holds fewer bars than required, rather than an empty window", async () => {
-    const deps = depsWith(lakeOf(40));
+  it("sends everything the warmed data has when it holds fewer bars than required, rather than an empty window", async () => {
+    const deps = depsWith();
 
-    await assembleWarmedEnvelope(deps as never, {
-      trigger: "reactive",
-      instrument: INSTRUMENT,
-      interval: "5minute",
-      intent_lens: "buying",
-      now: NOW,
-    });
+    await assembleWarmedEnvelope(
+      deps as never,
+      { trigger: "reactive", instrument: INSTRUMENT, interval: "5minute", intent_lens: "buying" },
+      { candles: lakeOf(40), requiredBars: 256 },
+    );
 
     expect(deps.sidecar.compute.mock.calls[0][3]).toHaveLength(40);
   });
 
-  it("tops up before reading, so a session reopen never computes against a stale lake", async () => {
-    const deps = depsWith(lakeOf(400));
+  it("never re-fetches or re-reads the lake -- it only ever calls sidecar.compute", async () => {
+    const deps = depsWith();
 
-    await assembleWarmedEnvelope(deps as never, {
-      trigger: "reactive",
-      instrument: INSTRUMENT,
-      interval: "5minute",
-      intent_lens: "buying",
-      now: NOW,
-    });
+    await assembleWarmedEnvelope(
+      deps as never,
+      { trigger: "reactive", instrument: INSTRUMENT, interval: "5minute", intent_lens: "buying" },
+      { candles: lakeOf(400), requiredBars: 256 },
+    );
 
-    expect(deps.kite.getHistoricalData).toHaveBeenCalled();
-    const kiteOrder = deps.kite.getHistoricalData.mock.invocationCallOrder[0];
-    const computeOrder = deps.sidecar.compute.mock.invocationCallOrder[0];
-    expect(kiteOrder).toBeLessThan(computeOrder);
+    expect(Object.keys(deps.sidecar)).toEqual(["compute"]);
   });
 
   it("reports the interval as the envelope's timeframe and intraday as its requested horizon", async () => {
-    const deps = depsWith(lakeOf(400));
+    const deps = depsWith();
 
-    const envelope = await assembleWarmedEnvelope(deps as never, {
-      trigger: "reactive",
-      instrument: INSTRUMENT,
-      interval: "15minute",
-      intent_lens: "selling",
-      now: NOW,
-    });
+    const envelope = await assembleWarmedEnvelope(
+      deps as never,
+      { trigger: "reactive", instrument: INSTRUMENT, interval: "15minute", intent_lens: "selling" },
+      { candles: lakeOf(400), requiredBars: 256 },
+    );
 
     expect(envelope.horizon_requested).toBe("intraday");
     expect(envelope.intent_lens).toBe("selling");
@@ -121,19 +100,21 @@ describe("assembleWarmedEnvelope", () => {
   });
 
   it("emits a sidecar error trace and rethrows when compute rejects", async () => {
-    const deps = depsWith(lakeOf(400));
-    deps.sidecar.compute = vi.fn().mockRejectedValue(new Error("sidecar is not running"));
+    const deps = depsWith(vi.fn().mockRejectedValue(new Error("sidecar is not running")));
     const traced: Array<{ source: string; kind: string; detail?: string }> = [];
 
     await expect(
-      assembleWarmedEnvelope(deps as never, {
-        trigger: "reactive",
-        instrument: INSTRUMENT,
-        interval: "5minute",
-        intent_lens: "buying",
-        now: NOW,
-        onTrace: (e) => traced.push(e),
-      }),
+      assembleWarmedEnvelope(
+        deps as never,
+        {
+          trigger: "reactive",
+          instrument: INSTRUMENT,
+          interval: "5minute",
+          intent_lens: "buying",
+          onTrace: (e) => traced.push(e),
+        },
+        { candles: lakeOf(400), requiredBars: 256 },
+      ),
     ).rejects.toThrow(/sidecar is not running/);
     expect(traced).toEqual([{ source: "sidecar", kind: "error", detail: "sidecar is not running" }]);
   });

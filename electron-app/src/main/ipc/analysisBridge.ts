@@ -98,14 +98,14 @@ export async function runAnalysisRequest(
   }
 
   const envelope = await deps.assembleEnvelope(
-    { kite: deps.kite, sidecar: deps.sidecar },
+    { sidecar: deps.sidecar },
     {
       trigger: "reactive",
       instrument: params.instrument,
       interval: params.interval,
       intent_lens: params.intent_lens,
-      now,
     },
+    readiness.warmed,
   );
   const response = generateDeterministicResponse(envelope);
   const result: AnalysisResult = {

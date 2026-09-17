@@ -42,8 +42,13 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("checkEngineOnlyReadiness", () => {
   it("passes all three checks silently when Kite is up, the lake is warm, and the session is live", async () => {
-    expect(await checkEngineOnlyReadiness(deps() as never, PARAMS)).toEqual({ ok: true });
+    const result = await checkEngineOnlyReadiness(deps() as never, PARAMS);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.warmed.requiredBars).toBe(256);
+    expect(result.warmed.candles).toHaveLength(300);
   });
+
 
   it("fails with kite_not_connected and short-circuits before data or time are evaluated", async () => {
     const d = deps({ status: "needsLogin" });
