@@ -262,14 +262,17 @@ export function registerAnalysisBridge(deps: AnalysisBridgeDeps): void {
     guardSessionExpiry(deps.markNeedsLogin, requireSession(deps.getSession).kite.searchInstruments(args.query)),
   );
   deps.ipcMain.handle("analysis:checkReadiness", (_event, args: ReadinessCheckParams): Promise<ReadinessResult> =>
-    checkEngineOnlyReadiness(
-      { kiteStatus: deps.kiteStatus, kite: deps.getSession()?.kite ?? null, sidecar: deps.sidecar },
-      {
-        symbol: args.instrument.symbol,
-        instrumentToken: args.instrument.instrumentToken,
-        interval: args.interval,
-        now: deps.now?.() ?? new Date(),
-      },
+    guardSessionExpiry(
+      deps.markNeedsLogin,
+      checkEngineOnlyReadiness(
+        { kiteStatus: deps.kiteStatus, kite: deps.getSession()?.kite ?? null, sidecar: deps.sidecar },
+        {
+          symbol: args.instrument.symbol,
+          instrumentToken: args.instrument.instrumentToken,
+          interval: args.interval,
+          now: deps.now?.() ?? new Date(),
+        },
+      ),
     ),
   );
   deps.ipcMain.handle("analysis:run", (_event, params: AnalysisRunParams) => {

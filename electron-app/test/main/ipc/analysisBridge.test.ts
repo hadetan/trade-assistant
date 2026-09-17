@@ -309,6 +309,34 @@ describe("registerAnalysisBridge", () => {
     ).rejects.toThrow(/sidecar unreachable/);
     expect(markNeedsLogin).not.toHaveBeenCalled();
   });
+
+  it("calls markNeedsLogin when analysis:checkReadiness fails with a session-expiry-shaped error, then rethrows", async () => {
+    const callTool = vi.fn().mockRejectedValue(new Error("request failed with status 403"));
+    const session = { kite: new KiteClient({ callTool }) } as KiteSession;
+    const { handlers, markNeedsLogin } = harness(session);
+
+    await expect(
+      handlers.get("analysis:checkReadiness")!(null, {
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        interval: "5minute" as const,
+      }),
+    ).rejects.toThrow(/403/);
+    expect(markNeedsLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call markNeedsLogin when analysis:checkReadiness fails with an ordinary error", async () => {
+    const callTool = vi.fn().mockRejectedValue(new Error("sidecar unreachable"));
+    const session = { kite: new KiteClient({ callTool }) } as KiteSession;
+    const { handlers, markNeedsLogin } = harness(session);
+
+    await expect(
+      handlers.get("analysis:checkReadiness")!(null, {
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        interval: "5minute" as const,
+      }),
+    ).rejects.toThrow(/sidecar unreachable/);
+    expect(markNeedsLogin).not.toHaveBeenCalled();
+  });
 });
 
 describe("runAnalysisRequest readiness gate", () => {

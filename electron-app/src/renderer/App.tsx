@@ -126,12 +126,16 @@ export function App(): JSX.Element {
       // The gate is re-evaluated as of right now, not replayed from whenever this
       // session was last open: data and market state both move (P13§2 decision 5).
       if (payload.mode === "engine_only") {
-        const fresh = await bridge().checkReadiness({ instrument: payload.instrument, interval: payload.interval });
-        setReadiness(fresh.ok ? null : fresh);
-        const lastAssistantMessage = [...detail.messages].reverse().find((m) => m.role === "assistant");
-        const storedResultWasBlocked =
-          (lastAssistantMessage?.structured_payload as AnalysisResult | undefined)?.mode === "engine_only_blocked";
-        setSuppressStaleBlocked(fresh.ok && storedResultWasBlocked);
+        try {
+          const fresh = await bridge().checkReadiness({ instrument: payload.instrument, interval: payload.interval });
+          setReadiness(fresh.ok ? null : fresh);
+          const lastAssistantMessage = [...detail.messages].reverse().find((m) => m.role === "assistant");
+          const storedResultWasBlocked =
+            (lastAssistantMessage?.structured_payload as AnalysisResult | undefined)?.mode === "engine_only_blocked";
+          setSuppressStaleBlocked(fresh.ok && storedResultWasBlocked);
+        } catch (error) {
+          setAnalysisError((error as Error).message);
+        }
       }
     }
   };

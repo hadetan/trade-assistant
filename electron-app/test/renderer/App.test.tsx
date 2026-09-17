@@ -307,6 +307,38 @@ describe("App", () => {
     expect(await screen.findByText(/connect your kite account/i)).toBeTruthy();
   });
 
+  it("shows a visible error instead of failing silently when checkReadiness rejects on reopen", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "s7", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "s7",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "NSE:INFY · 5minute · buying",
+            structured_payload: {
+              mode: "engine_only",
+              sessionId: "s7",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+              interval: "5minute",
+              intent_lens: "buying",
+            },
+          },
+        ],
+      }),
+      checkReadiness: vi.fn().mockRejectedValue(new Error("kite session expired")),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+
+    expect(await screen.findByText(/kite session expired/i)).toBeTruthy();
+  });
+
   it("does not replay a stale blocked message once a reopened session's fresh readiness check passes", async () => {
     installBridge({
       getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
