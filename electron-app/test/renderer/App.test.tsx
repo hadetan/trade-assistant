@@ -350,4 +350,84 @@ describe("App", () => {
     await waitFor(() => expect(screen.queryByText(/nse is closed/i)).toBeNull());
     expect(screen.queryByText(/nse is closed/i)).toBeNull();
   });
+
+  it("does not suppress a fresh blocked result from a brand-new analysis after a stale-blocked reopen", async () => {
+    const getSession = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: "s9",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "NSE:INFY · 5minute · buying",
+            structured_payload: {
+              mode: "engine_only",
+              sessionId: "s9",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+              interval: "5minute",
+              intent_lens: "buying",
+            },
+          },
+          {
+            role: "assistant",
+            rendered_text: "blocked",
+            structured_payload: {
+              mode: "engine_only_blocked",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              readiness: { ok: false, reason: "market_closed", nextOpenAt: 1_790_000_000 },
+            },
+          },
+        ],
+      })
+      // After the reopen, a brand-new analysis is run; the session detail refetched
+      // by onAnalyze reflects a fresh (different reason) blocked result.
+      .mockResolvedValue({
+        id: "s9",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "assistant",
+            rendered_text: "fresh blocked",
+            structured_payload: {
+              mode: "engine_only_blocked",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              readiness: { ok: false, reason: "insufficient_history", have: 180, need: 256 },
+            },
+          },
+        ],
+      });
+
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "s9", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY (reopen)" },
+      ]),
+      getSession,
+      // The session was blocked when last stored; reopening it now finds the market
+      // open, so the stale "market closed" message is suppressed on reopen.
+      checkReadiness: vi.fn().mockResolvedValue({ ok: true }),
+      searchInstruments: vi.fn().mockResolvedValue({
+        data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
+      }),
+      runAnalysis: vi.fn().mockResolvedValue({
+        mode: "engine_only_blocked",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+        interval: "5minute",
+        readiness: { ok: false, reason: "insufficient_history", have: 180, need: 256 },
+      }),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY \(reopen\)/ }));
+    await waitFor(() => expect(screen.queryByText(/nse is closed/i)).toBeNull());
+
+    fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    expect(await screen.findByText(/180 of 256 candles/i)).toBeTruthy();
+  });
 });
