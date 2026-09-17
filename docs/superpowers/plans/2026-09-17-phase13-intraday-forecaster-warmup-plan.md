@@ -40,6 +40,8 @@ Every task's requirements implicitly include this section.
 
 **(v) `Timeframe::TenMinute` does not exist in `algo-core` — a gap P13 does not mention.** `Timeframe` (`algorithm.rs:17-23`) is `Minute | FiveMinute | FifteenMinute | Day`, and `parse_timeframe` (`handlers.rs:74-81`) falls through to `Day` for anything unrecognized. A 10-minute request would therefore be labeled `"day"` on the wire **and** make `kronos_math.rs:72-75`'s `timeframe_step` advance the forecast timestamp by a day instead of ten minutes. **Decision: Task 5 adds `Timeframe::TenMinute`** and fixes the two exhaustive matches the new variant breaks. Without it the 10-minute option in P13§7's picker is quietly wrong.
 
+**(vi) A reopened session's stored result can itself be a stale blocked turn — found during plan verification, not in the original spec.** `deriveEngineOnlyView` always surfaces the session's *last stored* assistant turn as `result`, and Task 10 persists a gate failure as an ordinary assistant turn (decision made in Task 10 itself, "persists the blocked result... so a reopen can replay it"). Without a fix, reopening a session that was blocked "market closed" last night and now finding the market open would still render last night's stale "market closed" banner — `readiness` comes back `null` (the fresh check passed) but `result.mode` is still `"engine_only_blocked"`, and nothing distinguished that from a *freshly run* analysis that came back blocked (which must still render). **Decision: `App.tsx` tracks this explicitly with a `suppressStaleBlocked` flag**, set only when a reopen's fresh check passes but the stored last-assistant turn was blocked, reset on every new analysis and every reopen — see Task 11 Step 5. The alternative (mutating `sessionDetail` or filtering it before `deriveEngineOnlyView` sees it) was rejected because it would make "what's stored" and "what's shown" diverge for no benefit; the flag is the smaller, more legible change.
+
 ## File Structure
 
 **New — `electron-app/src/main/services/market/`** (a new directory; pure files and I/O files kept distinct per `CLAUDE.md`):
@@ -1238,9 +1240,10 @@ The TypeScript half of Task 5. `SidecarSupervisor.compute` gains `horizon` and t
 - Modify: `electron-app/src/main/services/sidecar/sidecarProtocol.ts:118-129`
 - Modify: `electron-app/src/main/services/sidecar/sidecarSupervisor.ts:84-94`
 - Modify: `electron-app/src/main/services/analysis/analysisEnvelope.ts:43-72`
-- Modify: `electron-app/test/main/services/sidecar/sidecarSupervisor.test.ts` (ten `supervisor.compute(...)` call sites)
+- Modify: `electron-app/test/main/services/sidecar/sidecarSupervisor.test.ts` (nine `supervisor.compute(...)` call sites)
 - Modify: `electron-app/test/main/services/analysis/analysisEnvelope.test.ts`
 - Modify: `electron-app/test/endToEnd.integration.test.ts:44`
+- Modify: `electron-app/test/main/ipc/analysisBridge.test.ts:34-44,209` (`sidecarWithProgress`'s `compute` mock and its one `mockImplementationOnce` override both hardcode the *old* 4-arg positional shape — `onRequestId` is their 4th parameter today. Once `compute` takes 5 positional args, `onRequestId?.(42)` inside these mocks would silently bind to the new `candles` argument instead of the real callback, throwing `TypeError: candles is not a function` and breaking the 3 `runAiAssistedRequest` progress tests that use this helper. This is not optional cleanup — without it, Step 6 below cannot actually pass.)
 
 **Interfaces:**
 - Consumes: Task 5's Rust wire contract.
@@ -1254,8 +1257,8 @@ The TypeScript half of Task 5. `SidecarSupervisor.compute` gains `horizon` and t
       "day",
       "positional",
       [
-        { ts: 1767205800, open: 100, high: 105, low: 99, close: 104, volume: 5000 },
-        { ts: 1767292200, open: 104, high: 108, low: 103, close: 107, volume: 6000 },
+        { ts: 1767292200, open: 100, high: 105, low: 99, close: 104, volume: 5000 },
+        { ts: 1767378600, open: 104, high: 108, low: 103, close: 107, volume: 6000 },
       ],
       undefined,
     );
@@ -1304,6 +1307,38 @@ In `electron-app/test/endToEnd.integration.test.ts`, replace line 44:
 ```ts
       const compute = await supervisor.compute("NSE:INFY", "day", "positional", archived.candles);
 ```
+
+In `electron-app/test/main/ipc/analysisBridge.test.ts`, `sidecarWithProgress()` (lines 34-44) hardcodes the old 4-arg `compute` shape — its `onRequestId` parameter is currently 4th, but after Step 4 it is 5th. Replace:
+
+```ts
+  const compute = vi.fn(async (_s: string, _t: string, _c: number[], onRequestId?: (id: number) => void) => {
+    onRequestId?.(42);
+    return computeResponse();
+  });
+```
+
+with:
+
+```ts
+  const compute = vi.fn(async (_s: string, _t: string, _h: string, _c: unknown[], onRequestId?: (id: number) => void) => {
+    onRequestId?.(42);
+    return computeResponse();
+  });
+```
+
+and its one override at line 209, replace:
+
+```ts
+    sidecar.compute.mockImplementationOnce(async (_s, _t, _c, onRequestId?: (id: number) => void) => {
+```
+
+with:
+
+```ts
+    sidecar.compute.mockImplementationOnce(async (_s, _t, _h, _c, onRequestId?: (id: number) => void) => {
+```
+
+(keep the rest of that override's body — the `emit(...)` calls and `onRequestId?.(42)` — exactly as they are; only the parameter list changes.)
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -1369,7 +1404,7 @@ with:
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `npx vitest run test/main/services/analysis test/main/services/sidecar test/main/scanScheduler.test.ts test/main/ipc/analysisBridge.test.ts && npm run typecheck`
-Expected: PASS, clean typecheck. `scanScheduler` and `runAiAssistedRequest` need no edits — they call `assembleEnvelope`, whose own signature is unchanged.
+Expected: PASS, clean typecheck. `scanScheduler` and `runAiAssistedRequest`'s own bodies need no edits — they call `assembleEnvelope`, whose external signature is unchanged. `analysisBridge.test.ts` itself *does* need the `sidecarWithProgress` fix above, because that helper's mock is directly sensitive to `compute`'s new arity even though the code it's testing (`runAiAssistedRequest`) is not.
 
 - [ ] **Step 7: Commit**
 
@@ -2189,7 +2224,7 @@ git commit -m "feat(market): deterministic Kite/data/market-hours readiness gate
   // RendererApi gains: checkReadiness(params: ReadinessCheckParams): Promise<ReadinessResult>
   ```
 
-- [ ] **Step 1: Write the failing test** — in `electron-app/test/main/ipc/analysisBridge.test.ts`, replace every engine_only `AnalysisRunParams` literal's `horizon: "positional"` with `interval: "5minute"` (three occurrences, at roughly lines 106, 119, and inside the `describeEngineOnlyQuery` test around line 18), and append a new `describe` block at the end of the file:
+- [ ] **Step 1: Write the failing test** — in `electron-app/test/main/ipc/analysisBridge.test.ts`, replace `horizon: "positional",` with `interval: "5minute" as const,` in every `mode: "engine_only"` `AnalysisRunParams` literal — verified by `grep -n 'horizon: "positional"'` against the current file, this is **six** occurrences, at lines 89, 106, 119, 281, 323, and 340. Do **not** touch line 18 — that `horizon: "positional"` belongs to `fakeProvider()`'s AI-Assisted `intake` mock result, an unrelated shape that keeps its `horizon` field per this plan's Global Constraints (AI-Assisted stays untouched). Then append a new `describe` block at the end of the file:
 
 ```ts
 describe("runAnalysisRequest readiness gate", () => {
@@ -2263,7 +2298,7 @@ describe("runAnalysisRequest readiness gate", () => {
 });
 ```
 
-In `electron-app/test/main/ipc/rendererApi.test.ts`, add `"checkReadiness"` to the expected-method-name list around line 13, and append:
+In `electron-app/test/main/ipc/rendererApi.test.ts`, rename the test title from "exposes exactly the fifteen bridge methods..." to "exposes exactly the sixteen bridge methods..." (line 5), and insert `"checkReadiness",` into the alphabetically-sorted method list right after `"cancelBenchmark",` (line 7) and before `"copyBenchmarkResult",` (line 8). Then append:
 
 ```ts
   it("routes checkReadiness through analysis:checkReadiness", async () => {
@@ -2455,7 +2490,7 @@ export function describeReadiness(readiness: Extract<ReadinessResult, { ok: fals
 }
 ```
 
-Update the top imports of `analysisBridge.ts` — remove the now-unused `horizonToFetchParams` *value* import from `runAnalysisRequest`'s path (the re-export at line 15 and `runAiAssistedRequest`'s use at line 109 both stay), and add:
+Update the top imports of `analysisBridge.ts` — `horizonToFetchParams` stays imported exactly as it is (the re-export at line 15 and `runAiAssistedRequest`'s own use at line 109 both still need it; only `runAnalysisRequest`'s *engine_only* path stops calling it, which requires no import change since the symbol is still used elsewhere in the file). Add:
 
 ```ts
 import { assembleWarmedEnvelope } from "../services/analysis/warmedEnvelope";
@@ -2624,24 +2659,37 @@ The Horizon toggle goes away entirely and three interval buttons take its place;
   });
 ```
 
-In `electron-app/test/renderer/App.test.tsx`, replace the `/positional/i` click at line 110 and the `runAnalysis` expectation at lines 113-118:
+In `electron-app/test/renderer/App.test.tsx`'s `"runs an Engine-Only analysis with the session id and chosen intent lens"` test (starting line 91), three edits, all within this one test — the surrounding `fireEvent.click(await screen.findByLabelText(/selling stance/i));` at line 107 is **not** touched by any of them, so the intent lens stays `"selling"` throughout:
+
+1. Line 100, inside the mocked `runAnalysis` result: replace `horizon: "positional",` with `interval: "5minute",` (this result's shape is the `AnalysisResult` engine_only variant, which now carries `interval` per Task 10).
+2. Line 110: replace `fireEvent.click(screen.getByRole("button", { name: /positional/i }));` with `fireEvent.click(screen.getByRole("button", { name: /15-minute/i }));`.
+3. Lines 113-118, the `runAnalysis` call assertion — replace:
 
 ```ts
-    fireEvent.click(screen.getByRole("button", { name: /15-minute/i }));
-    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+      expect(bridge.runAnalysis).toHaveBeenCalledWith({
+        mode: "engine_only",
+        sessionId: "session-1",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        horizon: "positional",
+        intent_lens: "selling",
+      }),
+```
 
-    await waitFor(() =>
+with:
+
+```ts
       expect(bridge.runAnalysis).toHaveBeenCalledWith({
         mode: "engine_only",
         sessionId: "session-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
         interval: "15minute",
-        intent_lens: "buying",
+        intent_lens: "selling",
       }),
-    );
 ```
 
-Change the two `horizon: "positional"` fields inside the mocked `runAnalysis` results (lines ~100 and ~201) to `interval: "5minute"`, and append two new tests at the end of the top-level `describe`:
+(`intent_lens` stays `"selling"` — that's what line 107's untouched click actually selects. Do **not** touch line 201's `horizon: "positional"` in the separate `"continues a reopened ai_assisted session..."` test — that mocked result has `mode: "ai_assisted"`, whose `AnalysisResult` variant Task 10 explicitly leaves unchanged, keeping its `horizon` field.)
+
+Then append two new tests at the end of the top-level `describe`:
 
 ```ts
   it("renders the blocked reason and no analysis result when a run is gated", async () => {
@@ -2705,6 +2753,50 @@ Change the two `horizon: "positional"` fields inside the mocked `runAnalysis` re
       }),
     );
     expect(await screen.findByText(/connect your kite account/i)).toBeTruthy();
+  });
+
+  it("does not replay a stale blocked message once a reopened session's fresh readiness check passes", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "s8", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "s8",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "NSE:INFY · 5minute · buying",
+            structured_payload: {
+              mode: "engine_only",
+              sessionId: "s8",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+              interval: "5minute",
+              intent_lens: "buying",
+            },
+          },
+          {
+            role: "assistant",
+            rendered_text: "blocked",
+            structured_payload: {
+              mode: "engine_only_blocked",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              readiness: { ok: false, reason: "market_closed", nextOpenAt: 1_790_000_000 },
+            },
+          },
+        ],
+      }),
+      // The session was blocked when last stored; reopening it now finds the market open.
+      checkReadiness: vi.fn().mockResolvedValue({ ok: true }),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+
+    await waitFor(() => expect(screen.queryByText(/nse is closed/i)).toBeNull());
+    expect(screen.queryByText(/nse is closed/i)).toBeNull();
   });
 ```
 
@@ -2812,6 +2904,14 @@ If `Banner`'s `variant` union does not include `"info"`, use `"warning"` — che
 
 ```tsx
   const [readiness, setReadiness] = useState<Extract<ReadinessResult, { ok: false }> | null>(null);
+  // `result` (below) is re-derived from `sessionDetail` on every render, so a
+  // freshly-run analysis that comes back blocked and a stale stored blocked turn
+  // from a prior visit are indistinguishable by `result.mode` alone. This flag is
+  // the one place that distinction is tracked: true only when reopening found the
+  // *last stored* turn blocked but a *fresh* check now passes, so the stale one
+  // must not be replayed (P13§2 decision 4 applies to a leftover failure banner
+  // exactly as much as a fresh one). Reset on every new analysis and every reopen.
+  const [suppressStaleBlocked, setSuppressStaleBlocked] = useState(false);
 ```
 
 ```tsx
@@ -2819,6 +2919,7 @@ If `Banner`'s `variant` union does not include `"info"`, use `"warning"` — che
     if (!activeSession) return;
     setAnalysisError(null);
     setReadiness(null);
+    setSuppressStaleBlocked(false);
     try {
       await bridge().runAnalysis({ mode: "engine_only", sessionId: activeSession.id, instrument, interval, intent_lens: intentLens });
       setSessionDetail(await bridge().getSession(activeSession.id));
@@ -2828,7 +2929,7 @@ If `Banner`'s `variant` union does not include `"info"`, use `"warning"` — che
   };
 ```
 
-In `onOpenSession`, add `setReadiness(null);` beside the existing `setAnalysisError(null);`, and replace the trailing `lastUserMessage` block:
+In `onOpenSession`, add `setReadiness(null);` and `setSuppressStaleBlocked(false);` beside the existing `setAnalysisError(null);`, and replace the trailing `lastUserMessage` block:
 
 ```tsx
     const lastUserMessage = [...detail.messages].reverse().find((m) => m.role === "user");
@@ -2840,6 +2941,10 @@ In `onOpenSession`, add `setReadiness(null);` beside the existing `setAnalysisEr
       if (payload.mode === "engine_only") {
         const fresh = await bridge().checkReadiness({ instrument: payload.instrument, interval: payload.interval });
         setReadiness(fresh.ok ? null : fresh);
+        const lastAssistantMessage = [...detail.messages].reverse().find((m) => m.role === "assistant");
+        const storedResultWasBlocked =
+          (lastAssistantMessage?.structured_payload as AnalysisResult | undefined)?.mode === "engine_only_blocked";
+        setSuppressStaleBlocked(fresh.ok && storedResultWasBlocked);
       }
     }
 ```
@@ -2852,7 +2957,9 @@ Replace the engine_only render branch:
               <InstrumentSearch onSubmit={onAnalyze} />
               {analysisError && <Banner variant="error">{analysisError}</Banner>}
               {readiness && <Banner variant="info">{readinessMessage(readiness)}</Banner>}
-              {!readiness && result && <AnalysisResultView result={result} history={history} />}
+              {!readiness && result && !(suppressStaleBlocked && result.mode === "engine_only_blocked") && (
+                <AnalysisResultView result={result} history={history} />
+              )}
             </>
           ) : (
 ```
@@ -2917,7 +3024,9 @@ Mirrors the Phase 6/11/12 precedent: an automatable golden path plus live follow
 - P13§10 risks: Kite range limit → open item (i), resolved as an assumption with a failing-loudly guard test. Holiday-calendar staleness → open item (ii), resolved with a concrete file location, a refresh procedure, a weekends-only degradation, and a one-shot console warning (Task 2 + Task 9). First-time backfill latency → surfaced as candle-count progress inside the `insufficient_history` message (Task 11's `readinessMessage`), exactly as §10 asks. `benchmarkRunner.test.ts`'s assertions pinned to the buggy windowing → Task 3 Step 4 states explicitly which existing assertions survive unchanged (all of them, because `baseParams` uses `fromTs: 0`) rather than leaving the implementer to discover it.
 - Not-in-scope items (AI-Assisted untouched, daily ingestion untouched, no new session type/mode/badge, `ScanScheduler` timer logic unchanged, no order path, no rate-limit change) → stated in Global Constraints; no task touches any of them. `scanScheduler.ts`'s single one-field edit in Task 10 Step 7 is a type-union consequence, not a behavior change, and is called out as such.
 
-**2. Placeholder scan:** every code step shows complete, compilable content quoted against the actual current working-tree contents of each file. The two places where the implementer must supply judgment rather than transcribe are both explicit and bounded: Task 2 Step 3's movable-feast holiday dates (with the authoritative source named, and the two dates the tests assert on chosen specifically to be fixed-date so a correction cannot break the suite), and Task 5 Step 1's `end_to_end_test.rs` literal rewrites (with the exact transformation and one worked example given, and a `grep` command to enumerate the rest). No "TBD", "handle edge cases", or "similar to Task N" appears anywhere.
+**2. Placeholder scan:** no "TBD", "handle edge cases", or "similar to Task N" appears anywhere. The two places where the implementer must supply judgment rather than transcribe are both explicit and bounded: Task 2 Step 3's movable-feast holiday dates (with the authoritative source named, and the two dates the tests assert on chosen specifically to be fixed-date so a correction cannot break the suite), and Task 5 Step 1's `end_to_end_test.rs` literal rewrites (with the exact transformation and one worked example given, and a `grep` command to enumerate the rest).
+
+**2a. Post-write verification (added after two independent mechanical fact-checking passes cross-referenced every quoted "existing code" anchor and every referenced identifier/test name against the real repository state — not just a read-through).** Tasks 1, 2, 3, 4, 5, 7, 8, and 9 checked out with zero discrepancies. Tasks 6, 10, and 11 each had at least one concrete defect, since fixed in place in this document: Task 6's new test had timestamps computed one day off, and its arity change to `SidecarSupervisor.compute` silently broke `analysisBridge.test.ts`'s `sidecarWithProgress` mock (fixed by updating that mock alongside the rest of Task 6, and correcting Step 6's false "no edits needed" claim). Task 10's Step 1 undercounted `analysisBridge.test.ts`'s `horizon: "positional"` occurrences (3 claimed, 6 real) and misidentified one location entirely (fixed with an exact `grep`-verified list); it also contained a self-contradictory instruction about removing a still-needed import (corrected to a no-op). Task 11's `App.test.tsx` edits left a stale `intent_lens` assertion mismatched against an untouched UI click, and misapplied a field conversion to an out-of-scope AI-Assisted fixture (both fixed); more substantively, verification surfaced a real gap this plan's own tasks didn't cover — a reopened session's stale stored `engine_only_blocked` turn could still render after a fresh readiness check passed, violating this plan's own "silence on success" rule — resolved via decision (vi) and the `suppressStaleBlocked` flag added to Task 11. Every fix above is reflected directly in that task's steps, not just noted here.
 
 **3. Type consistency:** `CandleInterval = "5minute" | "10minute" | "15minute"` is identical across Tasks 1, 7, 8, 9, 10, 11 and matches the Rust `parse_timeframe` arms added in Task 5. `requiredBars`/`requiredLookback`/`required_lookback` are consistently the camelCase form in app types (`AlgorithmEntry.requiredLookback`, `maxRequiredLookback`, `TopUpParams.requiredBars`) and the snake_case form only on the wire mirror (`AlgorithmWire.required_lookback`), matching `sidecarProtocol.ts`'s own documented convention. `ReadinessResult`'s four variants are byte-identical between the spec's P13§6 block, Task 9's definition, Task 10's `AnalysisResult` extraction, and Task 11's `readinessMessage` switch. `SidecarSupervisor.compute`'s 5-arg shape `(symbol, timeframe, horizon, candles, onRequestId?)` matches across Task 6's definition, its test edits, and Task 8's call. `topUpCandles(deps, params) → { candles, fetched, backfilled }` matches across Tasks 7, 8, and 9. `assembleWarmedEnvelope`'s params object is identical between Task 8's definition and Task 10's `runAnalysisRequest` call site.
 
