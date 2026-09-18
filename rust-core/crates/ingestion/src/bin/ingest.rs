@@ -1,6 +1,5 @@
 use chrono::NaiveDate;
-use ingestion::backfill::{fetch_trading_day, TradingDay};
-use ingestion::error::IngestionError;
+use ingestion::backfill::{fetch_trading_day, DayFetcher, TradingDay};
 use ingestion::importer::{import_bhavcopy_files, import_intraday_files};
 use ingestion::io::fetch_udiff_bhavcopy;
 use std::collections::HashMap;
@@ -36,7 +35,7 @@ fn ingest_day_range(
     exchange: &str,
     from: NaiveDate,
     to: NaiveDate,
-    fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>,
+    fetch: DayFetcher<'_>,
 ) -> Result<usize, Box<dyn Error>> {
     let mut date = from;
     let mut total = 0usize;

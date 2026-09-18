@@ -21,6 +21,11 @@ pub const POLITENESS_DELAY_MS: u64 = 200;
 /// from a file that was fetched successfully (decision (xviii)).
 pub const CLOSED_DAY_LIMIT: usize = 30;
 
+/// Injected day fetcher: given an exchange and a date, hand back that day's raw
+/// archive bytes. Every walker takes one of these rather than doing its own
+/// network I/O, which is what keeps this crate's tests offline and instant.
+pub type DayFetcher<'a> = &'a mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>;
+
 /// One calendar day, after the "was the market open?" question is settled.
 #[derive(Debug)]
 pub enum TradingDay {
@@ -56,7 +61,7 @@ pub struct DayOutcome {
 pub fn fetch_trading_day(
     exchange: &str,
     date: NaiveDate,
-    fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>,
+    fetch: DayFetcher<'_>,
 ) -> Result<TradingDay, IngestionError> {
     if matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
         return Ok(TradingDay::Closed);
@@ -81,7 +86,7 @@ pub fn walk_trading_days_backward(
     exchange: &str,
     symbol: &str,
     start: NaiveDate,
-    fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>,
+    fetch: DayFetcher<'_>,
     on_day: &mut dyn FnMut(DayOutcome) -> ControlFlow<()>,
 ) -> Result<WalkStop, IngestionError> {
     let mut date = start;
