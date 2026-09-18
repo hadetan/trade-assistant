@@ -442,14 +442,15 @@ describe("runBenchmark frontier walk", () => {
       },
     };
 
-    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", lookaheadBars: 1 }));
+    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", lookaheadBars: 1, fromTs: 1_000 }));
 
     expect(ensureDayBackfill).toHaveBeenCalledTimes(1);
     expect(ensureDayBackfill.mock.calls[0][0]).toBe("NSE:INFY");
     expect(ensureDayBackfill.mock.calls[0][1]).toBe("kronos");
-    // This run's own scoring window, not a default: the sidecar sizes the
-    // fetch against required_lookback + lookahead.
-    expect(ensureDayBackfill.mock.calls[0][2]).toBe(1);
+    // This run's own selected day and scoring window, not defaults: the sidecar
+    // sizes against the bars surrounding that one day and cannot infer either.
+    expect(ensureDayBackfill.mock.calls[0][2]).toBe(1_000);
+    expect(ensureDayBackfill.mock.calls[0][3]).toBe(1);
     expect(result.insufficientHistory).toBeUndefined();
     expect(result.decisionPoints).toHaveLength(3);
   });
@@ -524,7 +525,7 @@ describe("runBenchmark frontier walk", () => {
   it("reports backfill progress as its own phase before the frontier walk's", async () => {
     const deps: BenchmarkRunnerDeps = {
       sidecar: {
-        ensureDayBackfill: vi.fn().mockImplementation((_symbol: string, _algoId: string, _lookahead: number, onDay?: (i: number, t: number) => void) => {
+        ensureDayBackfill: vi.fn().mockImplementation((_symbol: string, _algoId: string, _fromTs: number, _lookahead: number, onDay?: (i: number, t: number) => void) => {
           onDay?.(1, 2);
           onDay?.(2, 2);
           return Promise.resolve({ type: "day_backfill", id: 1, have: 2, need: 2, sufficient: true, archive_exhausted: false });
@@ -547,17 +548,19 @@ describe("runBenchmark frontier walk", () => {
     ]);
   });
 
-  it("a lake backfilled to exactly lookback + lookahead still yields a real decision point", async () => {
-    // The bug this guards: a backfill that stops at a bare total of the
-    // algorithm's `required_lookback` leaves the newest bar with no bar after
-    // it to score against, so the lookahead gate (i + lookaheadBars <
-    // series.length) drops every frontier and the "successful" backfill renders
-    // an empty result. `lookback + lookahead` is the exact minimum that admits
-    // one -- the frontier at index lookback - 1, whose window is a full
-    // lookback and whose score lands on the very last bar.
+  it("a thin lake backfilled around the UI's default selected day yields a real decision point for THAT day", async () => {
+    // The bug this guards, in the shape a real invocation has: the Benchmark UI
+    // tests exactly ONE candle (fromTs = the start of the selected day, toTs one
+    // day later) and defaults that day to the entry's EARLIEST bar. A backfill
+    // sized so that *some* frontier somewhere in the series is usable is not
+    // enough -- the one the UI selects has to be the usable one. Here the lake
+    // started with 8 bars and the walk added the 19 older ones the earliest of
+    // those 8 was missing, so that bar itself carries a full lookback.
     const lookback = 20;
     const lookahead = 5;
-    const total = lookback + lookahead;
+    const originalBars = 8;
+    const backfilled = lookback - 1; // the earliest original bar already counts as one
+    const total = backfilled + originalBars; // 27
     const dayStart = 1_700_000_000;
     const candles: CandleWire[] = Array.from({ length: total }, (_, i) => ({
       ts: dayStart + i * DAY_SECONDS,
@@ -567,20 +570,29 @@ describe("runBenchmark frontier walk", () => {
       close: 100 + i,
       volume: 100,
     }));
-    // The window the user selected is the history the lake already had; the
-    // backfilled bars are strictly older, so they precede it in the series.
-    const fromTs = candles[lookback - 1].ts;
+    // The UI's default: the earliest bar the entry had before the backfill.
+    // Every backfilled bar is strictly older, so it sits at index `backfilled`.
+    const selectedIndex = backfilled;
+    const fromTs = candles[selectedIndex].ts;
+    const toTs = fromTs + DAY_SECONDS;
+    // Both gates, for the ONE frontier the loop will actually reach:
+    expect(candles.slice(0, selectedIndex + 1)).toHaveLength(lookback); // leading context
+    expect(selectedIndex + lookahead).toBeLessThan(total); // a real bar to score against
     const windows: number[] = [];
+    const ensureDayBackfill = vi.fn().mockResolvedValue({
+      type: "day_backfill",
+      id: 1,
+      // What the sidecar would answer for this exact lake: 20 bars at-or-before
+      // the selected day (capped at the lookback) and 7 after it (capped at the
+      // lookahead).
+      have: lookback + lookahead,
+      need: lookback + lookahead,
+      sufficient: true,
+      archive_exhausted: false,
+    });
     const deps: BenchmarkRunnerDeps = {
       sidecar: {
-        ensureDayBackfill: vi.fn().mockResolvedValue({
-          type: "day_backfill",
-          id: 1,
-          have: total,
-          need: total,
-          sufficient: true,
-          archive_exhausted: false,
-        }),
+        ensureDayBackfill,
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
         benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[]) => {
           windows.push(window.length);
@@ -590,12 +602,14 @@ describe("runBenchmark frontier walk", () => {
       },
     };
 
-    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", fromTs, toTs: 1e12, lookaheadBars: lookahead }));
+    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", fromTs, toTs, lookaheadBars: lookahead }));
 
+    // The selected day is what the sidecar was sized against.
+    expect(ensureDayBackfill.mock.calls[0][2]).toBe(fromTs);
     expect(result.insufficientHistory).toBeUndefined();
-    // Exactly one: i = lookback - 1 passes both gates, i = lookback fails the
-    // lookahead one. Any smaller lake would have produced none.
-    expect(result.decisionPoints).toHaveLength(1);
+    expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([selectedIndex]);
+    expect(result.decisionPoints[0].ts).toBe(fromTs);
+    // One compute, over a window that is exactly the algorithm's lookback.
     expect(windows).toEqual([lookback]);
   });
 

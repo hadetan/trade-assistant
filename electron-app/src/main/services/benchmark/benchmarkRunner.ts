@@ -44,8 +44,9 @@ export interface BenchmarkResult {
   candles: CandleWire[];
   decisionPoints: DecisionPoint[];
   cancelled: boolean;
-  // Set only when the run has fewer bars than the selected algorithm needs even
-  // after backfill (P14§6); the UI renders this instead of the empty summary
+  // Set only when the run has fewer usable bars around its selected day than
+  // this run needs even after backfill (P14§6); the UI renders this instead of
+  // the empty summary
   // strip and chart that started this phase. `reason` keeps the two shortfalls
   // apart: "symbol_history" is a claim about the symbol, "archive_unreachable"
   // is a claim about the archive, and they must not be worded alike
@@ -106,7 +107,7 @@ export async function runBenchmark(
   if (params.timeframe === "day" && params.source === "bhavcopy") {
     let backfill;
     try {
-      backfill = await deps.sidecar.ensureDayBackfill(params.symbol, params.algoId, params.lookaheadBars, (index, total) =>
+      backfill = await deps.sidecar.ensureDayBackfill(params.symbol, params.algoId, params.fromTs, params.lookaheadBars, (index, total) =>
         onProgress?.({ phase: "backfill", index, total }),
       );
     } catch (error) {

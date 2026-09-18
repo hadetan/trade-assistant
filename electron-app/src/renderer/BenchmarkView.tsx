@@ -53,8 +53,12 @@ function InsufficientHistory({ result }: { result: BenchmarkResult }): JSX.Eleme
     <Banner variant="info">
       {/* "this run", not "{algoId}": `need` is the algorithm's lookback plus
           this run's lookahead scoring window, so crediting it to the algorithm
-          alone would overstate what the model itself requires. */}
-      {result.params.symbol} has {have} days of real listed history; this run needs {need}. Nothing to benchmark over.
+          alone would overstate what the model itself requires. And "around the
+          selected day", not "of history": `have` counts the bars on each side
+          of the one day this run tests, capped at what each side can use, so
+          it is not a claim about the symbol's total depth. */}
+      {result.params.symbol} has {have} of the {need} days this run needs around the selected day. That is all the
+      real listed history the archive has there, so there is nothing to benchmark over.
     </Banner>
   );
 }

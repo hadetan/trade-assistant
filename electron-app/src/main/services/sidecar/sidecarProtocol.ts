@@ -90,11 +90,14 @@ export interface BenchmarkComputeResponseWire {
 export interface DayBackfillResponseWire {
   type: "day_backfill";
   id: number;
+  // Of the `need` bars this run wants, how many it can actually use around the
+  // selected day: bars at-or-before it capped at the lookback, plus bars after
+  // it capped at the lookahead. Capped per side on purpose, so an insufficient
+  // answer can never show have >= need whichever side is short.
   have: number;
   // The total bars this run needs before it can produce even one result: the
   // algorithm's own required_lookback plus the request's lookahead scoring
-  // window -- not the bare registry lookback. `sufficient` is decided against
-  // this same number, so an insufficient answer can never show have >= need.
+  // window -- not the bare registry lookback.
   need: number;
   sufficient: boolean;
   // The walk gave up because the archive had no file for CLOSED_DAY_LIMIT
@@ -150,10 +153,11 @@ export type SidecarRequestWire =
   | { type: "benchmark_compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[]; algo_id: string }
   | { type: "evaluate_scan_gate_stateless"; id: number; prev: ConfluenceWire | null; curr: ConfluenceWire }
   | { type: "list_algorithms"; id: number }
-  // `lookahead` is the requesting run's scoring window: the sidecar sizes the
-  // fetch against the algorithm's required_lookback PLUS it, since a frontier
-  // with no later bar to score against is not a decision point.
-  | { type: "ensure_day_backfill"; id: number; symbol: string; algo_id: string; lookahead: number };
+  // `lookahead` is the requesting run's scoring window and `from_ts` the start
+  // of the one day it will test. The sidecar needs both: it sizes against the
+  // bars around THAT day -- required_lookback at-or-before it, lookahead after
+  // it -- and total partition depth answers neither question.
+  | { type: "ensure_day_backfill"; id: number; symbol: string; algo_id: string; lookahead: number; from_ts: number };
 
 export function encodeRequest(request: SidecarRequestWire): string {
   return `${JSON.stringify(request)}\n`;

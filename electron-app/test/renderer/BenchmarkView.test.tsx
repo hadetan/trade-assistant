@@ -279,7 +279,7 @@ describe("BenchmarkView", () => {
 
     await waitFor(() =>
       expect(container.textContent).toContain(
-        "NSE:ZYDUSWELL has 8 days of real listed history; this run needs 256",
+        "NSE:ZYDUSWELL has 8 of the 256 days this run needs around the selected day",
       ),
     );
     // The confusing empty result is gone, not merely accompanied by a banner.
@@ -314,7 +314,7 @@ describe("BenchmarkView", () => {
     await waitFor(() => expect(container.textContent).toMatch(/could not reach far enough back into the NSE archive/i));
     expect(container.textContent).toContain("41");
     expect(container.textContent).toContain("256");
-    expect(container.textContent).not.toContain("days of real listed history");
+    expect(container.textContent).not.toContain("real listed history the archive has there");
     expect(screen.queryByText(/copy raw result/i)).toBeNull();
   });
 });

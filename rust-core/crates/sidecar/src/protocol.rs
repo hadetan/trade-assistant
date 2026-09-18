@@ -179,17 +179,28 @@ pub struct EnsureDayBackfillRequest {
     /// a real bar exists `lookahead` bars after it, so the algorithm's own
     /// lookback alone never leaves room to score anything.
     pub lookahead: usize,
+    /// Start of the single day the run will actually test (its `fromTs`, Unix
+    /// epoch seconds -- the same convention `ist_session_close_epoch` emits).
+    /// Sizing is meaningless without it: the Benchmark UI tests exactly one
+    /// candle per run, so what matters is that *that* candle has enough bars
+    /// before and after it, not that the partition is deep in total.
+    pub from_ts: i64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct DayBackfillResponse {
     pub id: u64,
+    /// Of the `need` bars this run wants, how many it can actually use:
+    /// `min(leading, lookback) + min(trailing, lookahead)` around the selected
+    /// day. Capped on each side deliberately, so `sufficient: false` always
+    /// implies `have < need` whichever side is short -- reporting a raw row
+    /// count let an insufficient answer render as "has 22 days; needs 20",
+    /// which reads as a contradiction. The cap can undersell a deep symbol
+    /// whose *trailing* side is the blocker; see `day_backfill`.
     pub have: usize,
     /// The total bars this run needs before it can produce even one result: the
     /// algorithm's own required_lookback plus the run's lookahead scoring
-    /// window. Not the bare registry lookback -- reporting that while deciding
-    /// `sufficient` against the larger total let an insufficient answer render
-    /// as "has 22 days; needs 20", which reads as a contradiction.
+    /// window.
     pub need: usize,
     /// false => `have` is the symbol's full available real history, capped by
     /// the "10 consecutive absent trading days" heuristic (P14§2 item 4) --

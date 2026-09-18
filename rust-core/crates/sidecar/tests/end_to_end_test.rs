@@ -504,8 +504,9 @@ fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
         .spawn()
         .expect("sidecar binary must start");
 
-    let request =
-        r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__","lookahead":0}"#;
+    // A real IST session-close epoch (2024-01-15 15:30 IST), the same shape the
+    // Electron mirror sends as the selected day's start.
+    let request = r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__","lookahead":0,"from_ts":1705312800}"#;
     {
         let stdin = child.stdin.as_mut().unwrap();
         writeln!(stdin, "{request}").unwrap();

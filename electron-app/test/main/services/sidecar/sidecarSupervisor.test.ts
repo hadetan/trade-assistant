@@ -3,6 +3,11 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { BACKFILL_REQUEST_TIMEOUT_MS, SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
 
+// 2024-01-15 15:30 IST, the shape a real selected day carries. These
+// supervisor tests are about transport, not sizing, but 0 would be a 1970
+// selection no caller could ever make.
+const SELECTED_DAY_TS = 1_705_312_800;
+
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
   stdout = new PassThrough();
@@ -311,18 +316,20 @@ describe("SidecarSupervisor", () => {
   it("sends an ensure_day_backfill request and resolves the matching day_backfill response", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", 5);
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", SELECTED_DAY_TS, 5);
 
     const [request] = await requestsSeen;
-    // The run's lookahead rides along: the sidecar sizes the fetch against
-    // required_lookback + lookahead, since a frontier with no bar to score
-    // against is not a decision point (P14 second-pass fix I-1).
+    // Both sizing inputs ride along: the sidecar counts the bars at-or-before
+    // `from_ts` against required_lookback and the bars after it against
+    // `lookahead`, and it has no other way to learn either (P14 third-pass fix
+    // C2).
     expect(request).toEqual({
       type: "ensure_day_backfill",
       id: 1,
       symbol: "NSE:ZYDUSWELL",
       algo_id: "kronos",
       lookahead: 5,
+      from_ts: SELECTED_DAY_TS,
     });
 
     children[0].stdout.write(
@@ -346,7 +353,7 @@ describe("SidecarSupervisor", () => {
   it("carries an archive_exhausted answer through unchanged", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", 0);
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", SELECTED_DAY_TS, 0);
     await requestsSeen;
 
     children[0].stdout.write(
@@ -368,7 +375,7 @@ describe("SidecarSupervisor", () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
     const seen: Array<[number, number]> = [];
-    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", 0, (index, total) => seen.push([index, total]));
+    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0, (index, total) => seen.push([index, total]));
     await requestsSeen;
 
     children[0].stdout.write(
@@ -400,7 +407,7 @@ describe("SidecarSupervisor", () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
     const seen: Array<[number, number]> = [];
-    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", 0, (index, total) => seen.push([index, total]));
+    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0, (index, total) => seen.push([index, total]));
     await requestsSeen;
 
     children[0].stdout.write(
@@ -432,7 +439,7 @@ describe("SidecarSupervisor", () => {
     });
     supervisor.start();
 
-    const backfill = supervisor.ensureDayBackfill("NSE:INFY", "kronos", 0); // id 1
+    const backfill = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0); // id 1
     const ordinary = supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [], "sma"); // id 2
 
     await expect(ordinary).rejects.toThrow(/timed out after 5ms/);
