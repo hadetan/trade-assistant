@@ -22,6 +22,13 @@ pub const BACKFILL_SOURCE: &str = "bhavcopy";
 /// fetched successfully, so it is evidence about the symbol alone.
 pub const ABSENT_DAY_LIMIT: usize = 10;
 
+/// Width of the day-partition boundary below: `BenchmarkView.tsx` sends
+/// `from_ts` as UTC midnight of the selected day and derives its own `toTs`
+/// as `dayStart + DAY_SECONDS`; this is that same constant on this side of
+/// the wire. Changing one without the other reopens the boundary bug fix
+/// round 3 of this subsystem existed to close.
+const DAY_SECONDS: i64 = 86_400;
+
 /// Of the `lookback + lookahead` bars a run wants, how many it can actually
 /// use. Each side is capped at what it is allowed to contribute, so a shortfall
 /// on either side lands strictly below the total and `sufficient: false` can
@@ -81,9 +88,10 @@ pub fn handle_ensure_day_backfill(
     // than it is. This source is day-only (BACKFILL_TIMEFRAME), so the end of
     // the selected partition is simply one calendar day on -- the same
     // `dayStart + DAY_SECONDS` the UI computes for its own `toTs`.
-    let to_ts = request.from_ts + 86_400;
+    let to_ts = request.from_ts + DAY_SECONDS;
     let mut leading = existing.iter().filter(|c| c.ts < to_ts).count();
     let mut trailing = existing.iter().filter(|c| c.ts >= to_ts).count();
+    let mut has_selected_day = existing.iter().any(|c| c.ts >= request.from_ts && c.ts < to_ts);
 
     // No candle ON the selected day means the symbol did not trade it -- a
     // weekend, a holiday, or a gap in its listing. The run would have no bar to
@@ -92,10 +100,12 @@ pub fn handle_ensure_day_backfill(
     // surrounding context, because the shortfall is not "too little history
     // around a real bar" -- there is no bar.
     //
-    // Gated on a non-empty lake: an empty partition carries no evidence about
-    // the symbol's calendar at all, and filling it from scratch is exactly what
-    // the walk below is for.
-    if !existing.is_empty() && !existing.iter().any(|c| c.ts >= request.from_ts && c.ts < to_ts) {
+    // Gated on a non-empty lake here so an empty partition still reaches the
+    // walk below and gets a chance to fill itself from scratch. An empty lake
+    // that STILL has no candle on the selected day once the walk (if any) is
+    // done is caught structurally by the final `has_selected_day` gate below,
+    // not argued away as unreachable.
+    if !existing.is_empty() && !has_selected_day {
         return DayBackfillResponse {
             id,
             have: 0,
@@ -188,16 +198,25 @@ pub fn handle_ensure_day_backfill(
     };
     // Authoritative split: recount from the partition itself rather than trust
     // the in-memory counter, so a write that failed late can never be reported
-    // as a bar the run will get.
+    // as a bar the run will get. `has_selected_day` gets the same treatment --
+    // the walk only ever adds days OLDER than the selection, so it can turn an
+    // empty lake into one with real leading/trailing context without ever
+    // supplying the selected day itself, and the pre-walk snapshot alone
+    // cannot tell the two apart.
     if let Ok(candles) = store.read_sourced_candles(&request.symbol, BACKFILL_TIMEFRAME, BACKFILL_SOURCE) {
         leading = candles.iter().filter(|c| c.ts < to_ts).count();
         trailing = candles.iter().filter(|c| c.ts >= to_ts).count();
+        has_selected_day = candles.iter().any(|c| c.ts >= request.from_ts && c.ts < to_ts);
     }
     DayBackfillResponse {
         id,
-        have: usable_bars(leading, trailing, lookback, lookahead),
+        // Zeroing `have` alongside `sufficient` here, not just gating
+        // `sufficient` alone -- reporting a nonzero `have` for a day that has
+        // no candle at all reintroduces the exact have>=need-but-insufficient
+        // contradiction (I-2) this response shape exists to prevent.
+        have: if has_selected_day { usable_bars(leading, trailing, lookback, lookahead) } else { 0 },
         need,
-        sufficient: leading >= lookback && trailing >= lookahead,
+        sufficient: has_selected_day && leading >= lookback && trailing >= lookahead,
         archive_exhausted,
         error,
     }
@@ -430,7 +449,7 @@ mod tests {
         store.write_sourced_candles("NSE:ZYDUSWELL", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &already).unwrap();
         let earliest = date(2023, 11, 27);
         let from_ts = selected_day_ts(earliest);
-        let end_of_selected_day = from_ts + 86_400;
+        let end_of_selected_day = from_ts + DAY_SECONDS;
         let mut attempts: Vec<NaiveDate> = Vec::new();
         let mut fetch = |_e: &str, d: NaiveDate| {
             attempts.push(d);
@@ -592,6 +611,42 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_lake_that_fills_around_a_gap_on_the_selected_day_itself_is_still_insufficient() {
+        // The one mismatch the review's 857-scenario probe found: an empty
+        // lake, a `from_ts` landing on `today` (so the walk's own starting
+        // point IS the selection), and a symbol that happens to be absent
+        // specifically on that one day but present on the days just before
+        // it. The walk fills `leading` past `lookback` from those older days
+        // alone, so a check that trusts leading/trailing counts without also
+        // confirming a candle exists ON the selection reports a false
+        // `sufficient: true` -- the empty-lake carve-out was "argued
+        // unreachable" via the UI picker, not structurally impossible here.
+        let lookback = lookback_of("obv");
+        assert!(lookback == 2, "this fixture is sized for obv's 2-bar lookback");
+        let today = date(2024, 1, 15);
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        let mut attempts: Vec<NaiveDate> = Vec::new();
+        let mut fetch = |_e: &str, d: NaiveDate| {
+            let symbols: &[&str] = if d == today { &["TCS"] } else { &["INFY"] };
+            attempts.push(d);
+            Ok(bhavcopy_csv(d, symbols))
+        };
+
+        let response = handle_ensure_day_backfill(
+            &store,
+            request("NSE:INFY", "obv", 0, selected_day_ts(today)),
+            today,
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        assert!(!response.sufficient, "the selection itself has no candle, no matter how deep the older context is");
+        assert_eq!(response.have, 0, "a day with no candle at all must report zero usable bars, not a nonzero count");
+        assert_eq!(response.need, lookback);
+    }
+
+    #[test]
     fn an_insufficient_answer_never_claims_more_history_than_it_says_it_needs() {
         // The leading-limited mirror of the test above: the trailing side is
         // fully satisfied and the walk really runs, but the symbol is in no
@@ -724,7 +779,7 @@ mod tests {
         // after ten fetches total.
         assert_eq!(attempts.len(), 17);
         assert_eq!(attempts.last(), Some(&date(2023, 12, 22)));
-        assert_eq!(response.have, 1);
+        assert_eq!(response.have, 0, "the found candle is on Jan 5, not on the Jan 15 selection itself");
         assert!(!response.sufficient);
     }
 

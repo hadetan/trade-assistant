@@ -26,6 +26,11 @@ function fromDate(value: string): number {
   return Math.floor(new Date(`${value}T00:00:00Z`).getTime() / 1000);
 }
 
+// `fromDate` yields UTC midnight of the selected day; `ensureDayBackfill`'s
+// `fromTs` argument is exactly this value. `day_backfill.rs` derives that
+// run's partition as `[from_ts, from_ts + DAY_SECONDS)` and splits leading
+// (before) from trailing (at-or-after) history at that upper edge — changing
+// this encoding or the day length here requires changing that file too.
 const DAY_SECONDS = 86_400;
 
 function progressLabel(algoId: string | null, progress: BenchmarkProgress | null): string {
