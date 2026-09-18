@@ -4,7 +4,7 @@
 
 **Goal:** Make a Benchmark run against a thin-history symbol fetch the day/bhavcopy history the selected algorithm actually needs — on demand, inside the existing sidecar process — and, when the symbol genuinely does not have that much listed history, say so in one clear sentence instead of returning an empty `algos:` result.
 
-**Architecture:** Three layers, bottom-up. (1) The `ingestion` crate learns to tell a market-holiday 404 apart from a real fetch failure (`IngestionError::NotFound`), and gains a new `backfill.rs` holding two pure-ish primitives: `fetch_trading_day` (weekend/holiday → `Closed`, everything else → the day's raw CSV bytes) and `walk_trading_days_backward` (walks calendar days backward, skipping non-trading days, handing each real trading day's parsed row for one symbol to a caller-supplied `ControlFlow` callback). The existing `ingest` CLI's day-range loop is refactored onto `fetch_trading_day`, so the holiday distinction is shared rather than duplicated. (2) The `sidecar` crate takes a direct dependency on `ingestion` (already transitively present via `backtest`) and gains an `EnsureDayBackfill` request whose handler resolves the requested algorithm's `required_lookback()` from the registry, reads the symbol's current day/bhavcopy lake depth, and — if short — drives `walk_trading_days_backward` from the day before the lake's earliest candle (or from today, if the lake has nothing), persisting each fetched candle immediately through the same `CandleStore::write_sourced_candles` the CLI and `PersistCandles` already use, emitting one counted progress line per persisted day, and stopping when either the requirement is met or ten consecutive real trading days have shown no row for the symbol. (3) Electron mirrors the wire type, `runBenchmark` calls the backfill as a pre-flight before the frontier walk and forwards its progress through the *existing* `onBenchmarkProgress` IPC channel tagged `phase: "backfill"`, and `BenchmarkView` renders either the phase-aware progress pill or a single insufficient-history banner.
+**Architecture:** Three layers, bottom-up. (1) The `ingestion` crate learns to tell a market-holiday 404 apart from a real fetch failure (`IngestionError::NotFound`), and gains a new `backfill.rs` holding two pure-ish primitives: `fetch_trading_day` (weekend/holiday → `Closed`, everything else → the day's raw CSV bytes) and `walk_trading_days_backward` (walks calendar days backward, skipping non-trading days, handing each real trading day's parsed row for one symbol to a caller-supplied `ControlFlow` callback). The existing `ingest` CLI's day-range loop is refactored onto `fetch_trading_day`, so the holiday distinction is shared rather than duplicated. (2) The `sidecar` crate takes a direct dependency on `ingestion` (already transitively present via `backtest`) and gains an `EnsureDayBackfill` request whose handler resolves the requested algorithm's `required_lookback()` from the registry, reads the symbol's current day/bhavcopy lake depth, and — if short — drives `walk_trading_days_backward` from the day before the lake's earliest candle (or from today, if the lake has nothing), persisting each fetched candle immediately through the same `CandleStore::write_sourced_candles` the CLI and `PersistCandles` already use, emitting one counted progress line per persisted day, and stopping on whichever of three conditions fires first: the requirement is met, ten consecutive real trading days have shown no row for the symbol, or thirty consecutive weekday fetches came back 404 — the walker's own bound against an archive that has stopped answering (decision (xviii)). (3) Electron mirrors the wire type, `runBenchmark` calls the backfill as a pre-flight before the frontier walk — only for a `("day", "bhavcopy")` entry — and forwards its progress through the *existing* `onBenchmarkProgress` IPC channel tagged `phase: "backfill"`, and `BenchmarkView` renders either the phase-aware progress pill or a single shortfall banner whose wording says which of the two shortfalls happened.
 
 **Tech Stack:** Rust (`cargo test -p <crate>` from `rust-core/`; one new inter-crate path dependency, `sidecar → ingestion`, no new third-party crates); TypeScript, Electron 33, React 18, Vitest (`npx vitest run <path>`, `npm test`, `npm run typecheck` from `electron-app/`).
 
@@ -25,7 +25,8 @@ Every task's requirements implicitly include this section.
 - **Naming:** Rust `snake_case` functions/vars, `PascalCase` types. TypeScript `camelCase` functions/vars, `PascalCase` types/classes/React components. Wire-mirror interfaces in `sidecarProtocol.ts` keep `snake_case` field names deliberately — they mirror the bytes, not this project's TS convention (see that file's own header comment).
 - **Structure:** pure logic stays separate from I/O. `ingestion/src/backfill.rs` performs **no** network call and **no** sleep of its own — both are supplied by the caller's injected fetch closure. `sidecar/src/day_backfill.rs` is the one new file that orchestrates store I/O plus the injected fetch, and it lives beside `handlers.rs` rather than inside it.
 - **Commit convention:** each task's implementer commits as the repo's own configured git user via plain `git commit` — NEVER pass `--author`, NEVER add a `Co-Authored-By` trailer, NEVER use `--no-verify`. Conventional-commit subjects (`type(scope): message`), matching sibling plans.
-- **Two toolchains, two test runners.** **Rust:** run from `rust-core/` — `cargo test -p <crate>`, `cargo test -p <crate> --lib`, `cargo test -p <crate> --test <file>`. **TypeScript:** run from `electron-app/` — `npx vitest run <path>`, `npm test`, `npm run typecheck` (`src/**` only).
+- **Two toolchains, two test runners.** **Rust:** run from `rust-core/` — `cargo test -p <crate>`, `cargo test -p <crate> --lib`, `cargo test -p <crate> --test <file>`. **TypeScript:** run from `electron-app/` — `npx vitest run <path>`, `npm test`, `npm run typecheck`.
+- **`npm run typecheck` checks production code only — it is not a safety net for test-file edits.** It is plain `tsc --noEmit`, and `electron-app/tsconfig.json` sets `include: ["src/**/*"]` with `exclude: ["**/*.test.ts", "**/*.test.tsx", …]`, so **no test file is ever type-checked**. A missed edit in a test fixture (this plan asks for several mechanical ones) therefore surfaces only as a runtime vitest failure — `deps.sidecar.ensureDayBackfill is not a function`, `undefined` reads — never as a typecheck error. The safety net for test-file completeness is **running the affected test file(s) and seeing them pass**, which every task's steps already do; `typecheck`'s job here is confirming the `src/**` production change compiles.
 - **Working-tree note:** at plan time `electron-app/` carries **uncommitted** changes to `benchmarkRunner.ts`, `benchmarkChart.ts`, `BenchmarkView.tsx`/`.css` and their three test files, and `docs/.../phase13-...-plan.md`. Every code excerpt in this plan is quoted from that **current working-tree state** on branch `phase13-intraday-forecaster-warmup`, not from a clean `HEAD`. Commit or stash nothing — implement on top of what is there.
 
 ## Drift found against the design spec's citations (corrected here, not propagated)
@@ -57,7 +58,11 @@ Citations that were checked and are **correct**: `benchmarkRunner.ts:76-78` (`Be
 
 **(vii) `runBenchmark`'s `onProgress` becomes a single object.** P14§6 says backfill progress is "distinguished from frontier-walk progress by a `phase` field" and that "both variants extend the existing `{ index, total }` shape". **Decision: `onProgress?: (progress: BenchmarkProgress) => void` where `BenchmarkProgress = { phase: "backfill" | "run"; index: number; total: number }`, replacing today's positional `(index: number, total: number)`.** Every call site is enumerated in Task 7; there are exactly **1** in `src/` (`benchmarkBridge.ts:32-33`) and **3** in `test/` (`benchmarkRunner.test.ts:233`, `:265-266`, `:323-324`), plus **1** assertion in `benchmarkBridge.test.ts:124`.
 
-**(viii) The pre-flight runs only for `params.timeframe === "day"`.** P14§6 says the call happens "on every run". That is wrong as written: the handler writes into the `("day", "bhavcopy")` partition, so running it for a `minute`/`kaggle` benchmark entry would fetch day bars the run cannot use and then report a bogus have/need. **Decision: `runBenchmark` skips the pre-flight entirely unless `params.timeframe === "day"`.** *Residual gap, accepted:* an intraday benchmark against a thin `minute` partition still shows the original confusing empty result. Closing that needs an intraday data source, which P14§1 puts firmly out of scope.
+**(viii) The pre-flight runs only for `params.timeframe === "day" && params.source === "bhavcopy"` — the timeframe alone is not enough.** P14§6 says the call happens "on every run". That is wrong as written: the handler reads and writes the `("day", "bhavcopy")` partition and nothing else, so running it for a `minute`/`kaggle` benchmark entry would fetch day bars the run cannot use and then report a bogus have/need.
+
+Gating on the timeframe alone is *also* wrong, and this is the sharper trap: the live intraday warm-up path already on this branch persists `("day", "kite")` partitions too — `historicalDataArchive.ts:17-26`'s `INTERVAL_LOOKBACK_HINT_DAYS` carries a `day: 2000` entry and `candleWarmup.ts:10`'s `WARMUP_SOURCE` is `"kite"` — and those entries appear in the benchmark picker (`listLakeSymbols`) right alongside bhavcopy ones. A `("day", "kite")` entry passing a timeframe-only gate would make the pre-flight check and backfill the `("day", "bhavcopy")` partition while `readLakeCandles` then reads `("day", "kite")` for the actual run: wasted network calls at best, and at worst a flatly wrong "insufficient history" verdict on a Kite-sourced partition that is perfectly deep enough. `BenchmarkRunParams` already carries the field (`benchmarkRunner.ts:25-33`: `source: string`), so the gate costs one extra comparison.
+
+**Decision: `runBenchmark` skips the pre-flight entirely unless `params.timeframe === "day" && params.source === "bhavcopy"`.** Two tests pin it: a `minute`/`kaggle` entry and a `day`/`kite` entry each run exactly as they do today, with `ensureDayBackfill` never called (Task 7 Step 3). *Residual gap, accepted:* an intraday benchmark against a thin `minute` partition, or a benchmark against a thin `("day", "kite")` partition, still shows the original confusing empty result. Closing the first needs an intraday data source, which P14§1 puts firmly out of scope; closing the second means driving the live Kite warm-up path from the Benchmark tool, which would give the "pure local-lake reader" (P14§1) a Kite dependency — also out of scope for this phase.
 
 **(ix) `DayBackfillResponse` gains an `error: Option<String>` field.** P14§5's struct has none. But the handler is store-backed: it can fail on "no `--lake-root` configured", on a `CandleStore` read/write error, and on a non-404 fetch error mid-walk. **Decision: add `error: Option<String>` with `#[serde(skip_serializing_if = "Option::is_none")]`, exactly matching `PersistCandlesResponse`, `WatchlistResponse`, `ScanGateResponse`, `LakeSymbolsResponse`, and `LakeCandlesResponse`.** Without it a network outage would be indistinguishable on the wire from a genuinely short-history symbol.
 
@@ -77,10 +82,28 @@ Citations that were checked and are **correct**: `benchmarkRunner.ts:76-78` (`Be
 
 **(xvii) Test bhavcopy CSVs are built inline, per date — the shared fixture must not be reused.** `ingestion/tests/fixtures/nse_bhavcopy_udiff_sample.csv` has a hardcoded `TradDt` of `2024-01-15`. `bhavcopy.rs:56` derives each candle's `ts` from `TradDt`, and `write_sourced_candles` merges on `ts` — so feeding that one fixture back for every walked day would write the *same* candle 256 times and the lake would never grow past one row. **Decision: every backfill test builds its CSV with a small local `bhavcopy_csv(date, rows)` helper that stamps the walked date into `TradDt`.** The helper is duplicated in three test modules (`ingestion/tests/backfill_test.rs`, `ingestion/src/bin/ingest.rs`'s `mod tests`, `sidecar/src/day_backfill.rs`'s `mod tests`) because an integration test, a bin's unit tests, and another crate cannot share a helper without a test-support crate this workspace does not have and does not need for ~10 lines.
 
+**(xviii) `walk_trading_days_backward` bounds itself against an archive that has stopped answering — a second, independent stop condition the spec does not have.** P14§4's sketch gives the walk exactly one exit: `on_day` returning `ControlFlow::Break`. But `on_day` is only ever invoked for a **successfully fetched** (`Traded`) day, so a run of consecutive `Closed` (404) weekdays advances no stopping condition at all. That is not a hypothetical: NSE's UDiFF archive has a start date, and a ttm/moirai backfill needs 512 real trading days (P14§3) — a walk that reaches past the archive's coverage 404s on every subsequent weekday and, with the spec's single exit, walks backward forever, one weekday at a time, wedging the single-threaded serial sidecar until the user hits Stop. The same failure mode is what a change to the archive's URL format (a named P14§9 risk) would produce.
+
+**Decision: `backfill.rs` exports `pub const CLOSED_DAY_LIMIT: usize = 30;` and the walker returns `Result<WalkStop, IngestionError>` where `WalkStop` is `CallerStopped | ArchiveExhausted`.** The walker counts *consecutive weekday* `Closed` outcomes (weekends never reach the network, so they never count) and returns `Ok(WalkStop::ArchiveExhausted)` once that counter hits the limit; **any** successful `Traded` fetch resets it to 0, so a scattered single holiday mid-history can never accumulate toward it.
+
+This counter is **independent of `ABSENT_DAY_LIMIT`** and must not be merged with it. `ABSENT_DAY_LIMIT` counts successfully-fetched trading days on which the *target symbol* has no row — a fact about the symbol. `CLOSED_DAY_LIMIT` counts weekdays on which the *archive* has no file — a fact about the archive. They answer different questions and produce different user-facing messages; `ABSENT_DAY_LIMIT`'s existing logic is correct and is not touched.
+
+*Why 30:* the longest NSE holiday cluster in practice is a handful of weekday closures (a festival stretch plus an adjacent exchange holiday), nowhere near ten consecutive weekdays, so 30 is generous by a wide margin against any real calendar. It also bounds the worst case tightly: 30 extra requests at `POLITENESS_DELAY_MS` is ~6 seconds of wasted work before the walk gives an honest answer, instead of an unbounded loop. The reasoning is stated in the constant's doc comment, matching how `ABSENT_DAY_LIMIT` justifies its own value.
+
+**This is a third outcome, not a rebranded `sufficient: false`.** From the walker's vantage point "the archive stopped answering" is genuinely indistinguishable from "this symbol has a gap that wide" — but it is *not* the same claim as "this symbol only has 8 days of listed history," and silently reporting it as such would tell the user a falsehood about their symbol. So it is carried all the way out: `DayBackfillResponse` gains `archive_exhausted: bool` (always serialized, alongside `sufficient`), `DayBackfillResponseWire` mirrors it, and `BenchmarkResult.insufficientHistory` becomes `{ have, need, reason: "symbol_history" | "archive_unreachable" }` so `BenchmarkView` renders a differently-worded banner — "could not reach far enough back into the archive", `variant="warning"` — instead of the symbol-history sentence, `variant="info"`. A dedicated all-404 walker test (Task 2 Step 1) and a dedicated all-404 handler test (Task 5 Step 6) prove the walk terminates at the cap rather than looping.
+
+## Accepted risks this plan does not close
+
+P14§9's four risks stand as written. Three more are named here because they are consequences of this plan's own decisions, and a future reader should see that each was weighed rather than missed. None blocks the phase.
+
+- **Every *other* sidecar request queued behind a running backfill still carries the short default timeout and will spuriously reject.** The sidecar's request loop is single-threaded and fully serial (P14§2 item 5), and decision (xi) raises the timeout to 30 minutes **for the backfill request only**. So during a multi-minute first-time backfill, a live chat compute call or a watchlist scan tick issued from another part of the app waits in the queue and then rejects at `DEFAULT_REQUEST_TIMEOUT_MS` (30 s) even though the sidecar is perfectly healthy and still working. **Accepted, deliberately.** The obvious "fix" — raising the default globally — is strictly worse: it would make a genuinely hung or crashed *interactive* call take 30 minutes to surface instead of 30 seconds, turning a rare edge case into a routine one. The other candidate fixes (a request queue with per-type priorities, or automatic retry-after-backfill) are real machinery for a condition the user can already resolve by pressing Stop, and are out of scope for this phase. If this becomes a recurring annoyance in practice, the right shape is a queue in `SidecarSupervisor`, not a timeout change.
+- **`CLOSED_DAY_LIMIT = 30` is a judgment call, not a proof** — the same species as P14§9's note on the ten-absent-day heuristic. An NSE closure lasting more than 30 consecutive weekdays (six calendar weeks) would be reported as "archive may not cover this far back" when the archive is in fact fine. No such closure has occurred; the alternative (no bound at all) is the defect this decision exists to remove.
+- **A `("day", "kite")` benchmark entry gets no backfill at all** (decision (viii)). It runs exactly as it does today, including the confusing empty result when that partition is thin. Backfilling it means giving the Benchmark tool a live Kite dependency, which P14§1's "pure local-lake reader" framing rules out for this phase.
+
 ## File Structure
 
 **New — `rust-core/crates/ingestion/`:**
-- `src/backfill.rs` — `POLITENESS_DELAY_MS`, `TradingDay`, `DayOutcome`, `fetch_trading_day`, `walk_trading_days_backward`. Day-sequencing policy only: no network, no sleep, no lake writes.
+- `src/backfill.rs` — `POLITENESS_DELAY_MS`, `CLOSED_DAY_LIMIT`, `TradingDay`, `WalkStop`, `DayOutcome`, `fetch_trading_day`, `walk_trading_days_backward`. Day-sequencing policy only: no network, no sleep, no lake writes.
 - `tests/backfill_test.rs` — the walker's and `fetch_trading_day`'s tests, all with injected fetch closures.
 
 **New — `rust-core/crates/sidecar/`:**
@@ -291,6 +314,8 @@ git commit -m "feat(ingestion): distinguish a holiday 404 from a real bhavcopy f
 
 The heart of the phase. Two functions, no network of their own: `fetch_trading_day` answers "was this a trading day, and if so what were its bytes?" given an injected fetcher, and `walk_trading_days_backward` walks calendar days backward from a start date, handing every *real* trading day's row for one symbol to a caller-supplied callback that decides when to stop.
 
+The walker carries **its own** stop condition on top of the caller's, because the caller's only fires on a successful fetch: `CLOSED_DAY_LIMIT` consecutive weekday 404s end the walk with `WalkStop::ArchiveExhausted`, which is what keeps a walk that runs off the end of the archive's coverage from spinning backward forever (decision (xviii)). Any successful fetch resets that counter.
+
 The fetcher signature is `FnMut(&str, NaiveDate)` — exchange first, date second — deliberately: the real implementation in Task 5 is then literally `|exchange, date| fetch_udiff_bhavcopy(date, exchange)`, with no need for the caller to know or duplicate the exchange the walk derived from the symbol.
 
 **Files:**
@@ -302,16 +327,20 @@ The fetcher signature is `FnMut(&str, NaiveDate)` — exchange first, date secon
 - Consumes: `IngestionError::NotFound` (Task 1); `crate::bhavcopy::parse_udiff_equity_bhavcopy`; `crate::model::ParsedCandle`.
 - Produces:
   - `pub const POLITENESS_DELAY_MS: u64 = 200;`
+  - `pub const CLOSED_DAY_LIMIT: usize = 30;`
   - `pub enum TradingDay { Traded(Vec<u8>), Closed }`
+  - `pub enum WalkStop { CallerStopped, ArchiveExhausted }`
   - `pub struct DayOutcome { pub date: NaiveDate, pub candle: Option<ParsedCandle> }`
   - `pub fn fetch_trading_day(exchange: &str, date: NaiveDate, fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>) -> Result<TradingDay, IngestionError>`
-  - `pub fn walk_trading_days_backward(exchange: &str, symbol: &str, start: NaiveDate, fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>, on_day: &mut dyn FnMut(DayOutcome) -> ControlFlow<()>) -> Result<(), IngestionError>`
+  - `pub fn walk_trading_days_backward(exchange: &str, symbol: &str, start: NaiveDate, fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>, on_day: &mut dyn FnMut(DayOutcome) -> ControlFlow<()>) -> Result<WalkStop, IngestionError>`
 
 - [ ] **Step 1: Write the failing tests** — create `rust-core/crates/ingestion/tests/backfill_test.rs`:
 
 ```rust
-use chrono::NaiveDate;
-use ingestion::backfill::{fetch_trading_day, walk_trading_days_backward, DayOutcome, TradingDay};
+use chrono::{Datelike, NaiveDate, Weekday};
+use ingestion::backfill::{
+    fetch_trading_day, walk_trading_days_backward, DayOutcome, TradingDay, WalkStop, CLOSED_DAY_LIMIT,
+};
 use ingestion::error::IngestionError;
 use ingestion::time::ist_session_close_epoch;
 use std::ops::ControlFlow;
@@ -381,11 +410,78 @@ fn the_walk_visits_consecutive_trading_days_backward_and_never_fetches_a_weekend
         if visited.len() == 3 { ControlFlow::Break(()) } else { ControlFlow::Continue(()) }
     };
 
-    walk_trading_days_backward("NSE", "NSE:INFY", date(2024, 1, 15), &mut fetch, &mut on_day).unwrap();
+    let stop =
+        walk_trading_days_backward("NSE", "NSE:INFY", date(2024, 1, 15), &mut fetch, &mut on_day).unwrap();
 
+    assert_eq!(stop, WalkStop::CallerStopped);
     // Mon 15 -> (Sun 14, Sat 13 skipped with no fetch) -> Fri 12 -> Thu 11.
     assert_eq!(visited, vec![date(2024, 1, 15), date(2024, 1, 12), date(2024, 1, 11)]);
     assert_eq!(attempts, visited);
+}
+
+#[test]
+fn an_archive_that_404s_on_every_weekday_ends_the_walk_at_the_cap_instead_of_looping_forever() {
+    // The defect CLOSED_DAY_LIMIT exists for: `on_day` only ever runs for a
+    // fetched day, so with the callback as the walk's only exit an archive that
+    // has stopped answering -- walked past its coverage, or its URL format
+    // changed -- would step backward one weekday at a time forever, wedging the
+    // serial sidecar until the user hits Stop. If this test hangs, the walk has
+    // no bound of its own and the cap is not wired up.
+    let mut attempts: Vec<NaiveDate> = Vec::new();
+    let mut fetch = |_e: &str, d: NaiveDate| -> Result<Vec<u8>, IngestionError> {
+        attempts.push(d);
+        Err(IngestionError::NotFound)
+    };
+    let mut visited: Vec<NaiveDate> = Vec::new();
+    // Deliberately never breaks -- the walk must terminate on its own.
+    let mut on_day = |outcome: DayOutcome| {
+        visited.push(outcome.date);
+        ControlFlow::Continue(())
+    };
+
+    let stop =
+        walk_trading_days_backward("NSE", "NSE:INFY", date(2024, 1, 15), &mut fetch, &mut on_day).unwrap();
+
+    assert_eq!(stop, WalkStop::ArchiveExhausted, "the walk must report WHY it stopped");
+    assert!(visited.is_empty(), "a closed day never reaches the callback");
+    // Exactly the cap and not one request more. Thirty weekdays back from Mon
+    // 2024-01-15 lands on Tue 2023-12-05; no weekend is ever attempted, so
+    // weekends cannot pad the count toward the cap either.
+    assert_eq!(attempts.len(), CLOSED_DAY_LIMIT);
+    assert_eq!(attempts.first(), Some(&date(2024, 1, 15)));
+    assert_eq!(attempts.last(), Some(&date(2023, 12, 5)));
+    assert!(attempts.iter().all(|d| !matches!(d.weekday(), Weekday::Sat | Weekday::Sun)));
+}
+
+#[test]
+fn one_successful_fetch_resets_the_closed_day_streak() {
+    // A scattered mid-history holiday must not accumulate toward the cap.
+    // Tue 2023-12-26 is the 15th weekday back from Mon 2024-01-15.
+    let traded = date(2023, 12, 26);
+    let mut attempts: Vec<NaiveDate> = Vec::new();
+    let mut fetch = |_e: &str, d: NaiveDate| -> Result<Vec<u8>, IngestionError> {
+        attempts.push(d);
+        if d == traded {
+            Ok(bhavcopy_csv(d, &["INFY"]))
+        } else {
+            Err(IngestionError::NotFound)
+        }
+    };
+    let mut visited: Vec<NaiveDate> = Vec::new();
+    let mut on_day = |outcome: DayOutcome| {
+        visited.push(outcome.date);
+        ControlFlow::Continue(())
+    };
+
+    let stop =
+        walk_trading_days_backward("NSE", "NSE:INFY", date(2024, 1, 15), &mut fetch, &mut on_day).unwrap();
+
+    assert_eq!(stop, WalkStop::ArchiveExhausted);
+    assert_eq!(visited, vec![traded]);
+    // 14 closed weekdays, then the traded one (streak -> 0), then a full fresh
+    // CLOSED_DAY_LIMIT run. Without the reset the walk would have stopped after
+    // 31 attempts, when the 30th cumulative 404 landed.
+    assert_eq!(attempts.len(), 15 + CLOSED_DAY_LIMIT);
 }
 
 #[test]
@@ -491,11 +587,34 @@ use std::ops::ControlFlow;
 /// sleep -- this module stays free of timing I/O so its tests run instantly.
 pub const POLITENESS_DELAY_MS: u64 = 200;
 
+/// Consecutive *weekday* 404s before the walk concludes the archive itself has
+/// stopped answering -- walked past the archive's coverage, or its URL format
+/// changed (P14§9). Weekends never reach the network and never count. The
+/// longest real NSE closure is a handful of consecutive weekdays, so 30 (six
+/// calendar weeks) is generous against any genuine holiday cluster while still
+/// bounding the worst case to 30 wasted requests, ~6s at POLITENESS_DELAY_MS,
+/// instead of an unbounded backward walk. Deliberately separate from the
+/// sidecar's ABSENT_DAY_LIMIT: that one counts days the *symbol* is missing
+/// from a file that was fetched successfully (decision (xviii)).
+pub const CLOSED_DAY_LIMIT: usize = 30;
+
 /// One calendar day, after the "was the market open?" question is settled.
 #[derive(Debug)]
 pub enum TradingDay {
     Traded(Vec<u8>),
     Closed,
+}
+
+/// Why a walk ended. Both are ordinary, non-error outcomes -- a real failure
+/// comes back as `Err` instead.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WalkStop {
+    /// `on_day` returned `ControlFlow::Break`: the caller got what it wanted.
+    CallerStopped,
+    /// `CLOSED_DAY_LIMIT` weekdays in a row had no file. The caller cannot tell
+    /// from here whether the archive stopped covering these dates or stopped
+    /// working, so it must not report this as "the symbol has no more history".
+    ArchiveExhausted,
 }
 
 /// One real trading day's result for a single symbol.
@@ -529,25 +648,41 @@ pub fn fetch_trading_day(
 /// Walk calendar days backward from `start`, handing every real trading day's
 /// row for `symbol` to `on_day`.
 ///
-/// This function never terminates on its own: `on_day` MUST eventually return
-/// `ControlFlow::Break`, or the walk fetches its way backward through the
-/// archive forever. Every caller's stop condition is its own (P14§4).
+/// Two independent exits, because the caller's is not enough on its own:
+/// `on_day` returning `ControlFlow::Break` (the caller is satisfied), and
+/// `CLOSED_DAY_LIMIT` consecutive weekday 404s. `on_day` is invoked ONLY for a
+/// successfully fetched day, so without the second exit a stretch of days the
+/// archive has no files for would advance no stop condition at all and the walk
+/// would step backward forever (decision (xviii)).
 pub fn walk_trading_days_backward(
     exchange: &str,
     symbol: &str,
     start: NaiveDate,
     fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>,
     on_day: &mut dyn FnMut(DayOutcome) -> ControlFlow<()>,
-) -> Result<(), IngestionError> {
+) -> Result<WalkStop, IngestionError> {
     let mut date = start;
+    let mut consecutive_closed = 0usize;
     loop {
-        if let TradingDay::Traded(bytes) = fetch_trading_day(exchange, date, fetch)? {
-            let candle = parse_udiff_equity_bhavcopy(&bytes, exchange)?
-                .into_iter()
-                .find(|parsed| parsed.symbol == symbol);
-            if on_day(DayOutcome { date, candle }).is_break() {
-                return Ok(());
+        match fetch_trading_day(exchange, date, fetch)? {
+            TradingDay::Traded(bytes) => {
+                consecutive_closed = 0;
+                let candle = parse_udiff_equity_bhavcopy(&bytes, exchange)?
+                    .into_iter()
+                    .find(|parsed| parsed.symbol == symbol);
+                if on_day(DayOutcome { date, candle }).is_break() {
+                    return Ok(WalkStop::CallerStopped);
+                }
             }
+            // A weekend is Closed without a request, so only a weekday Closed
+            // is evidence about the archive.
+            TradingDay::Closed if !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) => {
+                consecutive_closed += 1;
+                if consecutive_closed >= CLOSED_DAY_LIMIT {
+                    return Ok(WalkStop::ArchiveExhausted);
+                }
+            }
+            TradingDay::Closed => {}
         }
         date = date
             .pred_opt()
@@ -574,7 +709,7 @@ pub mod csv_util;
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cargo test -p ingestion`
-Expected: PASS — all eight new `backfill_test` tests plus every pre-existing `ingestion` test.
+Expected: PASS — all ten new `backfill_test` tests plus every pre-existing `ingestion` test. The all-404 test is the one that matters most: if it **hangs** rather than fails, the closed-day cap is missing or is being reset by something other than a successful fetch.
 
 - [ ] **Step 6: Commit**
 
@@ -591,7 +726,7 @@ git commit -m "feat(ingestion): holiday-aware trading-day fetch and backward wal
 
 To make this TDD-able at all, the loop is first extracted into `ingest_day_range`, which takes an injected fetch closure. `run_bhavcopy` keeps its argument parsing, wires the real `fetch_udiff_bhavcopy`, and prints the same final summary line it prints today. The CLI's flags, per-day message format, and summary line are unchanged (plan decision (iii)).
 
-This task is a leaf — nothing downstream depends on it.
+This task is a leaf — nothing downstream depends on it. It uses `fetch_trading_day` only, never `walk_trading_days_backward`, so decision (xviii)'s closed-day cap does not apply here and nothing in this task changes because of it: the CLI's loop is forward and bounded by `--to`, so it terminates by construction no matter how many days 404.
 
 **Files:**
 - Modify: `rust-core/crates/ingestion/src/bin/ingest.rs:1-8` (imports), `:32-60` (`run_bhavcopy`), `:101-111` (`mod tests`)
@@ -968,6 +1103,8 @@ git commit -m "feat(sidecar): progress lines can carry an index/total count"
 
 The phase's centre of gravity. `sidecar` takes a direct dependency on `ingestion` (already transitively present via `backtest`; `ingestion`'s only intra-workspace dependency is `storage`, so this cannot cycle). A new `day_backfill.rs` resolves the requested algorithm's `required_lookback()` from the registry, reads the symbol's current `("day", "bhavcopy")` depth, and if short drives `walk_trading_days_backward` from the day before the lake's earliest candle — or from `today` if the lake has nothing — persisting each fetched candle immediately, counting consecutive absent trading days, and stopping at whichever comes first.
 
+The handler owns **two** of the three stop conditions (enough bars collected; `ABSENT_DAY_LIMIT` consecutive trading days with no row for this symbol) and reports the third, which the walker owns: `WalkStop::ArchiveExhausted` becomes `DayBackfillResponse.archive_exhausted`, kept strictly distinct from `sufficient: false` so the UI never tells a user their symbol lacks history when what actually happened is the archive stopped answering (decision (xviii)).
+
 Everything wall-clock and network is a parameter: `today: NaiveDate` and a `fetch` closure. Only `main.rs` supplies the real ones, and only `main.rs` sleeps `POLITENESS_DELAY_MS` between requests (plan decisions (xiv) and the no-wall-clock-test Global Constraint).
 
 `ist_date_from_epoch` lands here because this is the one caller that needs it: the lake stores candle timestamps, the walker takes dates, and something has to invert `ist_session_close_epoch`.
@@ -985,11 +1122,11 @@ The protocol enum arms and `main.rs`'s dispatch cannot be split from the handler
 - Modify: `rust-core/crates/sidecar/tests/end_to_end_test.rs`
 
 **Interfaces:**
-- Consumes: `ingestion::backfill::{walk_trading_days_backward, DayOutcome, POLITENESS_DELAY_MS}` (Task 2); `ingestion::io::fetch_udiff_bhavcopy`; `ingestion::error::IngestionError`; `sidecar::protocol::encode_progress_counted` (Task 4); `algo_core::registry::all_for_binary`; `storage::CandleStore::{read_sourced_candles, write_sourced_candles}`.
+- Consumes: `ingestion::backfill::{walk_trading_days_backward, DayOutcome, WalkStop, POLITENESS_DELAY_MS, CLOSED_DAY_LIMIT}` (Task 2); `ingestion::io::fetch_udiff_bhavcopy`; `ingestion::error::IngestionError`; `sidecar::protocol::encode_progress_counted` (Task 4); `algo_core::registry::all_for_binary`; `storage::CandleStore::{read_sourced_candles, write_sourced_candles}`.
 - Produces:
   - `ingestion::time::ist_date_from_epoch(ts: i64) -> NaiveDate`
   - `sidecar::protocol::EnsureDayBackfillRequest { id: u64, symbol: String, algo_id: String }` (wire tag `ensure_day_backfill`)
-  - `sidecar::protocol::DayBackfillResponse { id: u64, have: usize, need: usize, sufficient: bool, error: Option<String> }` (wire tag `day_backfill`)
+  - `sidecar::protocol::DayBackfillResponse { id: u64, have: usize, need: usize, sufficient: bool, archive_exhausted: bool, error: Option<String> }` (wire tag `day_backfill`)
   - `sidecar::day_backfill::{BACKFILL_TIMEFRAME, BACKFILL_SOURCE, ABSENT_DAY_LIMIT, handle_ensure_day_backfill}`
   - `handle_ensure_day_backfill(store: &CandleStore, request: EnsureDayBackfillRequest, today: NaiveDate, fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>, on_progress: &mut dyn FnMut(usize, usize)) -> DayBackfillResponse`
 
@@ -1123,6 +1260,7 @@ mod tests {
     use super::*;
     use algo_core::registry;
     use chrono::Datelike;
+    use ingestion::backfill::CLOSED_DAY_LIMIT;
     use ingestion::time::ist_session_close_epoch;
     use storage::Candle;
     use tempfile::tempdir;
@@ -1282,10 +1420,43 @@ mod tests {
         assert_eq!(response.have, 0, "have is the symbol's real available history");
         assert_eq!(response.need, lookback_of("obv"));
         assert_eq!(response.error, None, "an absent symbol is an answer, not a failure");
+        assert!(
+            !response.archive_exhausted,
+            "every day here fetched fine -- this is a fact about the symbol, not the archive"
+        );
         // Mon 15, Fri 12, Thu 11, Wed 10, Tue 9, Mon 8, Fri 5, Thu 4, Wed 3, Tue 2.
         assert_eq!(attempts.len(), ABSENT_DAY_LIMIT);
         assert_eq!(attempts.last(), Some(&date(2024, 1, 2)));
         assert!(progress.is_empty());
+    }
+
+    #[test]
+    fn an_archive_that_answers_nothing_is_reported_as_exhausted_not_as_a_short_history() {
+        // A backfill that walks past the archive's coverage must not come back
+        // saying "NSE:INFY has 0 days of listed history" -- it cannot know that.
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        let mut attempts: Vec<NaiveDate> = Vec::new();
+        let mut fetch = |_e: &str, d: NaiveDate| -> Result<Vec<u8>, IngestionError> {
+            attempts.push(d);
+            Err(IngestionError::NotFound)
+        };
+
+        let response = handle_ensure_day_backfill(
+            &store,
+            request("NSE:INFY", "obv"),
+            date(2024, 1, 15),
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        assert!(response.archive_exhausted, "the third outcome must reach the response");
+        assert!(!response.sufficient);
+        assert_eq!(response.have, 0);
+        assert_eq!(response.need, lookback_of("obv"));
+        assert_eq!(response.error, None, "a silent archive is an answer, not a transport failure");
+        // Bounded, not infinite -- this is the whole point of the cap.
+        assert_eq!(attempts.len(), CLOSED_DAY_LIMIT);
     }
 
     #[test]
@@ -1397,8 +1568,15 @@ pub struct DayBackfillResponse {
     pub have: usize,
     pub need: usize,
     /// false => `have` is the symbol's full available real history, capped by
-    /// the "10 consecutive absent trading days" heuristic (P14§2 item 4).
+    /// the "10 consecutive absent trading days" heuristic (P14§2 item 4) --
+    /// UNLESS `archive_exhausted` is set, in which case `have` is only what the
+    /// walk managed to collect before the archive went quiet.
     pub sufficient: bool,
+    /// The walk stopped because CLOSED_DAY_LIMIT weekdays in a row had no file
+    /// at all. Always serialized (like `sufficient`) rather than skipped when
+    /// false: this is a third outcome, and a consumer must never have to infer
+    /// it from an absent key (decision (xviii)).
+    pub archive_exhausted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -1440,7 +1618,7 @@ with:
 use crate::protocol::{DayBackfillResponse, EnsureDayBackfillRequest};
 use algo_core::registry;
 use chrono::NaiveDate;
-use ingestion::backfill::{walk_trading_days_backward, DayOutcome};
+use ingestion::backfill::{walk_trading_days_backward, DayOutcome, WalkStop};
 use ingestion::error::IngestionError;
 use ingestion::time::ist_date_from_epoch;
 use std::ops::ControlFlow;
@@ -1456,6 +1634,10 @@ pub const BACKFILL_SOURCE: &str = "bhavcopy";
 /// symbol simply isn't listed that far back. A stock that is currently listed
 /// and trading does not miss ten straight national bhavcopies; one that is
 /// pre-IPO or delisted does (P14§2 item 4).
+///
+/// Distinct from `ingestion::backfill::CLOSED_DAY_LIMIT`, which counts days the
+/// *archive* had no file for. This one only ever advances on a day that was
+/// fetched successfully, so it is evidence about the symbol alone.
 pub const ABSENT_DAY_LIMIT: usize = 10;
 
 pub fn handle_ensure_day_backfill(
@@ -1475,12 +1657,26 @@ pub fn handle_ensure_day_backfill(
     let existing = match store.read_sourced_candles(&request.symbol, BACKFILL_TIMEFRAME, BACKFILL_SOURCE) {
         Ok(candles) => candles,
         Err(e) => {
-            return DayBackfillResponse { id, have: 0, need, sufficient: false, error: Some(e.to_string()) }
+            return DayBackfillResponse {
+                id,
+                have: 0,
+                need,
+                sufficient: false,
+                archive_exhausted: false,
+                error: Some(e.to_string()),
+            }
         }
     };
     let mut collected = existing.len();
     if collected >= need {
-        return DayBackfillResponse { id, have: collected, need, sufficient: true, error: None };
+        return DayBackfillResponse {
+            id,
+            have: collected,
+            need,
+            sufficient: true,
+            archive_exhausted: false,
+            error: None,
+        };
     }
 
     let exchange = request.symbol.split(':').next().unwrap_or("NSE").to_string();
@@ -1524,9 +1720,16 @@ pub fn handle_ensure_day_backfill(
         ControlFlow::Continue(())
     });
 
+    let mut archive_exhausted = false;
     let error = match walk {
         Err(e) => Some(e.to_string()),
-        Ok(()) => write_failure,
+        Ok(WalkStop::ArchiveExhausted) => {
+            // Not an error: the fetches succeeded in the transport sense, the
+            // archive simply had no file for CLOSED_DAY_LIMIT weekdays running.
+            archive_exhausted = true;
+            write_failure
+        }
+        Ok(WalkStop::CallerStopped) => write_failure,
     };
     // Authoritative count: the partition's own row count, so the number the UI
     // shows is the number of bars the run will actually get.
@@ -1534,14 +1737,14 @@ pub fn handle_ensure_day_backfill(
         .read_sourced_candles(&request.symbol, BACKFILL_TIMEFRAME, BACKFILL_SOURCE)
         .map(|candles| candles.len())
         .unwrap_or(collected);
-    DayBackfillResponse { id, have, need, sufficient: have >= need, error }
+    DayBackfillResponse { id, have, need, sufficient: have >= need, archive_exhausted, error }
 }
 ```
 
 - [ ] **Step 10: Run the handler tests to verify they pass**
 
 Run: `cargo test -p sidecar --lib day_backfill`
-Expected: PASS — all seven `day_backfill` tests.
+Expected: PASS — all eight `day_backfill` tests. As with Task 2's walker test, the all-404 one hanging instead of failing means the walk has no bound.
 
 - [ ] **Step 11: Wire it into the request loop** — in `rust-core/crates/sidecar/src/main.rs`, replace the import block:
 
@@ -1636,11 +1839,11 @@ Finally, in the big dispatch `match request { … }`, insert this arm immediatel
                             Ok(response) => SidecarResponse::DayBackfill(response),
                             Err(_) => {
                                 eprintln!("sidecar: ensure_day_backfill request {id} panicked");
-                                SidecarResponse::DayBackfill(DayBackfillResponse { id, have: 0, need: 0, sufficient: false, error: Some("ensure_day_backfill panicked".to_string()) })
+                                SidecarResponse::DayBackfill(DayBackfillResponse { id, have: 0, need: 0, sufficient: false, archive_exhausted: false, error: Some("ensure_day_backfill panicked".to_string()) })
                             }
                         }
                     }
-                    None => SidecarResponse::DayBackfill(DayBackfillResponse { id, have: 0, need: 0, sufficient: false, error: Some("no --lake-root configured".to_string()) }),
+                    None => SidecarResponse::DayBackfill(DayBackfillResponse { id, have: 0, need: 0, sufficient: false, archive_exhausted: false, error: Some("no --lake-root configured".to_string()) }),
                 }
             }
 ```
@@ -1674,6 +1877,7 @@ fn encodes_a_tagged_day_backfill_response_and_omits_the_error_field_when_none() 
         have: 8,
         need: 256,
         sufficient: false,
+        archive_exhausted: false,
         error: None,
     }));
     assert!(!line.contains('\n'));
@@ -1682,6 +1886,8 @@ fn encodes_a_tagged_day_backfill_response_and_omits_the_error_field_when_none() 
     assert!(line.contains("\"have\":8"));
     assert!(line.contains("\"need\":256"));
     assert!(line.contains("\"sufficient\":false"));
+    // Always on the wire, even when false -- the TS mirror can then require it.
+    assert!(line.contains("\"archive_exhausted\":false"));
     assert!(!line.contains("error"));
 }
 
@@ -1692,9 +1898,32 @@ fn a_day_backfill_response_carries_its_error_when_one_occurred() {
         have: 0,
         need: 256,
         sufficient: false,
+        archive_exhausted: false,
         error: Some("no --lake-root configured".to_string()),
     }));
     assert!(line.contains("\"error\":\"no --lake-root configured\""));
+}
+
+#[test]
+fn an_exhausted_archive_is_a_distinct_wire_outcome_from_a_merely_short_history() {
+    let short_history = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+        error: None,
+    }));
+    let exhausted = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: true,
+        error: None,
+    }));
+    assert_ne!(short_history, exhausted, "the two outcomes must not be wire-identical");
+    assert!(exhausted.contains("\"archive_exhausted\":true"));
 }
 
 #[test]
@@ -1743,6 +1972,7 @@ fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
     assert_eq!(response["need"], 0);
     assert_eq!(response["have"], 0);
     assert_eq!(response["sufficient"], true);
+    assert_eq!(response["archive_exhausted"], false);
     assert!(response.get("error").is_none(), "a clean answer must omit error entirely");
 }
 ```
@@ -1750,7 +1980,7 @@ fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
 - [ ] **Step 13: Run the whole sidecar suite to verify it passes**
 
 Run: `cargo test -p sidecar`
-Expected: PASS — the seven `day_backfill` tests, the four new `protocol_test` tests, the new `end_to_end_test` test, and every pre-existing sidecar test.
+Expected: PASS — the eight `day_backfill` tests, the five new `protocol_test` tests, the new `end_to_end_test` test, and every pre-existing sidecar test.
 
 - [ ] **Step 14: Verify the dependency graph is still acyclic and the release binary builds**
 
@@ -1773,12 +2003,12 @@ The TypeScript half of the wire, plus two things the spec does not mention but t
 **Files:**
 - Modify: `electron-app/src/main/services/sidecar/sidecarProtocol.ts:83-95` (progress wire + a new response interface), `:109-130` (both unions)
 - Modify: `electron-app/src/main/services/sidecar/sidecarSupervisor.ts:1-19` (imports), `:43-44` (constants), `:51-56` (fields), `:149-155` (new method), `:157-174` (`send`), `:196-213` (`dispatch`), `:215-226` (`onExit`)
-- Modify: `electron-app/test/main/services/sidecar/sidecarSupervisor.test.ts` (four new tests appended inside `describe("SidecarSupervisor", …)`)
+- Modify: `electron-app/test/main/services/sidecar/sidecarSupervisor.test.ts` (five new tests appended inside `describe("SidecarSupervisor", …)`)
 
 **Interfaces:**
 - Consumes: the Rust wire from Task 5 (`ensure_day_backfill` request, `day_backfill` response) and Task 4 (`index`/`total` on a progress line).
 - Produces:
-  - `interface DayBackfillResponseWire { type: "day_backfill"; id: number; have: number; need: number; sufficient: boolean; error?: string }`
+  - `interface DayBackfillResponseWire { type: "day_backfill"; id: number; have: number; need: number; sufficient: boolean; archive_exhausted: boolean; error?: string }`
   - `SidecarProgressWire` gains `index?: number; total?: number`
   - `SidecarRequestWire` gains `{ type: "ensure_day_backfill"; id: number; symbol: string; algo_id: string }`
   - `export const BACKFILL_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;`
@@ -1796,7 +2026,7 @@ to:
 import { BACKFILL_REQUEST_TIMEOUT_MS, SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
 ```
 
-and append these four tests inside the `describe("SidecarSupervisor", …)` block, immediately after the existing `"resolves listAlgorithms with an algorithms response carrying the matching id"` test:
+and append these five tests inside the `describe("SidecarSupervisor", …)` block, immediately after the existing `"resolves listAlgorithms with an algorithms response carrying the matching id"` test:
 
 ```ts
   it("sends an ensure_day_backfill request and resolves the matching day_backfill response", async () => {
@@ -1808,12 +2038,41 @@ and append these four tests inside the `describe("SidecarSupervisor", …)` bloc
     expect(request).toEqual({ type: "ensure_day_backfill", id: 1, symbol: "NSE:ZYDUSWELL", algo_id: "kronos" });
 
     children[0].stdout.write(
-      `${JSON.stringify({ type: "day_backfill", id: 1, have: 8, need: 256, sufficient: false })}\n`,
+      `${JSON.stringify({
+        type: "day_backfill",
+        id: 1,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+      })}\n`,
     );
     const response = await pending;
     expect(response.type).toBe("day_backfill");
     expect(response.have).toBe(8);
     expect(response.need).toBe(256);
+    expect(response.sufficient).toBe(false);
+    expect(response.archive_exhausted).toBe(false);
+  });
+
+  it("carries an archive_exhausted answer through unchanged", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos");
+    await requestsSeen;
+
+    children[0].stdout.write(
+      `${JSON.stringify({
+        type: "day_backfill",
+        id: 1,
+        have: 41,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: true,
+      })}\n`,
+    );
+    const response = await pending;
+    expect(response.archive_exhausted).toBe(true);
     expect(response.sufficient).toBe(false);
   });
 
@@ -1839,7 +2098,7 @@ and append these four tests inside the `describe("SidecarSupervisor", …)` bloc
       `${JSON.stringify({ type: "progress", id: 1, step: "backfill", status: "running", index: 2, total: 256 })}\n`,
     );
     children[0].stdout.write(
-      `${JSON.stringify({ type: "day_backfill", id: 1, have: 256, need: 256, sufficient: true })}\n`,
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 256, need: 256, sufficient: true, archive_exhausted: false })}\n`,
     );
 
     await pending;
@@ -1857,7 +2116,7 @@ and append these four tests inside the `describe("SidecarSupervisor", …)` bloc
     await requestsSeen;
 
     children[0].stdout.write(
-      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true })}\n`,
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
     );
     await pending;
     children[0].stdout.write(
@@ -1890,7 +2149,7 @@ and append these four tests inside the `describe("SidecarSupervisor", …)` bloc
 
     await expect(ordinary).rejects.toThrow(/timed out after 5ms/);
     children[0].stdout.write(
-      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true })}\n`,
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
     );
     await expect(backfill).resolves.toMatchObject({ sufficient: true });
     expect(BACKFILL_REQUEST_TIMEOUT_MS).toBeGreaterThan(5);
@@ -1922,6 +2181,10 @@ export interface DayBackfillResponseWire {
   have: number;
   need: number;
   sufficient: boolean;
+  // The walk gave up because the archive had no file for CLOSED_DAY_LIMIT
+  // weekdays running -- a different claim from "this symbol is only N days
+  // old", and the sidecar always sends it, so it is required here too.
+  archive_exhausted: boolean;
   error?: string;
 }
 
@@ -2141,7 +2404,9 @@ with:
 - [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `npx vitest run test/main/services/sidecar/sidecarSupervisor.test.ts && npm run typecheck`
-Expected: PASS — the four new tests plus every pre-existing test in the file, clean typecheck.
+Expected: PASS — the five new tests plus every pre-existing test in the file, and a clean typecheck.
+
+The vitest run is what proves this task's test-file edits are complete; `npm run typecheck` only checks `src/**` (see Global Constraints — `tsconfig.json` excludes `**/*.test.ts`), so it confirms the two *production* files compile and nothing more. A missed test-side edit shows up as a failing assertion or an `undefined`, never as a type error.
 
 - [ ] **Step 6: Commit**
 
@@ -2156,20 +2421,20 @@ git commit -m "feat(sidecar-client): ensureDayBackfill with per-request progress
 
 One new call at the top of `runBenchmark`, before `readLakeCandles`. Its progress is forwarded through the *existing* `onProgress` callback and the *existing* `benchmark:progress` IPC channel, tagged `phase: "backfill"` alongside the frontier walk's `phase: "run"` — which means `onProgress`'s positional `(index, total)` signature becomes a single object (plan decision (vii)).
 
-Three behaviors the spec does not spell out are implemented here because the feature is broken without them: the pre-flight is skipped for a non-`day` timeframe (decision (viii)), a cancellation during backfill returns a cancelled result instead of throwing (decision (xii)), and a backfill that both errored and came back insufficient throws the real message rather than showing a misleading "N days of listed history" banner (decision (x)).
+Four behaviors the spec does not spell out are implemented here because the feature is broken without them: the pre-flight is skipped for anything that is not a `("day", "bhavcopy")` entry — the timeframe alone is **not** a sufficient gate, because the live warm-up path writes `("day", "kite")` partitions that show up in the same picker (decision (viii)); a cancellation during backfill returns a cancelled result instead of throwing (decision (xii)); a backfill that both errored and came back insufficient throws the real message rather than showing a misleading "N days of listed history" banner (decision (x)); and a backfill that stopped because the archive went quiet is reported as its own shortfall reason rather than as a claim about the symbol (decision (xviii)).
 
 **Files:**
 - Modify: `electron-app/src/main/services/benchmark/benchmarkRunner.ts:36-41` (`BenchmarkResult`), `:76-78` (deps), `:80-116` (signature + pre-flight + the `onProgress` call)
 - Modify: `electron-app/src/main/ipc/benchmarkBridge.ts:6-12` (deps `Pick`), `:31-35` (the progress forward)
 - Modify: `electron-app/src/main/ipc/rendererApi.ts:34-35` (re-export), `:131` (`onBenchmarkProgress`)
-- Modify: `electron-app/test/main/services/benchmark/benchmarkRunner.test.ts` (13 fixture edits + 3 callback-shape edits + 5 new tests)
+- Modify: `electron-app/test/main/services/benchmark/benchmarkRunner.test.ts` (13 fixture edits + 3 callback-shape edits + 8 new tests)
 - Modify: `electron-app/test/main/ipc/benchmarkBridge.test.ts` (the `harness`/`idleSidecar` shape + 1 assertion)
 
 **Interfaces:**
 - Consumes: `SidecarSupervisor.ensureDayBackfill` (Task 6).
 - Produces:
   - `export interface BenchmarkProgress { phase: "backfill" | "run"; index: number; total: number }`
-  - `BenchmarkResult` gains `insufficientHistory?: { have: number; need: number }`
+  - `BenchmarkResult` gains `insufficientHistory?: { have: number; need: number; reason: "symbol_history" | "archive_unreachable" }`
   - `BenchmarkRunnerDeps.sidecar` gains `"ensureDayBackfill"` to its `Pick`
   - `runBenchmark(deps, params, onProgress?: (progress: BenchmarkProgress) => void)`
   - `RendererApi.onBenchmarkProgress(handler: (progress: BenchmarkProgress) => void): void`
@@ -2178,11 +2443,15 @@ Three behaviors the spec does not spell out are implemented here because the fea
 
 ```ts
 function backfillOk(have = 10_000, need = 0) {
-  return vi.fn().mockResolvedValue({ type: "day_backfill", id: 1, have, need, sufficient: true });
+  return vi
+    .fn()
+    .mockResolvedValue({ type: "day_backfill", id: 1, have, need, sufficient: true, archive_exhausted: false });
 }
 ```
 
-Then insert the line `ensureDayBackfill: backfillOk(),` as the **first** property inside **every** `sidecar: { … }` object literal in this file. There are **exactly 13** of them, at lines **104, 123, 144, 159, 173, 196, 212, 226, 258, 287, 316, 347, 365** in the pre-edit file. Every one is required: `baseParams()` uses `timeframe: "day"`, so the pre-flight runs for every existing test, and `BenchmarkRunnerDeps`'s `Pick` makes the property mandatory — `npm run typecheck` will name any you miss.
+Then insert the line `ensureDayBackfill: backfillOk(),` as the **first** property inside **every** `sidecar: { … }` object literal in this file. There are **exactly 13** of them, at lines **104, 123, 144, 159, 173, 196, 212, 226, 258, 287, 316, 347, 365** in the pre-edit file. Every one is required: `baseParams()` uses `timeframe: "day"` **and** `source: "bhavcopy"` (`benchmarkRunner.test.ts:86-97`), so the pre-flight runs for every existing test, and `BenchmarkRunnerDeps`'s `Pick` makes the property mandatory in production code.
+
+**Do not expect `npm run typecheck` to catch a miss here.** `electron-app/tsconfig.json` excludes `**/*.test.ts`, so `tsc --noEmit` never reads this file at all and a skipped fixture is invisible to it. The safety net is Step 6's `npx vitest run test/main/services/benchmark/benchmarkRunner.test.ts`: a missed fixture fails at runtime with `deps.sidecar.ensureDayBackfill is not a function`, naming the test. Run it and confirm every test passes before moving on.
 
 Work **bottom-up** (365 first, 104 last) so earlier insertions do not shift the later line numbers, or re-run `grep -n "sidecar: {" test/main/services/benchmark/benchmarkRunner.test.ts` after each edit. Each edit turns, for example:
 
@@ -2275,7 +2544,7 @@ and their three assertions become:
 
 (The numbers are unchanged from today's passing assertions — `[[0,5],[1,5],[2,5],[3,5],[4,5]]`, `[[0,1]]`, and `[[0,2],[1,2]]` — because `backfillOk()` reports `sufficient: true` with no progress of its own. Only the `"run"` tag is new.)
 
-- [ ] **Step 3: Write the six new failing tests** — append them inside `describe("runBenchmark frontier walk", …)`, at the end of the block:
+- [ ] **Step 3: Write the eight new failing tests** — append them inside `describe("runBenchmark frontier walk", …)`, at the end of the block:
 
 ```ts
   it("returns an insufficientHistory result and never computes when the symbol's real history falls short", async () => {
@@ -2283,9 +2552,14 @@ and their three assertions become:
     const readLakeCandles = vi.fn();
     const deps: BenchmarkRunnerDeps = {
       sidecar: {
-        ensureDayBackfill: vi
-          .fn()
-          .mockResolvedValue({ type: "day_backfill", id: 1, have: 8, need: 256, sufficient: false }),
+        ensureDayBackfill: vi.fn().mockResolvedValue({
+          type: "day_backfill",
+          id: 1,
+          have: 8,
+          need: 256,
+          sufficient: false,
+          archive_exhausted: false,
+        }),
         readLakeCandles,
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
@@ -2294,7 +2568,7 @@ and their three assertions become:
 
     const result = await runBenchmark(deps, baseParams({ algoId: "kronos" }));
 
-    expect(result.insufficientHistory).toEqual({ have: 8, need: 256 });
+    expect(result.insufficientHistory).toEqual({ have: 8, need: 256, reason: "symbol_history" });
     expect(result.decisionPoints).toEqual([]);
     expect(result.candles).toEqual([]);
     expect(result.cancelled).toBe(false);
@@ -2339,13 +2613,64 @@ and their three assertions become:
     expect(ensureDayBackfill).not.toHaveBeenCalled();
   });
 
+  it("skips the pre-flight for a day entry that is not bhavcopy-sourced, so it cannot verdict the wrong partition", async () => {
+    // The live warm-up path writes ("day", "kite") partitions
+    // (candleWarmup.ts's WARMUP_SOURCE, historicalDataArchive.ts's `day`
+    // lookback hint) and they appear in the same picker. Backfilling would
+    // check ("day", "bhavcopy") while the run reads ("day", "kite") --
+    // wasted fetches at best, a bogus insufficient-history verdict at worst.
+    const ensureDayBackfill = backfillOk();
+    const readLakeCandles = vi
+      .fn()
+      .mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13]) });
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        ensureDayBackfill,
+        readLakeCandles,
+        benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+
+    const result = await runBenchmark(deps, baseParams({ timeframe: "day", source: "kite", lookaheadBars: 1 }));
+
+    expect(ensureDayBackfill).not.toHaveBeenCalled();
+    // And the run is otherwise exactly what it was before this phase.
+    expect(readLakeCandles).toHaveBeenCalledWith("NSE:INFY", "day", "kite");
+    expect(result.insufficientHistory).toBeUndefined();
+    expect(result.decisionPoints).toHaveLength(3);
+  });
+
+  it("reports an exhausted archive as its own reason instead of blaming the symbol's history", async () => {
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        ensureDayBackfill: vi.fn().mockResolvedValue({
+          type: "day_backfill",
+          id: 1,
+          have: 41,
+          need: 256,
+          sufficient: false,
+          archive_exhausted: true,
+        }),
+        readLakeCandles: vi.fn(),
+        benchmarkCompute: vi.fn(),
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+
+    const result = await runBenchmark(deps, baseParams({ algoId: "kronos" }));
+
+    expect(result.insufficientHistory).toEqual({ have: 41, need: 256, reason: "archive_unreachable" });
+    expect(result.cancelled).toBe(false);
+  });
+
   it("reports backfill progress as its own phase before the frontier walk's", async () => {
     const deps: BenchmarkRunnerDeps = {
       sidecar: {
         ensureDayBackfill: vi.fn().mockImplementation((_symbol: string, _algoId: string, onDay?: (i: number, t: number) => void) => {
           onDay?.(1, 2);
           onDay?.(2, 2);
-          return Promise.resolve({ type: "day_backfill", id: 1, have: 2, need: 2, sufficient: true });
+          return Promise.resolve({ type: "day_backfill", id: 1, have: 2, need: 2, sufficient: true, archive_exhausted: false });
         }),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12]) }),
         benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
@@ -2394,6 +2719,7 @@ and their three assertions become:
           have: 40,
           need: 256,
           sufficient: false,
+          archive_exhausted: false,
           error: "fetch error: HTTP 503 for https://nsearchives.nseindia.com/x.zip",
         }),
         readLakeCandles: vi.fn(),
@@ -2436,10 +2762,13 @@ export interface BenchmarkResult {
   candles: CandleWire[];
   decisionPoints: DecisionPoint[];
   cancelled: boolean;
-  // Set only when the symbol's real listed history is shorter than the selected
-  // algorithm needs even after backfill (P14§6); the UI renders this instead of
-  // the empty summary strip and chart that started this phase.
-  insufficientHistory?: { have: number; need: number };
+  // Set only when the run has fewer bars than the selected algorithm needs even
+  // after backfill (P14§6); the UI renders this instead of the empty summary
+  // strip and chart that started this phase. `reason` keeps the two shortfalls
+  // apart: "symbol_history" is a claim about the symbol, "archive_unreachable"
+  // is a claim about the archive, and they must not be worded alike
+  // (decision (xviii)).
+  insufficientHistory?: { have: number; need: number; reason: "symbol_history" | "archive_unreachable" };
 }
 ```
 
@@ -2482,9 +2811,11 @@ export async function runBenchmark(
   onProgress?: (progress: BenchmarkProgress) => void,
 ): Promise<BenchmarkResult> {
   // Bhavcopy is the one on-demand source this app has, and it is day-only
-  // (P14§1) -- an intraday partition has no equivalent to fetch, so a non-day
-  // run skips the pre-flight rather than filling the wrong partition.
-  if (params.timeframe === "day") {
+  // (P14§1). The source check is not redundant with the timeframe check: the
+  // live warm-up path writes ("day", "kite") partitions into the same lake, and
+  // backfilling would top up ("day", "bhavcopy") while the run below reads the
+  // partition this entry actually names (decision (viii)).
+  if (params.timeframe === "day" && params.source === "bhavcopy") {
     let backfill;
     try {
       backfill = await deps.sidecar.ensureDayBackfill(params.symbol, params.algoId, (index, total) =>
@@ -2506,7 +2837,11 @@ export async function runBenchmark(
         candles: [],
         decisionPoints: [],
         cancelled: false,
-        insufficientHistory: { have: backfill.have, need: backfill.need },
+        insufficientHistory: {
+          have: backfill.have,
+          need: backfill.need,
+          reason: backfill.archive_exhausted ? "archive_unreachable" : "symbol_history",
+        },
       };
     }
   }
@@ -2529,7 +2864,7 @@ with:
 - [ ] **Step 6: Run the runner tests to verify they pass**
 
 Run: `npx vitest run test/main/services/benchmark/benchmarkRunner.test.ts`
-Expected: PASS — all 21 pre-existing tests plus the 6 new ones (27 total).
+Expected: PASS — all 21 pre-existing tests plus the 8 new ones (29 total). This run, not `npm run typecheck`, is what proves Step 1's 13 fixture insertions are all present.
 
 - [ ] **Step 7: Update the bridge and the renderer API** — in `electron-app/src/main/ipc/benchmarkBridge.ts`, replace:
 
@@ -2651,11 +2986,17 @@ function idleSidecar() {
     readLakeCandles: vi.fn(),
     benchmarkCompute: vi.fn(),
     evaluateScanGateStateless: vi.fn(),
-    // Every fixture in this file uses timeframe "day", so the pre-flight runs;
-    // a lake that already has plenty means the run proceeds unchanged.
-    ensureDayBackfill: vi
-      .fn()
-      .mockResolvedValue({ type: "day_backfill", id: 1, have: 10_000, need: 0, sufficient: true }),
+    // Every fixture in this file uses timeframe "day" with source "bhavcopy",
+    // so the pre-flight runs; a lake that already has plenty means the run
+    // proceeds unchanged.
+    ensureDayBackfill: vi.fn().mockResolvedValue({
+      type: "day_backfill",
+      id: 1,
+      have: 10_000,
+      need: 0,
+      sufficient: true,
+      archive_exhausted: false,
+    }),
     cancelCurrent: vi.fn(),
   };
 }
@@ -2676,7 +3017,9 @@ with:
 - [ ] **Step 9: Run the full main-process benchmark and IPC suites**
 
 Run: `npx vitest run test/main/services/benchmark test/main/ipc && npm run typecheck`
-Expected: PASS — `benchmarkRunner.test.ts` (27), `benchmarkBridge.test.ts` (all, including the reshaped progress assertion), `rendererApi.test.ts` (unchanged — its `onBenchmarkProgress` test only asserts the channel name, never a payload shape), and a clean typecheck.
+Expected: PASS — `benchmarkRunner.test.ts` (29), `benchmarkBridge.test.ts` (all, including the reshaped progress assertion), `rendererApi.test.ts` (unchanged — its `onBenchmarkProgress` test only asserts the channel name, never a payload shape), and a clean typecheck.
+
+The vitest half of that command is the completeness check for the test-file edits; the `typecheck` half only covers the three `src/**` files this task changed (`benchmarkRunner.ts`, `benchmarkBridge.ts`, `rendererApi.ts`), since `tsconfig.json` excludes every `*.test.ts`/`*.test.tsx`.
 
 - [ ] **Step 10: Confirm no other `onProgress`/progress-payload call site was missed**
 
@@ -2700,7 +3043,7 @@ The last task, and the one the whole phase exists for: the incident that started
 
 **Files:**
 - Modify: `electron-app/src/renderer/BenchmarkView.tsx:14` (type import), `:29-45` (new helpers beside `SummaryStrip`), `:101` (progress state type), `:184-199` (the pill), `:200-202` (the result branch)
-- Modify: `electron-app/test/renderer/BenchmarkView.test.tsx:206-218` (three edits) plus two new tests
+- Modify: `electron-app/test/renderer/BenchmarkView.test.tsx:206-218` (three edits) plus three new tests
 
 **Interfaces:**
 - Consumes: `BenchmarkProgress` and `BenchmarkResult.insufficientHistory` (Task 7).
@@ -2750,7 +3093,7 @@ with:
 import type { AlgorithmEntry, BenchmarkProgress, BenchmarkResult, LakeSymbolEntry, RendererApi } from "../../src/main/ipc/rendererApi";
 ```
 
-Then append these two new tests at the end of the `describe("BenchmarkView", …)` block:
+Then append these three new tests at the end of the `describe("BenchmarkView", …)` block:
 
 ```ts
   it("labels the progress pill by phase, so a long first-time backfill does not read as a stalled bar count", async () => {
@@ -2792,7 +3135,7 @@ Then append these two new tests at the end of the `describe("BenchmarkView", …
       candles: [],
       decisionPoints: [],
       cancelled: false,
-      insufficientHistory: { have: 8, need: 256 },
+      insufficientHistory: { have: 8, need: 256, reason: "symbol_history" },
     };
     const deps = api({ runBenchmark: vi.fn().mockResolvedValue(insufficient) });
     const { container } = render(<BenchmarkView api={deps} />);
@@ -2806,6 +3149,37 @@ Then append these two new tests at the end of the `describe("BenchmarkView", …
     );
     // The confusing empty result is gone, not merely accompanied by a banner.
     expect(screen.queryByText(/0 decision points/i)).toBeNull();
+    expect(screen.queryByText(/copy raw result/i)).toBeNull();
+  });
+
+  it("says the archive could not be reached, not that the symbol is young, when the walk hit the closed-day cap", async () => {
+    // Same shortfall shape, different cause: the walker cannot see past a
+    // silent archive, so the banner must not assert anything about the symbol.
+    const unreachable: BenchmarkResult = {
+      params: {
+        symbol: "NSE:ZYDUSWELL",
+        timeframe: "day",
+        source: "bhavcopy",
+        horizon: "positional",
+        algoId: "kronos",
+        lookaheadBars: 5,
+        fromTs: 0,
+        toTs: 0,
+      },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 41, need: 256, reason: "archive_unreachable" },
+    };
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(unreachable) });
+    const { container } = render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+
+    await waitFor(() => expect(container.textContent).toMatch(/could not reach far enough back into the NSE archive/i));
+    expect(container.textContent).toContain("41");
+    expect(container.textContent).toContain("256");
+    expect(container.textContent).not.toContain("days of real listed history");
     expect(screen.queryByText(/copy raw result/i)).toBeNull();
   });
 ```
@@ -2838,7 +3212,19 @@ function progressLabel(algoId: string | null, progress: BenchmarkProgress | null
 }
 
 function InsufficientHistory({ result }: { result: BenchmarkResult }): JSX.Element {
-  const { have, need } = result.insufficientHistory ?? { have: 0, need: 0 };
+  const { have, need, reason } = result.insufficientHistory ?? { have: 0, need: 0, reason: "symbol_history" as const };
+  // Two different facts, two different sentences: the walk can tell "this
+  // symbol has no rows this far back" from "the archive answered nothing at
+  // all", and saying the first when the second happened is a lie about the
+  // user's symbol (decision (xviii)).
+  if (reason === "archive_unreachable") {
+    return (
+      <Banner variant="warning">
+        Could not reach far enough back into the NSE archive for {result.params.symbol} — collected {have} of the{" "}
+        {need} days {result.params.algoId} needs before the archive stopped answering. It may not cover this far back.
+      </Banner>
+    );
+  }
   return (
     <Banner variant="info">
       {result.params.symbol} has {have} days of real listed history; {result.params.algoId} needs {need}. Nothing to
@@ -2897,7 +3283,9 @@ with:
 - [ ] **Step 4: Run the renderer tests to verify they pass**
 
 Run: `npx vitest run test/renderer/BenchmarkView.test.tsx && npm run typecheck`
-Expected: PASS — all pre-existing tests in the file plus the two new ones, clean typecheck. `ResultsView`'s `useEffect` hook order is untouched because the branch happens in `BenchmarkView`'s render, not inside `ResultsView`.
+Expected: PASS — all pre-existing tests in the file plus the three new ones, clean typecheck. `ResultsView`'s `useEffect` hook order is untouched because the branch happens in `BenchmarkView`'s render, not inside `ResultsView`.
+
+The vitest run is the check that this task's test-file edits (the three `BenchmarkProgress` reshapes plus the three new tests) are complete and correct. `npm run typecheck` here covers `BenchmarkView.tsx` only — `tsconfig.json` excludes `**/*.test.tsx`, so it never reads the test file and cannot tell you a reshape was missed.
 
 - [ ] **Step 5: Confirm the CSS really was not touched**
 
@@ -2926,7 +3314,9 @@ Mirrors the Phase 6/11/12/13 precedent: an automatable golden path plus live fol
 **Automatable (mocked bridge + `npm start`, no network):**
 - Selecting a `day`/`bhavcopy` lake entry, picking a fast algorithm with a small lookback, and running completes exactly as it does today — the pre-flight returns `sufficient: true` immediately and no backfill pill phase ever appears.
 - Selecting a `minute`/`kaggle` lake entry and running never issues an `ensure_day_backfill` request at all (observable in the sidecar's stdin trace, or by adding a temporary `console.log` in `benchmarkBridge`). This is plan decision (viii) in practice.
-- A run whose mocked backfill returns `sufficient: false` shows the banner sentence and neither the chart container nor the Copy-raw-result button.
+- Same check for a `day`/`kite` entry — one written by the live warm-up path, not by bhavcopy. It must also issue no `ensure_day_backfill` and must run exactly as it does today. This is the half of decision (viii) that a timeframe-only gate would get wrong.
+- A run whose mocked backfill returns `sufficient: false, archive_exhausted: false` shows the "N days of real listed history" sentence and neither the chart container nor the Copy-raw-result button.
+- A run whose mocked backfill returns `sufficient: false, archive_exhausted: true` shows the "could not reach far enough back into the NSE archive" wording instead — the two must be visibly different messages, not one message reused.
 
 **Live follow-ups (real sidecar binary + real network — never a blocker for calling Phase 14 done):**
 - **The one P14§8 explicitly asks for:** from a lake holding only the current thin `NSE:ZYDUSWELL` day/bhavcopy partition (8 candles), run a benchmark against `kronos` and watch it walk. Confirm the pill counts up through "Backfilling history — N/256 days", that the run then proceeds to "kronos — bar i/N", and that a *second* run of the same symbol/algorithm starts at the frontier walk immediately with no backfill phase — the proof that the persisted data benefits every future run (P14§2 locked decision 6).
@@ -2934,27 +3324,28 @@ Mirrors the Phase 6/11/12/13 precedent: an automatable golden path plus live fol
 - Confirm the `ingest` CLI still works end to end over a date range that *contains an NSE trading holiday* (e.g. `--from 2024-01-20 --to 2024-01-29`, which spans Republic Day on the 26th): it must now print per-day lines for the trading days, silently skip the holiday, and finish with its `done:` summary — where before this phase it aborted at the holiday.
 - Spot-check that the politeness delay is actually in effect: a backfill of N days should take at least `N × 200ms`. If NSE ever starts rejecting the walk with a non-404 status, the run now surfaces that status and URL in the error banner (Task 1's `Fetch("HTTP {code} for {url}")`) rather than a bare transport message — that is the diagnostic P14§9's "IP-level blocking" risk needs.
 - Verify a symbol that is genuinely delisted or pre-IPO trips the ten-absent-day heuristic and reports its real `have`, rather than walking backward indefinitely.
+- **Bound check for decision (xviii), worth doing once:** run a ttm or moirai backfill (512 days) against a symbol whose history the UDiFF archive does not cover that far back, and confirm the walk *stops* — roughly 30 consecutive weekday attempts past the coverage edge, a few seconds at the politeness delay — and reports "could not reach far enough back into the NSE archive", rather than spinning until you press Stop. Temporarily pointing `bhavcopy_url` at a nonexistent host is the cheap way to force the all-404 condition on demand; the run must end on its own either way.
 
 ---
 
 ## Self-Review
 
 **1. Spec coverage:**
-- **P14§1** (purpose; bhavcopy is the one solvable source; intraday explicitly out) → no task fetches intraday; Global Constraints restates it; Task 7's timeframe gate enforces it in code, with the residual gap named in decision (viii).
+- **P14§1** (purpose; bhavcopy is the one solvable source; intraday explicitly out) → no task fetches intraday; Global Constraints restates it; Task 7's timeframe **and source** gate enforces it in code, with the residual gaps named in decision (viii).
 - **P14§2 item 1** (a shared reusable day-range primitive both callers use, distinguishing holiday-404 from real failure) → Tasks 1, 2, 3. The "both callers use it" requirement is met via `fetch_trading_day` rather than via `walk_trading_days_backward` itself; the reason is decision (ii).
 - **P14§2 item 2** (`sidecar` depends on `ingestion`, confirmed acyclic; `EnsureDayBackfill` walks back from existing history or the requested date) → Task 5, with the dependency claim re-verified and strengthened in drift note 5 and a `cargo tree` check at Step 14.
 - **P14§2 item 3** (`runBenchmark` calls it before the frontier walk, sized to the single selected `algoId`) → Task 7 Steps 2 and 5; the "single selected algoId" assertion is in the `"sizes the pre-flight against the one selected algorithm"` test.
 - **P14§2 item 4** (progress streamed through the same `onBenchmarkProgress` channel, distinguished by `phase`) → Tasks 4, 6, 7, 8. No new channel is created anywhere; Global Constraints forbids one.
 - **P14§2 item 5** (one clear message instead of a silent empty result) → Task 8's `InsufficientHistory`, with the message text asserted verbatim.
 - **P14§2 item 6** (a politeness delay) → `POLITENESS_DELAY_MS` in Task 2, applied in Task 5 Step 11's fetch closure. Decision (xiv) states why it lives there and not in the walker.
-- **P14§2 locked decisions 1-6** → (1) no second process: Global Constraints. (2) sizing per selected algo: Task 5's handler reads one `algo_id`. (3) `IngestionError::NotFound`: Task 1. (4) structural absent-history detection, no calendar ceiling: Task 5's `ABSENT_DAY_LIMIT` with three tests covering the limit, the reset, and the "absent is not an error" case. (5) progress streams, no new cancellation: Tasks 4-8 plus Task 7's cancellation test. (6) writes via `write_sourced_candles`: Task 5 Step 9, plus a manual second-run check.
+- **P14§2 locked decisions 1-6** → (1) no second process: Global Constraints. (2) sizing per selected algo: Task 5's handler reads one `algo_id`. (3) `IngestionError::NotFound`: Task 1. (4) structural absent-history detection, no calendar ceiling: Task 5's `ABSENT_DAY_LIMIT` with three tests covering the limit, the reset, and the "absent is not an error" case. The separate `CLOSED_DAY_LIMIT` (decision (xviii)) is **not** a calendar ceiling of the kind locked decision 4 rejects — it bounds consecutive *unanswered* requests, not how far back the walk is willing to look, and it never fires while the archive keeps answering. (5) progress streams, no new cancellation: Tasks 4-8 plus Task 7's cancellation test. (6) writes via `write_sourced_candles`: Task 5 Step 9, plus a manual second-run check.
 - **P14§3** (the real numbers) → every value re-verified against the tree (see the drift section's "checked and correct" list). The plan does not hardcode a lookback anywhere: `handle_ensure_day_backfill` reads it from the registry, and the tests assert against `lookback_of(...)` rather than a literal, so a changed model constant cannot make a test lie.
-- **P14§4** (the `NotFound` variant, the status inspection, `DayOutcome`, `walk_trading_days_backward`'s shape, per-day persistence, the two stop conditions) → Tasks 1, 2, 5. The signature gains an injected `fetch` parameter the spec's sketch omitted — without it P14§8's "not real network" requirement is unsatisfiable.
-- **P14§5** (request/response shapes, registry lookup, lake-depth read, resume point, one progress event per day) → Task 5, with `DayBackfillResponse.error` added per decision (ix) and the counted progress fields per decision (v).
+- **P14§4** (the `NotFound` variant, the status inspection, `DayOutcome`, `walk_trading_days_backward`'s shape, per-day persistence, the stop conditions) → Tasks 1, 2, 5. The signature gains an injected `fetch` parameter the spec's sketch omitted — without it P14§8's "not real network" requirement is unsatisfiable — and returns `WalkStop` rather than `()`, because the spec's single caller-owned exit leaves the walk unbounded against an archive that 404s everything (decision (xviii)). There are **three** stop conditions in the finished design, not two: enough bars, `ABSENT_DAY_LIMIT` absent trading days, and `CLOSED_DAY_LIMIT` consecutive weekday 404s.
+- **P14§5** (request/response shapes, registry lookup, lake-depth read, resume point, one progress event per day) → Task 5, with `DayBackfillResponse.error` added per decision (ix), `.archive_exhausted` per decision (xviii), and the counted progress fields per decision (v).
 - **P14§6** (the pre-flight call, forwarded progress with `phase`, the `insufficientHistory` result, the banner mirroring P13's `readinessMessage`) → Tasks 7 and 8. The citation drift on `benchmarkRunner.ts:80` is corrected in drift note 4.
 - **P14§7** (no new cancellation mechanism) → no task adds one; Task 7's cancellation handling is pure TypeScript result-shaping around the rejection `cancelCurrent()` already produces.
-- **P14§8** (the full test list) → walker counting, 404-skipped-and-not-counted, non-404 stops and propagates, ten-absent trips with holidays not breaking the streak, partial-lake resume → Task 2 Step 1 and Task 5 Step 6. Handler: already-sufficient with zero fetches, small top-up fetching only missing days, never-reachable returning the real `have` → Task 5 Step 6. `io.rs` 404-vs-other → Task 1 Step 1. TS `runBenchmark` insufficient/sufficient/phased-progress → Task 7 Step 3. TS `BenchmarkView` banner → Task 8 Step 1. No real network anywhere → Global Constraints. Manual real-backfill confirmation → the checklist's first live item.
-- **P14§9 risks** → external-dependency risk is mitigated as far as code can by Task 1's status-and-URL-bearing error message reaching the UI banner (Task 7 decision (x)); multi-minute first backfill is surfaced by the phased pill (Task 8) and bounded by decision (xi)'s timeout; the single-threaded-sidecar occupancy is restated, unchanged, and needs no code; the ten-day heuristic's judgment-call nature is carried verbatim into `ABSENT_DAY_LIMIT`'s doc comment.
+- **P14§8** (the full test list) → walker counting, 404-skipped-and-not-counted, non-404 stops and propagates, ten-absent trips with holidays not breaking the streak, partial-lake resume → Task 2 Step 1 and Task 5 Step 6. Handler: already-sufficient with zero fetches, small top-up fetching only missing days, never-reachable returning the real `have` → Task 5 Step 6. `io.rs` 404-vs-other → Task 1 Step 1. TS `runBenchmark` insufficient/sufficient/phased-progress → Task 7 Step 3. TS `BenchmarkView` banner → Task 8 Step 1. No real network anywhere → Global Constraints. Manual real-backfill confirmation → the checklist's first live item. **Beyond the spec's list:** an all-404 fetcher terminating the walk at `CLOSED_DAY_LIMIT` (Task 2 Step 1), a traded day resetting that streak (Task 2 Step 1), the handler reporting that as `archive_exhausted` rather than a short history (Task 5 Step 6), the two outcomes being distinguishable on the wire (Task 5 Step 12), `runBenchmark` mapping them to different `reason`s (Task 7 Step 3), and `BenchmarkView` wording them differently (Task 8 Step 1).
+- **P14§9 risks** → external-dependency risk is mitigated as far as code can by Task 1's status-and-URL-bearing error message reaching the UI banner (Task 7 decision (x)) **and** by decision (xviii)'s closed-day cap, which is what turns "the archive's URL format changed" from an infinite backward walk into a bounded, honestly-labelled failure; multi-minute first backfill is surfaced by the phased pill (Task 8) and bounded by decision (xi)'s timeout; the single-threaded-sidecar occupancy is restated, unchanged, and needs no code — its one quantifiable side effect on *other* in-flight requests is written up in "Accepted risks this plan does not close"; the ten-day heuristic's judgment-call nature is carried verbatim into `ABSENT_DAY_LIMIT`'s doc comment, and the closed-day cap's own judgment call is stated in the same place for `CLOSED_DAY_LIMIT`.
 
 **2. Placeholder scan:** no "TBD", "handle edge cases", "add validation", "similar to Task N", or "write tests for the above" appears anywhere. Every code step carries the actual code. The two places an implementer supplies anything beyond transcription are both bounded and mechanical: Task 7 Step 1's 13 identical one-line insertions (with every pre-edit line number listed, an explicit count, and a bottom-up ordering instruction plus a re-grep fallback), and Task 5 Step 6/Step 9's two-part file (tests first, then production code prepended above them — stated explicitly in both steps).
 
@@ -2965,6 +3356,13 @@ Mirrors the Phase 6/11/12/13 precedent: an automatable golden path plus live fol
 - *Unverified expected values:* every numeric assertion was hand-computed against the actual logic, not transcribed. The backward trading-day sequence from Mon 2024-01-15 was derived and cross-checked against a real calendar: 15(Mon), 12(Fri), 11, 10, 9, 8(Mon), 5(Fri), 4, 3, 2, 1(Mon), 2023-12-29(Fri), 28, 27, 26, 25(Mon), 22(Fri) — which is what makes Task 5's ten-absent test expect exactly 10 fetches ending 2024-01-02, and its streak-reset test expect exactly 17 (6 absent + 1 present + 10 absent) ending 2023-12-22. `ist_session_close_epoch(2024-01-15) = 1_705_312_800` is the value `bhavcopy_parse_test.rs` already asserts; `1_705_257_000` is that minus 15.5 hours (55 800s), i.e. IST midnight that morning, and `1_705_256_999` one second earlier — so the pair distinguishes an IST-based conversion from a UTC-based one, which is the whole point of that test. Task 7's three reshaped progress assertions keep today's already-passing numbers (`[0,5]…[4,5]`, `[0,1]`, `[0,2]/[1,2]`) because `backfillOk()` emits no progress; only the `"run"` tag is new. Task 7's new phased-progress test computes `N=3, L=1 → frontiers {0,1}` from the loop's own `i + lookaheadBars >= series.length` break, matching the file's existing convention. Task 4's exact-string assertion on `encode_progress` was derived from serde's declaration-order field emission, matching the substrings the pre-existing test already asserts.
 - *Gaps found during this pass and closed by adding to the plan rather than noting:* the 30-second supervisor timeout that would have rejected every real backfill (decision (xi), tested in Task 6 Step 1), cancellation during the pre-flight escaping the existing `try` block (decision (xii), tested in Task 7 Step 3), a network failure rendering as "insufficient history" (decision (x), tested in Task 7 Step 3), the pre-flight firing for intraday entries (decision (viii), tested in Task 7 Step 3), and the shared bhavcopy fixture's fixed `TradDt` silently collapsing every fetched day onto one `ts` under `write_sourced_candles`'s merge (decision (xvii), which is why all three test modules build their CSV per date).
 
-**3. Type consistency:** `DayBackfillResponse` is the name used in every task (the spec's competing `DayBackfillResult` is flagged in drift note 6 and used nowhere). Its five fields — `id`, `have`, `need`, `sufficient`, `error` — are identical across `protocol.rs` (Task 5), `protocol_test.rs` (Task 5), `DayBackfillResponseWire` (Task 6), and every TypeScript fixture in Tasks 6-7. `ensureDayBackfill(symbol, algoId, onDayProgress?)`'s three-argument shape matches across its definition (Task 6), the `Pick` in `BenchmarkRunnerDeps` and `BenchmarkBridgeDeps` (Task 7), the production call site (Task 7 Step 5), and all six test fakes that assert on its arguments. `BenchmarkProgress { phase, index, total }` is byte-identical between `benchmarkRunner.ts` (Task 7), `rendererApi.ts`'s re-export (Task 7), the bridge's forwarded payload (Task 7), `BenchmarkView`'s state and `progressLabel` (Task 8), and every test. The Rust fetcher signature `&mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>` is written out identically in `fetch_trading_day`, `walk_trading_days_backward` (Task 2), `ingest_day_range` (Task 3), and `handle_ensure_day_backfill` (Task 5) — exchange first, date second, in all four. `BACKFILL_TIMEFRAME`/`BACKFILL_SOURCE` are used for every store call in Task 5's handler, and the literals `"day"`/`"bhavcopy"` appear in its tests only where a test is deliberately asserting the concrete partition name.
+**2b. Third pass — defects found by independent verification after this plan was first committed, corrected in place.** Four, all of them in the plan text rather than in code, since no code exists yet.
 
-**4. Judgment calls made during planning** — the seventeen entries in "Decisions this plan makes that the spec left open" are each stated with a reason, including the four the spec itself did not anticipate at all (the request timeout, pre-flight cancellation, error-vs-insufficient disambiguation, and the intraday gate). The one the spec explicitly deferred — where `walk_trading_days_backward` lives — is decision (i). The one place this plan knowingly leaves a user-visible gap is decision (viii)'s residual: an intraday benchmark against a thin `minute` partition still shows the original empty result, because closing it requires a data source P14§1 rules out.
+- *`walk_trading_days_backward` could loop forever.* Its only exit was `on_day` returning `Break`, and `on_day` runs only for successfully fetched days — so a run of consecutive 404s (walking past the archive's coverage, which a 512-day ttm/moirai backfill genuinely reaches, or the archive's URL format changing) advanced nothing and the serial sidecar would spin backward one weekday at a time until the user hit Stop. Closed by decision (xviii): `CLOSED_DAY_LIMIT`, `WalkStop`, `DayBackfillResponse.archive_exhausted`, `insufficientHistory.reason`, and a differently-worded banner — threaded through Tasks 2, 5, 6, 7, 8, with an all-404 termination test at both the walker and the handler level.
+- *The pre-flight gate ignored `params.source`.* Gating on `timeframe === "day"` alone would fire against a `("day", "kite")` entry written by the live warm-up path (`candleWarmup.ts`, `historicalDataArchive.ts`), checking and backfilling a different partition from the one the run then reads. Closed in decision (viii) and Task 7, with a dedicated `day`/`kite` test.
+- *A false safety-net claim about `npm run typecheck`.* Several steps implied it would catch a missed test-fixture edit. It cannot: `tsconfig.json` excludes `**/*.test.ts(x)`, so `tsc --noEmit` never reads a test file. Corrected in Global Constraints and at each step that made the claim; the real check is the vitest run those steps already prescribe.
+- *An undocumented side effect of the long backfill timeout.* Written up in "Accepted risks this plan does not close" rather than engineered around — see that section for why a global timeout raise would be the worse trade.
+
+**3. Type consistency:** `DayBackfillResponse` is the name used in every task (the spec's competing `DayBackfillResult` is flagged in drift note 6 and used nowhere). Its six fields — `id`, `have`, `need`, `sufficient`, `archive_exhausted`, `error` — are identical across `protocol.rs` (Task 5), `protocol_test.rs` (Task 5), `main.rs`'s two fallback literals (Task 5), `DayBackfillResponseWire` (Task 6), and every TypeScript fixture in Tasks 6-7; `archive_exhausted` is the one bool that is always serialized rather than skipped, and the `day_backfill` end-to-end test asserts it is present and `false` on a clean answer. `BenchmarkResult.insufficientHistory`'s three fields — `have`, `need`, `reason` — match between `benchmarkRunner.ts` (Task 7), its six fixtures and assertions in `benchmarkRunner.test.ts` (Task 7), and `InsufficientHistory`/its two tests in Task 8; `reason`'s two values, `"symbol_history"` and `"archive_unreachable"`, appear nowhere else and are never inferred from `have`/`need`. `ensureDayBackfill(symbol, algoId, onDayProgress?)`'s three-argument shape matches across its definition (Task 6), the `Pick` in `BenchmarkRunnerDeps` and `BenchmarkBridgeDeps` (Task 7), the production call site (Task 7 Step 5), and all six test fakes that assert on its arguments. `BenchmarkProgress { phase, index, total }` is byte-identical between `benchmarkRunner.ts` (Task 7), `rendererApi.ts`'s re-export (Task 7), the bridge's forwarded payload (Task 7), `BenchmarkView`'s state and `progressLabel` (Task 8), and every test. The Rust fetcher signature `&mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>` is written out identically in `fetch_trading_day`, `walk_trading_days_backward` (Task 2), `ingest_day_range` (Task 3), and `handle_ensure_day_backfill` (Task 5) — exchange first, date second, in all four. `walk_trading_days_backward`'s return type is `Result<WalkStop, IngestionError>` in its definition (Task 2), its interface list, its five call sites across Tasks 2 and 5, and the handler's `match walk { … }` — no task still treats it as `Result<()>`. `BACKFILL_TIMEFRAME`/`BACKFILL_SOURCE` are used for every store call in Task 5's handler, and the literals `"day"`/`"bhavcopy"` appear in its tests only where a test is deliberately asserting the concrete partition name.
+
+**4. Judgment calls made during planning** — the eighteen entries in "Decisions this plan makes that the spec left open" are each stated with a reason, including the five the spec itself did not anticipate at all (the request timeout, pre-flight cancellation, error-vs-insufficient disambiguation, the partition gate, and the walker's own termination bound). The one the spec explicitly deferred — where `walk_trading_days_backward` lives — is decision (i). The places this plan knowingly leaves a user-visible gap are decision (viii)'s two residuals (an intraday benchmark against a thin `minute` partition, and a thin `("day", "kite")` partition, both still showing the original empty result because closing either requires a data source P14§1 rules out) and the three entries under "Accepted risks this plan does not close".
