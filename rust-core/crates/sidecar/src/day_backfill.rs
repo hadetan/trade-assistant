@@ -30,11 +30,20 @@ pub fn handle_ensure_day_backfill(
     on_progress: &mut dyn FnMut(usize, usize),
 ) -> DayBackfillResponse {
     let id = request.id;
-    let need = registry::all_for_binary()
+    let lookback = registry::all_for_binary()
         .iter()
         .find(|algo| algo.id() == request.algo_id)
         .map(|algo| algo.required_lookback())
         .unwrap_or(0);
+    // The one threshold this handler uses -- short-circuit, walk stop and
+    // `sufficient` alike. A frontier at index `i` is usable only when it has
+    // both `i + 1 >= lookback` bars of leading context and a real bar to score
+    // against at `i + lookahead` (`i + lookahead < T`). The smallest total `T`
+    // admitting any such `i` is `lookback + lookahead`, at `i = lookback - 1`;
+    // below it the run produces zero decision points however the bars are
+    // arranged. Reported as `need` too, so an insufficient answer can never
+    // claim more history than the number it says it wants.
+    let need = lookback + request.lookahead;
 
     let existing = match store.read_sourced_candles(&request.symbol, BACKFILL_TIMEFRAME, BACKFILL_SOURCE) {
         Ok(candles) => candles,
@@ -60,15 +69,6 @@ pub fn handle_ensure_day_backfill(
             error: None,
         };
     }
-
-    // `need` NEW bars beyond whatever the lake already held, not a bare total of
-    // `need`. Topping up to a total leaves the newest bar with exactly enough
-    // leading context and no bars after it, so a benchmark run's lookahead gate
-    // (`i + lookaheadBars < series.len()`) can never be satisfied for any
-    // originally-visible bar and the "successful" backfill still yields zero
-    // decision points. Provisioning against the original count instead gives
-    // every bar that was already there a full `need` bars of leading context.
-    let target = collected + need;
 
     let exchange = request.symbol.split(':').next().unwrap_or("NSE").to_string();
     // Resume strictly before the earliest bar already held, so no fetched day
@@ -96,11 +96,8 @@ pub fn handle_ensure_day_backfill(
                     return ControlFlow::Break(());
                 }
                 collected += 1;
-                // Against `target`, not `need`: `collected` counts the whole
-                // partition, so reporting it against the raw lookback would
-                // render "3/2 days" in the progress pill for a partial lake.
-                on_progress(collected, target);
-                if collected >= target {
+                on_progress(collected, need);
+                if collected >= need {
                     return ControlFlow::Break(());
                 }
             }
@@ -131,7 +128,7 @@ pub fn handle_ensure_day_backfill(
         .read_sourced_candles(&request.symbol, BACKFILL_TIMEFRAME, BACKFILL_SOURCE)
         .map(|candles| candles.len())
         .unwrap_or(collected);
-    DayBackfillResponse { id, have, need, sufficient: have >= target, archive_exhausted, error }
+    DayBackfillResponse { id, have, need, sufficient: have >= need, archive_exhausted, error }
 }
 
 #[cfg(test)]
@@ -172,8 +169,8 @@ mod tests {
             .unwrap_or_else(|| panic!("{algo_id} must be in every build's registry"))
     }
 
-    fn request(symbol: &str, algo_id: &str) -> EnsureDayBackfillRequest {
-        EnsureDayBackfillRequest { id: 7, symbol: symbol.to_string(), algo_id: algo_id.to_string() }
+    fn request(symbol: &str, algo_id: &str, lookahead: usize) -> EnsureDayBackfillRequest {
+        EnsureDayBackfillRequest { id: 7, symbol: symbol.to_string(), algo_id: algo_id.to_string(), lookahead }
     }
 
     fn candle_at(day: NaiveDate) -> Candle {
@@ -182,6 +179,7 @@ mod tests {
 
     #[test]
     fn an_already_deep_enough_lake_answers_immediately_with_zero_fetches() {
+        let lookahead = 1;
         let lake = tempdir().unwrap();
         let store = CandleStore::open(lake.path()).unwrap();
         store
@@ -201,14 +199,14 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv"),
+            request("NSE:INFY", "obv", lookahead),
             date(2024, 1, 15),
             &mut fetch,
             &mut |index, total| progress.push((index, total)),
         );
 
         assert_eq!(response.id, 7);
-        assert_eq!(response.need, lookback_of("obv"));
+        assert_eq!(response.need, lookback_of("obv") + lookahead);
         assert_eq!(response.have, 3);
         assert!(response.sufficient);
         assert_eq!(response.error, None);
@@ -218,7 +216,10 @@ mod tests {
 
     #[test]
     fn an_empty_lake_fetches_exactly_the_days_it_needs_and_reports_each_one() {
-        let need = lookback_of("obv");
+        let lookahead = 1;
+        // The run cannot score a frontier it has no later bar for, so the target
+        // is the algorithm's lookback plus this run's lookahead window.
+        let target = lookback_of("obv") + lookahead;
         let lake = tempdir().unwrap();
         let store = CandleStore::open(lake.path()).unwrap();
         let mut attempts: Vec<NaiveDate> = Vec::new();
@@ -230,22 +231,22 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv"),
+            request("NSE:INFY", "obv", lookahead),
             date(2024, 1, 15),
             &mut fetch,
             &mut |index, total| progress.push((index, total)),
         );
 
         assert!(response.sufficient);
-        assert_eq!(response.have, need);
-        assert_eq!(response.need, need);
-        assert_eq!(attempts.len(), need, "one fetch per needed trading day, no more");
+        assert_eq!(response.have, target);
+        assert_eq!(response.need, target);
+        assert_eq!(attempts.len(), target, "one fetch per needed trading day, no more");
         assert_eq!(attempts[0], date(2024, 1, 15), "the walk starts at today when the lake is empty");
         assert!(attempts.iter().all(|d| !matches!(d.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)));
         assert!(attempts.windows(2).all(|w| w[1] < w[0]), "the walk goes strictly backward");
-        assert_eq!(progress, (1..=need).map(|i| (i, need)).collect::<Vec<_>>());
+        assert_eq!(progress, (1..=target).map(|i| (i, target)).collect::<Vec<_>>());
         // The days really landed in the lake, not just in a counter.
-        assert_eq!(store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap().len(), need);
+        assert_eq!(store.read_sourced_candles("NSE:INFY", "day", "bhavcopy").unwrap().len(), target);
     }
 
     #[test]
@@ -264,48 +265,88 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv"),
+            request("NSE:INFY", "obv", 0),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
         );
 
         // Earliest existing candle is Mon 15 -> start at Sun 14 -> Sat 13 -> Fri
-        // 12 -> Thu 11. Neither weekend day is fetched, the 15th is never
-        // refetched, and the walk provisions `need` bars BEHIND the one it
-        // already had rather than stopping at a bare total of `need`.
-        assert_eq!(attempts, vec![date(2024, 1, 12), date(2024, 1, 11)]);
-        assert_eq!(response.have, 3);
+        // 12. Neither weekend day is fetched and the 15th is never refetched.
+        // A zero lookahead means nothing has to be scored, so the target is the
+        // bare lookback and one new bar completes it.
+        assert_eq!(attempts, vec![date(2024, 1, 12)]);
+        assert_eq!(response.have, 2);
         assert!(response.sufficient);
     }
 
     #[test]
-    fn a_thin_lake_gets_need_new_leading_bars_beyond_whatever_already_existed() {
-        // Topping up to a bare total of `need` gives only the single newest bar
-        // enough leading context and leaves no spare room, so a benchmark run's
-        // lookahead-scoring gate (i + lookaheadBars < series.len()) can never be
-        // satisfied and the run yields zero decision points. Provisioning `need`
-        // NEW bars beyond whatever already existed keeps every originally
-        // visible bar's own leading context intact.
+    fn a_lake_already_holding_the_bare_lookback_still_fetches_the_lookahead_window() {
+        // A run scores the frontier at index `i` against the bar at
+        // `i + lookahead`, so a usable frontier needs both `i + 1 >= need`
+        // leading bars and `i + lookahead < T` trailing ones. The smallest `T`
+        // that admits any such `i` is `need + lookahead` (take i = need - 1).
+        // Stopping at a bare total of `need` therefore hands back a "sufficient"
+        // lake that yields zero decision points -- and worse, short-circuits
+        // with zero fetches forever after, since `need` bars are already there.
         let need = lookback_of("obv");
+        let lookahead = 3;
         let lake = tempdir().unwrap();
         let store = CandleStore::open(lake.path()).unwrap();
-        store
-            .write_sourced_candles("NSE:INFY", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &[candle_at(date(2024, 1, 15))])
-            .unwrap();
-        let mut fetch = |_e: &str, d: NaiveDate| Ok(bhavcopy_csv(d, &["INFY"]));
+        let already: Vec<Candle> =
+            (0..need).map(|i| candle_at(date(2024, 1, 15) - chrono::Duration::days(i as i64 * 7))).collect();
+        store.write_sourced_candles("NSE:INFY", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &already).unwrap();
+        let mut attempts: Vec<NaiveDate> = Vec::new();
+        let mut fetch = |_e: &str, d: NaiveDate| {
+            attempts.push(d);
+            Ok(bhavcopy_csv(d, &["INFY"]))
+        };
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv"),
+            request("NSE:INFY", "obv", lookahead),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
         );
 
+        assert_eq!(attempts.len(), lookahead, "a lake at exactly `need` must not short-circuit");
         assert!(response.sufficient);
-        assert_eq!(response.have, 1 + need, "the one original bar plus `need` brand-new leading bars");
-        assert_eq!(response.need, need, "`need` still reports the algorithm's raw lookback, not the walk's target");
+        assert_eq!(response.have, need + lookahead);
+        assert_eq!(response.need, need + lookahead, "`need` reports what THIS run needs in total");
+    }
+
+    #[test]
+    fn an_insufficient_answer_never_claims_more_history_than_it_says_it_needs() {
+        // "NSE:ZYDUSWELL has 3 days of real listed history; kronos needs 2.
+        // Nothing to benchmark over." was reachable while `need` reported the
+        // bare lookback but `sufficient` was decided against a bigger target.
+        let need = lookback_of("obv");
+        let lookahead = 5;
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        let already: Vec<Candle> = (0..=need).map(|i| candle_at(date(2024, 1, 15) - chrono::Duration::days(i as i64 * 7))).collect();
+        store.write_sourced_candles("NSE:ZYDUSWELL", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &already).unwrap();
+        // The symbol is in no older bhavcopy, so the walk stops on the absent
+        // streak with more bars than the bare lookback but fewer than it needs.
+        let mut fetch = |_e: &str, d: NaiveDate| Ok(bhavcopy_csv(d, &["TCS"]));
+
+        let response = handle_ensure_day_backfill(
+            &store,
+            request("NSE:ZYDUSWELL", "obv", lookahead),
+            date(2024, 1, 15),
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        assert!(!response.sufficient);
+        assert_eq!(response.have, need + 1);
+        assert!(
+            response.have < response.need,
+            "an insufficient answer that shows have >= need reads as a contradiction: {} >= {}",
+            response.have,
+            response.need
+        );
     }
 
     #[test]
@@ -321,7 +362,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:ZYDUSWELL", "obv"),
+            request("NSE:ZYDUSWELL", "obv", 0),
             date(2024, 1, 15),
             &mut fetch,
             &mut |index, total| progress.push((index, total)),
@@ -355,7 +396,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv"),
+            request("NSE:INFY", "obv", 0),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -385,7 +426,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:ZYDUSWELL", "obv"),
+            request("NSE:ZYDUSWELL", "obv", 0),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -416,7 +457,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv"),
+            request("NSE:INFY", "obv", 0),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -439,9 +480,12 @@ mod tests {
             Ok(bhavcopy_csv(d, &["INFY"]))
         };
 
+        // Lookahead 0 because this is the defensive path only: the picker feeds
+        // ids straight from list_algorithms, so an unknown one never arrives
+        // alongside a real run's scoring window.
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "__not_an_algorithm__"),
+            request("NSE:INFY", "__not_an_algorithm__", 0),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},

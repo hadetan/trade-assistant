@@ -504,7 +504,8 @@ fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
         .spawn()
         .expect("sidecar binary must start");
 
-    let request = r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__"}"#;
+    let request =
+        r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__","lookahead":0}"#;
     {
         let stdin = child.stdin.as_mut().unwrap();
         writeln!(stdin, "{request}").unwrap();

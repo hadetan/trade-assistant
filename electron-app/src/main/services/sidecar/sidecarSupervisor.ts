@@ -156,13 +156,17 @@ export class SidecarSupervisor extends EventEmitter {
     return this.send({ type: "list_algorithms", id: this.nextId }) as Promise<ListAlgorithmsResponseWire>;
   }
 
+  // `lookahead` is required rather than defaulted: the sidecar sizes the fetch
+  // against required_lookback + lookahead, and a caller that silently got 0
+  // would be back to a backfill whose newest bar has nothing to score against.
   ensureDayBackfill(
     symbol: string,
     algoId: string,
+    lookahead: number,
     onDayProgress?: (index: number, total: number) => void,
   ): Promise<DayBackfillResponseWire> {
     return this.send(
-      { type: "ensure_day_backfill", id: this.nextId, symbol, algo_id: algoId },
+      { type: "ensure_day_backfill", id: this.nextId, symbol, algo_id: algoId, lookahead },
       (id) => {
         if (onDayProgress) this.dayProgress.set(id, onDayProgress);
       },

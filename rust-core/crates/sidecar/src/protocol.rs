@@ -174,12 +174,22 @@ pub struct EnsureDayBackfillRequest {
     /// them: the Benchmark UI already requires picking exactly one (P14§2
     /// locked decision 2).
     pub algo_id: String,
+    /// The scoring window of the run asking for the backfill (its
+    /// `lookaheadBars`). Sizing needs it because a frontier is only usable when
+    /// a real bar exists `lookahead` bars after it, so the algorithm's own
+    /// lookback alone never leaves room to score anything.
+    pub lookahead: usize,
 }
 
 #[derive(Debug, Serialize)]
 pub struct DayBackfillResponse {
     pub id: u64,
     pub have: usize,
+    /// The total bars this run needs before it can produce even one result: the
+    /// algorithm's own required_lookback plus the run's lookahead scoring
+    /// window. Not the bare registry lookback -- reporting that while deciding
+    /// `sufficient` against the larger total let an insufficient answer render
+    /// as "has 22 days; needs 20", which reads as a contradiction.
     pub need: usize,
     /// false => `have` is the symbol's full available real history, capped by
     /// the "10 consecutive absent trading days" heuristic (P14§2 item 4) --

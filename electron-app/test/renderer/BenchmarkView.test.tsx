@@ -279,7 +279,7 @@ describe("BenchmarkView", () => {
 
     await waitFor(() =>
       expect(container.textContent).toContain(
-        "NSE:ZYDUSWELL has 8 days of real listed history; kronos needs 256",
+        "NSE:ZYDUSWELL has 8 days of real listed history; this run needs 256",
       ),
     );
     // The confusing empty result is gone, not merely accompanied by a banner.

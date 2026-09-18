@@ -447,6 +447,9 @@ describe("runBenchmark frontier walk", () => {
     expect(ensureDayBackfill).toHaveBeenCalledTimes(1);
     expect(ensureDayBackfill.mock.calls[0][0]).toBe("NSE:INFY");
     expect(ensureDayBackfill.mock.calls[0][1]).toBe("kronos");
+    // This run's own scoring window, not a default: the sidecar sizes the
+    // fetch against required_lookback + lookahead.
+    expect(ensureDayBackfill.mock.calls[0][2]).toBe(1);
     expect(result.insufficientHistory).toBeUndefined();
     expect(result.decisionPoints).toHaveLength(3);
   });
@@ -521,7 +524,7 @@ describe("runBenchmark frontier walk", () => {
   it("reports backfill progress as its own phase before the frontier walk's", async () => {
     const deps: BenchmarkRunnerDeps = {
       sidecar: {
-        ensureDayBackfill: vi.fn().mockImplementation((_symbol: string, _algoId: string, onDay?: (i: number, t: number) => void) => {
+        ensureDayBackfill: vi.fn().mockImplementation((_symbol: string, _algoId: string, _lookahead: number, onDay?: (i: number, t: number) => void) => {
           onDay?.(1, 2);
           onDay?.(2, 2);
           return Promise.resolve({ type: "day_backfill", id: 1, have: 2, need: 2, sufficient: true, archive_exhausted: false });
@@ -544,20 +547,19 @@ describe("runBenchmark frontier walk", () => {
     ]);
   });
 
-  it("a just-backfilled thin lake yields a real decision point computed against a full lookback", async () => {
-    // The bug this guards: a backfill that tops the partition up to a bare
-    // total of `need` bars leaves the originally-visible bars sitting in the
-    // series' tail with less than `need` bars of leading context each, so
-    // run_applicable silently drops the selected algorithm -- and with a
-    // shallow enough top-up the lookahead gate (i + lookaheadBars <
-    // series.length) drops every frontier outright and the "successful"
-    // backfill still renders an empty result. Provisioning `need` NEW bars
-    // behind whatever already existed is what makes this scenario produce a
-    // usable frontier at all.
-    const need = 20;
-    const originalCount = 6;
+  it("a lake backfilled to exactly lookback + lookahead still yields a real decision point", async () => {
+    // The bug this guards: a backfill that stops at a bare total of the
+    // algorithm's `required_lookback` leaves the newest bar with no bar after
+    // it to score against, so the lookahead gate (i + lookaheadBars <
+    // series.length) drops every frontier and the "successful" backfill renders
+    // an empty result. `lookback + lookahead` is the exact minimum that admits
+    // one -- the frontier at index lookback - 1, whose window is a full
+    // lookback and whose score lands on the very last bar.
+    const lookback = 20;
+    const lookahead = 5;
+    const total = lookback + lookahead;
     const dayStart = 1_700_000_000;
-    const candles: CandleWire[] = Array.from({ length: originalCount + need }, (_, i) => ({
+    const candles: CandleWire[] = Array.from({ length: total }, (_, i) => ({
       ts: dayStart + i * DAY_SECONDS,
       open: 100 + i,
       high: 100 + i,
@@ -567,15 +569,15 @@ describe("runBenchmark frontier walk", () => {
     }));
     // The window the user selected is the history the lake already had; the
     // backfilled bars are strictly older, so they precede it in the series.
-    const fromTs = candles[need].ts;
+    const fromTs = candles[lookback - 1].ts;
     const windows: number[] = [];
     const deps: BenchmarkRunnerDeps = {
       sidecar: {
         ensureDayBackfill: vi.fn().mockResolvedValue({
           type: "day_backfill",
           id: 1,
-          have: originalCount + need,
-          need,
+          have: total,
+          need: total,
           sufficient: true,
           archive_exhausted: false,
         }),
@@ -588,11 +590,13 @@ describe("runBenchmark frontier walk", () => {
       },
     };
 
-    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", fromTs, toTs: 1e12, lookaheadBars: 5 }));
+    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", fromTs, toTs: 1e12, lookaheadBars: lookahead }));
 
     expect(result.insufficientHistory).toBeUndefined();
-    expect(result.decisionPoints.length).toBeGreaterThan(0);
-    expect(windows.every((length) => length >= need)).toBe(true);
+    // Exactly one: i = lookback - 1 passes both gates, i = lookback fails the
+    // lookahead one. Any smaller lake would have produced none.
+    expect(result.decisionPoints).toHaveLength(1);
+    expect(windows).toEqual([lookback]);
   });
 
   it("tags a cancellation during the pre-flight as cancelled rather than throwing", async () => {

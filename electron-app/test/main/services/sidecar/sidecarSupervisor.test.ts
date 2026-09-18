@@ -311,10 +311,19 @@ describe("SidecarSupervisor", () => {
   it("sends an ensure_day_backfill request and resolves the matching day_backfill response", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos");
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", 5);
 
     const [request] = await requestsSeen;
-    expect(request).toEqual({ type: "ensure_day_backfill", id: 1, symbol: "NSE:ZYDUSWELL", algo_id: "kronos" });
+    // The run's lookahead rides along: the sidecar sizes the fetch against
+    // required_lookback + lookahead, since a frontier with no bar to score
+    // against is not a decision point (P14 second-pass fix I-1).
+    expect(request).toEqual({
+      type: "ensure_day_backfill",
+      id: 1,
+      symbol: "NSE:ZYDUSWELL",
+      algo_id: "kronos",
+      lookahead: 5,
+    });
 
     children[0].stdout.write(
       `${JSON.stringify({
@@ -337,7 +346,7 @@ describe("SidecarSupervisor", () => {
   it("carries an archive_exhausted answer through unchanged", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos");
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", 0);
     await requestsSeen;
 
     children[0].stdout.write(
@@ -359,7 +368,7 @@ describe("SidecarSupervisor", () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
     const seen: Array<[number, number]> = [];
-    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", (index, total) => seen.push([index, total]));
+    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", 0, (index, total) => seen.push([index, total]));
     await requestsSeen;
 
     children[0].stdout.write(
@@ -391,7 +400,7 @@ describe("SidecarSupervisor", () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
     const seen: Array<[number, number]> = [];
-    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", (index, total) => seen.push([index, total]));
+    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", 0, (index, total) => seen.push([index, total]));
     await requestsSeen;
 
     children[0].stdout.write(
@@ -423,7 +432,7 @@ describe("SidecarSupervisor", () => {
     });
     supervisor.start();
 
-    const backfill = supervisor.ensureDayBackfill("NSE:INFY", "kronos"); // id 1
+    const backfill = supervisor.ensureDayBackfill("NSE:INFY", "kronos", 0); // id 1
     const ordinary = supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [], "sma"); // id 2
 
     await expect(ordinary).rejects.toThrow(/timed out after 5ms/);

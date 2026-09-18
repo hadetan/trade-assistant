@@ -91,6 +91,10 @@ export interface DayBackfillResponseWire {
   type: "day_backfill";
   id: number;
   have: number;
+  // The total bars this run needs before it can produce even one result: the
+  // algorithm's own required_lookback plus the request's lookahead scoring
+  // window -- not the bare registry lookback. `sufficient` is decided against
+  // this same number, so an insufficient answer can never show have >= need.
   need: number;
   sufficient: boolean;
   // The walk gave up because the archive had no file for CLOSED_DAY_LIMIT
@@ -146,7 +150,10 @@ export type SidecarRequestWire =
   | { type: "benchmark_compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[]; algo_id: string }
   | { type: "evaluate_scan_gate_stateless"; id: number; prev: ConfluenceWire | null; curr: ConfluenceWire }
   | { type: "list_algorithms"; id: number }
-  | { type: "ensure_day_backfill"; id: number; symbol: string; algo_id: string };
+  // `lookahead` is the requesting run's scoring window: the sidecar sizes the
+  // fetch against the algorithm's required_lookback PLUS it, since a frontier
+  // with no later bar to score against is not a decision point.
+  | { type: "ensure_day_backfill"; id: number; symbol: string; algo_id: string; lookahead: number };
 
 export function encodeRequest(request: SidecarRequestWire): string {
   return `${JSON.stringify(request)}\n`;

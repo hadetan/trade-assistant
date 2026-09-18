@@ -45,14 +45,16 @@ function InsufficientHistory({ result }: { result: BenchmarkResult }): JSX.Eleme
     return (
       <Banner variant="warning">
         Could not reach far enough back into the NSE archive for {result.params.symbol} — collected {have} of the{" "}
-        {need} days {result.params.algoId} needs before the archive stopped answering. It may not cover this far back.
+        {need} days this run needs before the archive stopped answering. It may not cover this far back.
       </Banner>
     );
   }
   return (
     <Banner variant="info">
-      {result.params.symbol} has {have} days of real listed history; {result.params.algoId} needs {need}. Nothing to
-      benchmark over.
+      {/* "this run", not "{algoId}": `need` is the algorithm's lookback plus
+          this run's lookahead scoring window, so crediting it to the algorithm
+          alone would overstate what the model itself requires. */}
+      {result.params.symbol} has {have} days of real listed history; this run needs {need}. Nothing to benchmark over.
     </Banner>
   );
 }

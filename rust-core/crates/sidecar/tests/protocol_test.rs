@@ -434,12 +434,13 @@ fn encodes_a_tagged_algorithms_response() {
 
 #[test]
 fn parses_a_tagged_ensure_day_backfill_request() {
-    let line = r#"{"type":"ensure_day_backfill","id":41,"symbol":"NSE:ZYDUSWELL","algo_id":"kronos"}"#;
+    let line = r#"{"type":"ensure_day_backfill","id":41,"symbol":"NSE:ZYDUSWELL","algo_id":"kronos","lookahead":5}"#;
     match parse_request(line).unwrap() {
         SidecarRequest::EnsureDayBackfill(request) => {
             assert_eq!(request.id, 41);
             assert_eq!(request.symbol, "NSE:ZYDUSWELL");
             assert_eq!(request.algo_id, "kronos");
+            assert_eq!(request.lookahead, 5, "sizing is per-run, so the run's scoring window must cross the wire");
         }
         _ => panic!("expected an ensure_day_backfill request"),
     }
@@ -508,6 +509,8 @@ fn an_ensure_day_backfill_request_is_constructible_for_a_round_trip() {
         id: 1,
         symbol: "NSE:INFY".to_string(),
         algo_id: "obv".to_string(),
+        lookahead: 5,
     };
     assert_eq!(request.algo_id, "obv");
+    assert_eq!(request.lookahead, 5);
 }

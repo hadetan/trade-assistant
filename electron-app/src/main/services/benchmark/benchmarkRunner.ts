@@ -106,7 +106,7 @@ export async function runBenchmark(
   if (params.timeframe === "day" && params.source === "bhavcopy") {
     let backfill;
     try {
-      backfill = await deps.sidecar.ensureDayBackfill(params.symbol, params.algoId, (index, total) =>
+      backfill = await deps.sidecar.ensureDayBackfill(params.symbol, params.algoId, params.lookaheadBars, (index, total) =>
         onProgress?.({ phase: "backfill", index, total }),
       );
     } catch (error) {
