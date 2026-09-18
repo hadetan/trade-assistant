@@ -32,8 +32,8 @@ export interface BannerEvent {
 
 export type Horizon = "intraday" | "positional";
 
-export type { BenchmarkCadence, Outcome, DecisionPoint, BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
-import type { BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
+export type { BenchmarkCadence, Outcome, DecisionPoint, BenchmarkRunParams, BenchmarkResult, BenchmarkProgress } from "../services/benchmark/benchmarkRunner";
+import type { BenchmarkProgress, BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
 
 export interface LakeSymbolEntry {
   symbol: string;
@@ -128,7 +128,7 @@ export interface RendererApi {
   listAlgorithms(): Promise<AlgorithmEntry[]>;
   runBenchmark(params: BenchmarkRunParams): Promise<BenchmarkResult>;
   cancelBenchmark(): Promise<void>;
-  onBenchmarkProgress(handler: (progress: { index: number; total: number }) => void): void;
+  onBenchmarkProgress(handler: (progress: BenchmarkProgress) => void): void;
   copyBenchmarkResult(text: string): Promise<void>;
 }
 

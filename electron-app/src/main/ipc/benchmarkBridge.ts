@@ -7,7 +7,13 @@ export interface BenchmarkBridgeDeps {
   ipcMain: Pick<IpcMain, "handle">;
   sidecar: Pick<
     SidecarSupervisor,
-    "listLakeSymbols" | "listAlgorithms" | "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless" | "cancelCurrent"
+    | "listLakeSymbols"
+    | "listAlgorithms"
+    | "readLakeCandles"
+    | "benchmarkCompute"
+    | "evaluateScanGateStateless"
+    | "ensureDayBackfill"
+    | "cancelCurrent"
   >;
 }
 
@@ -29,9 +35,7 @@ export function registerBenchmarkBridge(deps: BenchmarkBridgeDeps): void {
     return algorithms.map((a) => ({ id: a.id, cost: a.cost as "fast" | "slow", requiredLookback: a.required_lookback }));
   });
   deps.ipcMain.handle("benchmark:runBenchmark", (event, params: BenchmarkRunParams) =>
-    runBenchmark({ sidecar: deps.sidecar }, params, (index, total) =>
-      event.sender.send("benchmark:progress", { index, total }),
-    ),
+    runBenchmark({ sidecar: deps.sidecar }, params, (progress) => event.sender.send("benchmark:progress", progress)),
   );
   deps.ipcMain.handle("benchmark:cancelBenchmark", () => {
     deps.sidecar.cancelCurrent();

@@ -10,6 +10,7 @@ function harness(sidecar: {
   readLakeCandles: ReturnType<typeof vi.fn>;
   benchmarkCompute: ReturnType<typeof vi.fn>;
   evaluateScanGateStateless: ReturnType<typeof vi.fn>;
+  ensureDayBackfill: ReturnType<typeof vi.fn>;
   cancelCurrent: ReturnType<typeof vi.fn>;
 }) {
   const handlers = new Map<string, (event: unknown, arg: unknown) => unknown>();
@@ -27,6 +28,17 @@ function idleSidecar() {
     readLakeCandles: vi.fn(),
     benchmarkCompute: vi.fn(),
     evaluateScanGateStateless: vi.fn(),
+    // Every fixture in this file uses timeframe "day" with source "bhavcopy",
+    // so the pre-flight runs; a lake that already has plenty means the run
+    // proceeds unchanged.
+    ensureDayBackfill: vi.fn().mockResolvedValue({
+      type: "day_backfill",
+      id: 1,
+      have: 10_000,
+      need: 0,
+      sufficient: true,
+      archive_exhausted: false,
+    }),
     cancelCurrent: vi.fn(),
   };
 }
@@ -121,7 +133,7 @@ describe("registerBenchmarkBridge", () => {
     };
     await handlers.get("benchmark:runBenchmark")!(event, params);
     // series has 2 bars, lookaheadBars=0 -> eligible i in {0} only.
-    expect(event.sender.send).toHaveBeenCalledWith("benchmark:progress", { index: 0, total: 2 });
+    expect(event.sender.send).toHaveBeenCalledWith("benchmark:progress", { phase: "run", index: 0, total: 2 });
   });
 
   it("calls cancelCurrent on the sidecar", async () => {

@@ -33,11 +33,24 @@ export interface BenchmarkRunParams {
   toTs: number;
 }
 
+export interface BenchmarkProgress {
+  phase: "backfill" | "run";
+  index: number;
+  total: number;
+}
+
 export interface BenchmarkResult {
   params: BenchmarkRunParams;
   candles: CandleWire[];
   decisionPoints: DecisionPoint[];
   cancelled: boolean;
+  // Set only when the run has fewer bars than the selected algorithm needs even
+  // after backfill (P14§6); the UI renders this instead of the empty summary
+  // strip and chart that started this phase. `reason` keeps the two shortfalls
+  // apart: "symbol_history" is a claim about the symbol, "archive_unreachable"
+  // is a claim about the archive, and they must not be worded alike
+  // (decision (xviii)).
+  insufficientHistory?: { have: number; need: number; reason: "symbol_history" | "archive_unreachable" };
 }
 
 export const NEUTRAL_BAND = 0.001; // mirrors algo_core::benchmark_classify::DEFAULT_NEUTRAL_BAND
@@ -74,14 +87,53 @@ export function summarize(points: DecisionPoint[]): { correct: number; incorrect
 }
 
 export interface BenchmarkRunnerDeps {
-  sidecar: Pick<SidecarSupervisor, "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless">;
+  sidecar: Pick<
+    SidecarSupervisor,
+    "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless" | "ensureDayBackfill"
+  >;
 }
 
 export async function runBenchmark(
   deps: BenchmarkRunnerDeps,
   params: BenchmarkRunParams,
-  onProgress?: (index: number, total: number) => void,
+  onProgress?: (progress: BenchmarkProgress) => void,
 ): Promise<BenchmarkResult> {
+  // Bhavcopy is the one on-demand source this app has, and it is day-only
+  // (P14§1). The source check is not redundant with the timeframe check: the
+  // live warm-up path writes ("day", "kite") partitions into the same lake, and
+  // backfilling would top up ("day", "bhavcopy") while the run below reads the
+  // partition this entry actually names (decision (viii)).
+  if (params.timeframe === "day" && params.source === "bhavcopy") {
+    let backfill;
+    try {
+      backfill = await deps.sidecar.ensureDayBackfill(params.symbol, params.algoId, (index, total) =>
+        onProgress?.({ phase: "backfill", index, total }),
+      );
+    } catch (error) {
+      if ((error as { cancelled?: boolean }).cancelled !== true) throw error;
+      return { params, candles: [], decisionPoints: [], cancelled: true };
+    }
+    if (backfill.error && !backfill.sufficient) {
+      throw new Error(`backfill failed for ${params.symbol}: ${backfill.error}`);
+    }
+    if (backfill.error) {
+      console.error(`benchmark: backfill for ${params.symbol} reported: ${backfill.error}`);
+    }
+    if (!backfill.sufficient) {
+      return {
+        params,
+        candles: [],
+        decisionPoints: [],
+        cancelled: false,
+        insufficientHistory: {
+          have: backfill.have,
+          need: backfill.need,
+          reason: backfill.archive_exhausted ? "archive_unreachable" : "symbol_history",
+        },
+      };
+    }
+  }
+
   const { candles } = await deps.sidecar.readLakeCandles(params.symbol, params.timeframe, params.source);
   // The FULL lake partition is the compute window: each frontier's
   // series.slice(0, i + 1) must legitimately reach back before fromTs, or
@@ -113,7 +165,7 @@ export async function runBenchmark(
       // Mirror run_replay's boundary: stop once no future bar exists at i+lookahead.
       if (i + params.lookaheadBars >= series.length) break;
 
-      onProgress?.(i - firstFrontier, progressTotal);
+      onProgress?.({ phase: "run", index: i - firstFrontier, total: progressTotal });
 
       let compute: { algo_results: AlgoResultWire[]; confluence: ConfluenceWire } | null = null;
       let isDecisionPoint = false;
