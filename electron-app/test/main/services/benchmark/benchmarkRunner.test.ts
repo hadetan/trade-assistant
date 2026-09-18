@@ -544,6 +544,57 @@ describe("runBenchmark frontier walk", () => {
     ]);
   });
 
+  it("a just-backfilled thin lake yields a real decision point computed against a full lookback", async () => {
+    // The bug this guards: a backfill that tops the partition up to a bare
+    // total of `need` bars leaves the originally-visible bars sitting in the
+    // series' tail with less than `need` bars of leading context each, so
+    // run_applicable silently drops the selected algorithm -- and with a
+    // shallow enough top-up the lookahead gate (i + lookaheadBars <
+    // series.length) drops every frontier outright and the "successful"
+    // backfill still renders an empty result. Provisioning `need` NEW bars
+    // behind whatever already existed is what makes this scenario produce a
+    // usable frontier at all.
+    const need = 20;
+    const originalCount = 6;
+    const dayStart = 1_700_000_000;
+    const candles: CandleWire[] = Array.from({ length: originalCount + need }, (_, i) => ({
+      ts: dayStart + i * DAY_SECONDS,
+      open: 100 + i,
+      high: 100 + i,
+      low: 100 + i,
+      close: 100 + i,
+      volume: 100,
+    }));
+    // The window the user selected is the history the lake already had; the
+    // backfilled bars are strictly older, so they precede it in the series.
+    const fromTs = candles[need].ts;
+    const windows: number[] = [];
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        ensureDayBackfill: vi.fn().mockResolvedValue({
+          type: "day_backfill",
+          id: 1,
+          have: originalCount + need,
+          need,
+          sufficient: true,
+          archive_exhausted: false,
+        }),
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
+        benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[]) => {
+          windows.push(window.length);
+          return Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+        }),
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+
+    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", fromTs, toTs: 1e12, lookaheadBars: 5 }));
+
+    expect(result.insufficientHistory).toBeUndefined();
+    expect(result.decisionPoints.length).toBeGreaterThan(0);
+    expect(windows.every((length) => length >= need)).toBe(true);
+  });
+
   it("tags a cancellation during the pre-flight as cancelled rather than throwing", async () => {
     const readLakeCandles = vi.fn();
     const deps: BenchmarkRunnerDeps = {

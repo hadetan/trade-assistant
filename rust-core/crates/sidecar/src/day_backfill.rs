@@ -1,8 +1,7 @@
 use crate::protocol::{DayBackfillResponse, EnsureDayBackfillRequest};
 use algo_core::registry;
 use chrono::NaiveDate;
-use ingestion::backfill::{walk_trading_days_backward, DayOutcome, WalkStop};
-use ingestion::error::IngestionError;
+use ingestion::backfill::{walk_trading_days_backward, DayFetcher, DayOutcome, WalkStop};
 use ingestion::time::ist_date_from_epoch;
 use std::ops::ControlFlow;
 use storage::CandleStore;
@@ -27,7 +26,7 @@ pub fn handle_ensure_day_backfill(
     store: &CandleStore,
     request: EnsureDayBackfillRequest,
     today: NaiveDate,
-    fetch: &mut dyn FnMut(&str, NaiveDate) -> Result<Vec<u8>, IngestionError>,
+    fetch: DayFetcher<'_>,
     on_progress: &mut dyn FnMut(usize, usize),
 ) -> DayBackfillResponse {
     let id = request.id;
@@ -62,6 +61,15 @@ pub fn handle_ensure_day_backfill(
         };
     }
 
+    // `need` NEW bars beyond whatever the lake already held, not a bare total of
+    // `need`. Topping up to a total leaves the newest bar with exactly enough
+    // leading context and no bars after it, so a benchmark run's lookahead gate
+    // (`i + lookaheadBars < series.len()`) can never be satisfied for any
+    // originally-visible bar and the "successful" backfill still yields zero
+    // decision points. Provisioning against the original count instead gives
+    // every bar that was already there a full `need` bars of leading context.
+    let target = collected + need;
+
     let exchange = request.symbol.split(':').next().unwrap_or("NSE").to_string();
     // Resume strictly before the earliest bar already held, so no fetched day
     // can collide with one the lake already has.
@@ -88,8 +96,11 @@ pub fn handle_ensure_day_backfill(
                     return ControlFlow::Break(());
                 }
                 collected += 1;
-                on_progress(collected, need);
-                if collected >= need {
+                // Against `target`, not `need`: `collected` counts the whole
+                // partition, so reporting it against the raw lookback would
+                // render "3/2 days" in the progress pill for a partial lake.
+                on_progress(collected, target);
+                if collected >= target {
                     return ControlFlow::Break(());
                 }
             }
@@ -120,7 +131,7 @@ pub fn handle_ensure_day_backfill(
         .read_sourced_candles(&request.symbol, BACKFILL_TIMEFRAME, BACKFILL_SOURCE)
         .map(|candles| candles.len())
         .unwrap_or(collected);
-    DayBackfillResponse { id, have, need, sufficient: have >= need, archive_exhausted, error }
+    DayBackfillResponse { id, have, need, sufficient: have >= target, archive_exhausted, error }
 }
 
 #[cfg(test)]
@@ -129,6 +140,7 @@ mod tests {
     use algo_core::registry;
     use chrono::Datelike;
     use ingestion::backfill::CLOSED_DAY_LIMIT;
+    use ingestion::error::IngestionError;
     use ingestion::time::ist_session_close_epoch;
     use storage::Candle;
     use tempfile::tempdir;
@@ -258,11 +270,42 @@ mod tests {
             &mut |_, _| {},
         );
 
-        // Earliest existing candle is Mon 15 -> start at Sun 14 -> Sat 13 -> Fri 12.
-        // Neither weekend day is fetched, and the 15th is never refetched.
-        assert_eq!(attempts, vec![date(2024, 1, 12)]);
-        assert_eq!(response.have, 2);
+        // Earliest existing candle is Mon 15 -> start at Sun 14 -> Sat 13 -> Fri
+        // 12 -> Thu 11. Neither weekend day is fetched, the 15th is never
+        // refetched, and the walk provisions `need` bars BEHIND the one it
+        // already had rather than stopping at a bare total of `need`.
+        assert_eq!(attempts, vec![date(2024, 1, 12), date(2024, 1, 11)]);
+        assert_eq!(response.have, 3);
         assert!(response.sufficient);
+    }
+
+    #[test]
+    fn a_thin_lake_gets_need_new_leading_bars_beyond_whatever_already_existed() {
+        // Topping up to a bare total of `need` gives only the single newest bar
+        // enough leading context and leaves no spare room, so a benchmark run's
+        // lookahead-scoring gate (i + lookaheadBars < series.len()) can never be
+        // satisfied and the run yields zero decision points. Provisioning `need`
+        // NEW bars beyond whatever already existed keeps every originally
+        // visible bar's own leading context intact.
+        let need = lookback_of("obv");
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        store
+            .write_sourced_candles("NSE:INFY", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &[candle_at(date(2024, 1, 15))])
+            .unwrap();
+        let mut fetch = |_e: &str, d: NaiveDate| Ok(bhavcopy_csv(d, &["INFY"]));
+
+        let response = handle_ensure_day_backfill(
+            &store,
+            request("NSE:INFY", "obv"),
+            date(2024, 1, 15),
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        assert!(response.sufficient);
+        assert_eq!(response.have, 1 + need, "the one original bar plus `need` brand-new leading bars");
+        assert_eq!(response.need, need, "`need` still reports the algorithm's raw lookback, not the walk's target");
     }
 
     #[test]
