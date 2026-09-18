@@ -87,4 +87,11 @@ describe("nextSessionOpen", () => {
   it("returns the current session's own open while the session is live, so the gate never reports a session in progress as closed", () => {
     expect(nextSessionOpen(ist("2026-09-17T11:00:00"))).toBe(ist("2026-09-17T09:15:00").getTime() / 1000);
   });
+
+  it("rolls to tomorrow's open, not today's already-passed one, anywhere inside the 15:30:00-15:30:59 close minute", () => {
+    // isWithinSessionHours already says 15:30:30 is past the close (second-level
+    // precision); this must agree instead of truncating to the 930-minute mark.
+    expect(isWithinSessionHours(ist("2026-09-17T15:30:30"))).toBe(false);
+    expect(nextSessionOpen(ist("2026-09-17T15:30:30"))).toBe(ist("2026-09-18T09:15:00").getTime() / 1000);
+  });
 });

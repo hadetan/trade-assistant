@@ -4,7 +4,7 @@ import type { CandleWire } from "../sidecar/sidecarProtocol";
 import type { KiteSessionStatus } from "../../ipc/rendererApi";
 import { requiredBarsFor } from "../analysis/warmedEnvelope";
 import { topUpCandles } from "./candleWarmup";
-import { isHolidayCalendarCovered, isWithinSessionHours, nextSessionOpen } from "./tradingCalendar";
+import { isHolidayCalendarCovered, istYear, isWithinSessionHours, nextSessionOpen } from "./tradingCalendar";
 import { NSE_HOLIDAY_CALENDAR_SOURCE } from "./nseHolidays";
 import type { CandleInterval } from "./candleInterval";
 
@@ -72,7 +72,7 @@ export async function checkEngineOnlyReadiness(
     return { ok: false, reason: "insufficient_history", have: candles.length, need };
   }
 
-  warnOnceAboutCalendarCoverage(params.now.getFullYear());
+  warnOnceAboutCalendarCoverage(istYear(params.now));
   if (!isWithinSessionHours(params.now)) {
     return { ok: false, reason: "market_closed", nextOpenAt: nextSessionOpen(params.now) };
   }

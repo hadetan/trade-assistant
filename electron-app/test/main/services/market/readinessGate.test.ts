@@ -113,4 +113,20 @@ describe("checkEngineOnlyReadiness", () => {
     await checkEngineOnlyReadiness(deps() as never, { ...PARAMS, now: new Date("2030-06-18T11:00:00+05:30") });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("2030"));
   });
+
+  it("derives the calendar-coverage warning's year from IST, not the host machine's own timezone", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const originalTz = process.env.TZ;
+    // 2031-01-01T02:00 IST is 2030-12-31T20:30 UTC; a host west of UTC (e.g.
+    // America/Los_Angeles) reads .getFullYear() as 2030, but IST is already 2031 --
+    // an uncovered year, so the warning must fire naming 2031, not 2030.
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      await checkEngineOnlyReadiness(deps() as never, { ...PARAMS, now: new Date("2031-01-01T02:00:00+05:30") });
+    } finally {
+      process.env.TZ = originalTz;
+    }
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("2031"));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("2030"));
+  });
 });

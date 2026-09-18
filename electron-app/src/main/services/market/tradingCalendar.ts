@@ -22,14 +22,13 @@ function istDateKey(at: Date): string {
   return `${ist.getUTCFullYear()}-${pad(ist.getUTCMonth() + 1)}-${pad(ist.getUTCDate())}`;
 }
 
-function istMinutesOfDay(at: Date): number {
-  const ist = toIst(at);
-  return ist.getUTCHours() * 60 + ist.getUTCMinutes();
-}
-
 function istSecondsOfDay(at: Date): number {
   const ist = toIst(at);
   return ist.getUTCHours() * 3600 + ist.getUTCMinutes() * 60 + ist.getUTCSeconds();
+}
+
+export function istYear(at: Date): number {
+  return toIst(at).getUTCFullYear();
 }
 
 export function isHolidayCalendarCovered(year: number): boolean {
@@ -64,7 +63,7 @@ export function nextSessionOpen(at: Date): number {
   // only ever calls this to say when trading resumes, and a live session has
   // already resumed.
   let cursor = at;
-  if (isTradingDay(cursor) && istMinutesOfDay(cursor) <= SESSION_CLOSE_MINUTES) {
+  if (isTradingDay(cursor) && istSecondsOfDay(cursor) <= SESSION_CLOSE_MINUTES * 60) {
     return sessionOpenEpochSeconds(cursor);
   }
   do {
