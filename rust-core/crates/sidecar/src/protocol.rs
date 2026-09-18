@@ -275,6 +275,13 @@ pub struct ProgressLine {
     pub id: u64,
     pub step: String,
     pub status: String,
+    /// Present only for a step that can say "N of M" -- today just the day
+    /// backfill walk. Skipped when absent so every pre-existing progress line
+    /// is byte-for-byte what it was before (P14§5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
 }
 
 pub fn encode_progress(id: u64, step: &str, status: &str) -> String {
@@ -283,6 +290,20 @@ pub fn encode_progress(id: u64, step: &str, status: &str) -> String {
         id,
         step: step.to_string(),
         status: status.to_string(),
+        index: None,
+        total: None,
+    })
+    .expect("ProgressLine always serializes")
+}
+
+pub fn encode_progress_counted(id: u64, step: &str, status: &str, index: usize, total: usize) -> String {
+    serde_json::to_string(&ProgressLine {
+        r#type: "progress",
+        id,
+        step: step.to_string(),
+        status: status.to_string(),
+        index: Some(index),
+        total: Some(total),
     })
     .expect("ProgressLine always serializes")
 }
@@ -351,5 +372,37 @@ mod tests {
         assert!(!line.contains('\n'));
         // per-algorithm step is just another string in the same field
         assert!(encode_progress(7, "rsi", "done").contains("\"step\":\"rsi\""));
+    }
+
+    #[test]
+    fn encode_progress_omits_the_count_fields_so_every_existing_line_stays_byte_identical() {
+        let line = encode_progress(7, "compute", "running");
+        assert!(!line.contains("index"), "an uncounted step must not gain an index key: {line}");
+        assert!(!line.contains("total"), "an uncounted step must not gain a total key: {line}");
+        assert_eq!(
+            line,
+            r#"{"type":"progress","id":7,"step":"compute","status":"running"}"#
+        );
+    }
+
+    #[test]
+    fn encode_progress_counted_carries_the_day_index_and_total_alongside_the_step() {
+        let line = encode_progress_counted(9, "backfill", "running", 143, 256);
+        assert!(line.contains("\"type\":\"progress\""));
+        assert!(line.contains("\"id\":9"));
+        assert!(line.contains("\"step\":\"backfill\""));
+        assert!(line.contains("\"status\":\"running\""));
+        assert!(line.contains("\"index\":143"));
+        assert!(line.contains("\"total\":256"));
+        assert!(!line.contains('\n'));
+    }
+
+    #[test]
+    fn encode_progress_counted_reports_a_zero_denominator_rather_than_omitting_it() {
+        // A symbol that needs nothing still emits a well-formed counted line if
+        // anything ever walks zero days -- Some(0) is not None.
+        let line = encode_progress_counted(9, "backfill", "running", 0, 0);
+        assert!(line.contains("\"index\":0"));
+        assert!(line.contains("\"total\":0"));
     }
 }
