@@ -88,6 +88,11 @@ export function App(): JSX.Element {
     // screen and reads as if it just happened in the brand-new one.
     setLoginError(null);
     setAnalysisError(null);
+    // Same reasoning as above, for the readiness banner: it's keyed off a
+    // top-level state variable, not anything scoped to the old session, so a
+    // stale blocked/closed banner would otherwise render on the new one too.
+    setReadiness(null);
+    setSuppressStaleBlocked(false);
     void bridge().listSessions().then(setSessions);
   };
 
@@ -121,13 +126,24 @@ export function App(): JSX.Element {
     setActiveSession({ id: detail.id, mode: detail.response_mode });
     const lastUserMessage = [...detail.messages].reverse().find((m) => m.role === "user");
     if (lastUserMessage) {
+      const rawPayload = lastUserMessage.structured_payload as { intent_lens: IntentLens; trigger?: string };
+      setIntentLens(rawPayload.intent_lens);
+      // A scan-originated session's stored turn is a ScanTriggerPayload (`trigger`,
+      // `symbol`, `horizon` -- no `mode`, no `instrument`, no `interval`), never an
+      // AnalysisRunParams. Casting it to AnalysisRunParams would silently coerce
+      // `payload.mode === "engine_only"` to false via `undefined`; checked here
+      // explicitly instead so that can never look like an intentional skip by luck.
+      // Building a scan-appropriate readiness recheck is out of scope (P13 design).
+      if ("trigger" in rawPayload) return;
       const payload = lastUserMessage.structured_payload as AnalysisRunParams;
-      setIntentLens(payload.intent_lens);
       // The gate is re-evaluated as of right now, not replayed from whenever this
       // session was last open: data and market state both move (P13§2 decision 5).
       if (payload.mode === "engine_only") {
         try {
-          const fresh = await bridge().checkReadiness({ instrument: payload.instrument, interval: payload.interval });
+          // A session stored before this PR's horizon->interval rewrite has no
+          // `interval` field at all; fall back rather than send `undefined` on.
+          const interval = payload.interval ?? "5minute";
+          const fresh = await bridge().checkReadiness({ instrument: payload.instrument, interval });
           setReadiness(fresh.ok ? null : fresh);
           const lastAssistantMessage = [...detail.messages].reverse().find((m) => m.role === "assistant");
           const storedResultWasBlocked =

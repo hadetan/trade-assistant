@@ -462,4 +462,103 @@ describe("App", () => {
 
     expect(await screen.findByText(/180 of 256 candles/i)).toBeTruthy();
   });
+
+  it("does not call checkReadiness or crash when reopening a scan-originated session (no mode field on its stored payload)", async () => {
+    const bridge = installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "scan-1", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY (scan)" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "scan-1",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "Proactive scan: NSE:INFY · intraday · buying",
+            structured_payload: { trigger: "proactive_scan", symbol: "NSE:INFY", horizon: "intraday", intent_lens: "buying" },
+          },
+        ],
+      }),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY \(scan\)/ }));
+
+    await waitFor(() => expect(bridge.getSession).toHaveBeenCalledWith("scan-1"));
+    expect(bridge.checkReadiness).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("falls back to the default interval when reopening a pre-migration engine_only session whose stored payload has no interval field", async () => {
+    const bridge = installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "old-1", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "old-1",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "NSE:INFY · buying",
+            structured_payload: {
+              mode: "engine_only",
+              sessionId: "old-1",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+              intent_lens: "buying",
+            },
+          },
+        ],
+      }),
+      checkReadiness: vi.fn().mockResolvedValue({ ok: true }),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+
+    await waitFor(() =>
+      expect(bridge.checkReadiness).toHaveBeenCalledWith({
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        interval: "5minute",
+      }),
+    );
+  });
+
+  it("does not show a stale blocked readiness banner when New session is chosen after a prior session was blocked", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "s10", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "s10",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "NSE:INFY · 5minute · buying",
+            structured_payload: {
+              mode: "engine_only",
+              sessionId: "s10",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+              interval: "5minute",
+              intent_lens: "buying",
+            },
+          },
+        ],
+      }),
+      checkReadiness: vi.fn().mockResolvedValue({ ok: false, reason: "kite_not_connected" }),
+    });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    expect(await screen.findByText(/connect your kite account/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /new session/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /deterministic instant verdict/i }));
+
+    expect(screen.queryByText(/connect your kite account/i)).toBeNull();
+  });
 });
