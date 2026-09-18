@@ -434,7 +434,11 @@ fn encodes_a_tagged_algorithms_response() {
 
 #[test]
 fn parses_a_tagged_ensure_day_backfill_request() {
-    let line = r#"{"type":"ensure_day_backfill","id":41,"symbol":"NSE:ZYDUSWELL","algo_id":"kronos","lookahead":5,"from_ts":1705312800}"#;
+    // 1705276800 is 2024-01-15 00:00 UTC -- the selected day's START, which is
+    // what BenchmarkView.tsx puts on the wire. NOT that day's candle stamp
+    // (15:30 IST = 1705312800); the two differ by 36000 and confusing them is
+    // what made the leading/trailing split off by one bar.
+    let line = r#"{"type":"ensure_day_backfill","id":41,"symbol":"NSE:ZYDUSWELL","algo_id":"kronos","lookahead":5,"from_ts":1705276800}"#;
     match parse_request(line).unwrap() {
         SidecarRequest::EnsureDayBackfill(request) => {
             assert_eq!(request.id, 41);
@@ -442,7 +446,7 @@ fn parses_a_tagged_ensure_day_backfill_request() {
             assert_eq!(request.algo_id, "kronos");
             assert_eq!(request.lookahead, 5, "sizing is per-run, so the run's scoring window must cross the wire");
             assert_eq!(
-                request.from_ts, 1_705_312_800,
+                request.from_ts, 1_705_276_800,
                 "sizing is per-selected-day, so the day the run tests must cross the wire too"
             );
         }

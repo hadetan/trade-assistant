@@ -72,8 +72,39 @@ pub fn handle_ensure_day_backfill(
     // question: what decides the run is whether THAT candle has `lookback` real
     // bars at-or-before it for `run_applicable`'s history gate, and `lookahead`
     // real bars after it for the loop's scoring gate.
-    let mut leading = existing.iter().filter(|c| c.ts <= request.from_ts).count();
-    let mut trailing = existing.iter().filter(|c| c.ts > request.from_ts).count();
+    //
+    // The split is taken at the END of the selected day, not at `from_ts`
+    // itself. `from_ts` is UTC midnight (BenchmarkView.tsx sends the day's
+    // start) while the day's own candle is stamped `ist_session_close_epoch` =
+    // 15:30 IST = 10:00 UTC, so a `ts <= from_ts` split files the selection's
+    // own bar under `trailing` and reads the scoring window as one bar deeper
+    // than it is. This source is day-only (BACKFILL_TIMEFRAME), so the end of
+    // the selected partition is simply one calendar day on -- the same
+    // `dayStart + DAY_SECONDS` the UI computes for its own `toTs`.
+    let to_ts = request.from_ts + 86_400;
+    let mut leading = existing.iter().filter(|c| c.ts < to_ts).count();
+    let mut trailing = existing.iter().filter(|c| c.ts >= to_ts).count();
+
+    // No candle ON the selected day means the symbol did not trade it -- a
+    // weekend, a holiday, or a gap in its listing. The run would have no bar to
+    // decide about, and the walk cannot supply one either: it fetches only days
+    // older than the lake's earliest bar. `have: 0` rather than a count of the
+    // surrounding context, because the shortfall is not "too little history
+    // around a real bar" -- there is no bar.
+    //
+    // Gated on a non-empty lake: an empty partition carries no evidence about
+    // the symbol's calendar at all, and filling it from scratch is exactly what
+    // the walk below is for.
+    if !existing.is_empty() && !existing.iter().any(|c| c.ts >= request.from_ts && c.ts < to_ts) {
+        return DayBackfillResponse {
+            id,
+            have: 0,
+            need,
+            sufficient: false,
+            archive_exhausted: false,
+            error: None,
+        };
+    }
 
     if trailing < lookahead {
         // Unfixable by definition: the walk resumes from before the earliest
@@ -159,8 +190,8 @@ pub fn handle_ensure_day_backfill(
     // the in-memory counter, so a write that failed late can never be reported
     // as a bar the run will get.
     if let Ok(candles) = store.read_sourced_candles(&request.symbol, BACKFILL_TIMEFRAME, BACKFILL_SOURCE) {
-        leading = candles.iter().filter(|c| c.ts <= request.from_ts).count();
-        trailing = candles.iter().filter(|c| c.ts > request.from_ts).count();
+        leading = candles.iter().filter(|c| c.ts < to_ts).count();
+        trailing = candles.iter().filter(|c| c.ts >= to_ts).count();
     }
     DayBackfillResponse {
         id,
@@ -224,6 +255,15 @@ mod tests {
         Candle { ts: ist_session_close_epoch(day), open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }
     }
 
+    /// What the Benchmark UI actually puts on the wire as `from_ts`: UTC
+    /// midnight of the selected calendar day (BenchmarkView.tsx's `fromDate`),
+    /// which is 10 hours BEFORE that day's candle is stamped
+    /// (`ist_session_close_epoch` = 15:30 IST = 10:00 UTC). Encoding fixtures
+    /// the other way is what hid the boundary bug through three rounds.
+    fn selected_day_ts(day: NaiveDate) -> i64 {
+        day.and_hms_opt(0, 0, 0).expect("midnight is a valid time").and_utc().timestamp()
+    }
+
     // The Benchmark UI's own default: the selected day starts out as the
     // entry's earliest available bar (BenchmarkView.tsx's `setDate`).
     fn weekly_candles(newest: NaiveDate, count: usize) -> Vec<Candle> {
@@ -255,7 +295,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv", lookahead, ist_session_close_epoch(date(2024, 1, 12))),
+            request("NSE:INFY", "obv", lookahead, selected_day_ts(date(2024, 1, 12))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |index, total| progress.push((index, total)),
@@ -286,7 +326,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv", 0, ist_session_close_epoch(date(2024, 1, 15))),
+            request("NSE:INFY", "obv", 0, selected_day_ts(date(2024, 1, 15))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |index, total| progress.push((index, total)),
@@ -320,7 +360,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv", 0, ist_session_close_epoch(date(2024, 1, 15))),
+            request("NSE:INFY", "obv", 0, selected_day_ts(date(2024, 1, 15))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -359,7 +399,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv", lookahead, ist_session_close_epoch(earliest)),
+            request("NSE:INFY", "obv", lookahead, selected_day_ts(earliest)),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -389,7 +429,8 @@ mod tests {
         let already = weekly_candles(date(2024, 1, 15), 8);
         store.write_sourced_candles("NSE:ZYDUSWELL", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &already).unwrap();
         let earliest = date(2023, 11, 27);
-        let from_ts = ist_session_close_epoch(earliest);
+        let from_ts = selected_day_ts(earliest);
+        let end_of_selected_day = from_ts + 86_400;
         let mut attempts: Vec<NaiveDate> = Vec::new();
         let mut fetch = |_e: &str, d: NaiveDate| {
             attempts.push(d);
@@ -415,8 +456,8 @@ mod tests {
         // The selected bar really does have its full leading context now, and
         // the trailing bars it started with are untouched.
         let final_lake = store.read_sourced_candles("NSE:ZYDUSWELL", "day", "bhavcopy").unwrap();
-        assert_eq!(final_lake.iter().filter(|c| c.ts <= from_ts).count(), lookback);
-        assert_eq!(final_lake.iter().filter(|c| c.ts > from_ts).count(), 7);
+        assert_eq!(final_lake.iter().filter(|c| c.ts < end_of_selected_day).count(), lookback);
+        assert_eq!(final_lake.iter().filter(|c| c.ts >= end_of_selected_day).count(), 7);
     }
 
     #[test]
@@ -441,7 +482,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv", lookahead, ist_session_close_epoch(date(2024, 1, 1))),
+            request("NSE:INFY", "obv", lookahead, selected_day_ts(date(2024, 1, 1))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |index, total| progress.push((index, total)),
@@ -459,6 +500,93 @@ mod tests {
             response.have,
             response.need
         );
+        assert!(!response.archive_exhausted, "nothing was asked of the archive");
+        assert_eq!(response.error, None);
+    }
+
+    #[test]
+    fn the_selected_day_s_own_candle_counts_as_leading_context_not_as_a_bar_to_score_against() {
+        // The phase-defining incident, at its exact boundary: a symbol holding
+        // exactly `lookahead` bars, tested at the UI's default day (the
+        // earliest). Only `lookahead - 1` bars follow the selection, so the
+        // run's scoring gate can never clear -- but counting the selected day's
+        // OWN candle as a trailing bar (which is what splitting at `from_ts`
+        // does, since the candle is stamped 10 hours after midnight) makes the
+        // trailing side look exactly one bar deeper than it is and the whole
+        // walk end in a false `sufficient: true`.
+        let lookback = lookback_of("obv");
+        let lookahead = 5;
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        let already = weekly_candles(date(2024, 1, 15), lookahead);
+        store.write_sourced_candles("NSE:INFY", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &already).unwrap();
+        let earliest = date(2023, 12, 18);
+        let mut attempts: Vec<NaiveDate> = Vec::new();
+        let mut fetch = |_e: &str, d: NaiveDate| {
+            attempts.push(d);
+            Ok(bhavcopy_csv(d, &["INFY"]))
+        };
+
+        let response = handle_ensure_day_backfill(
+            &store,
+            request("NSE:INFY", "obv", lookahead, selected_day_ts(earliest)),
+            date(2024, 1, 15),
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        assert!(
+            !response.sufficient,
+            "{lookahead} bars with the earliest selected leaves only {} to score against",
+            lookahead - 1
+        );
+        assert!(attempts.is_empty(), "no backward fetch can add a bar AFTER the selection, so none should be spent");
+        assert_eq!(response.need, lookback + lookahead);
+        // One usable leading bar (the selection itself) and the four after it.
+        assert_eq!(response.have, 1 + (lookahead - 1));
+        assert!(response.have < response.need);
+        assert_eq!(response.error, None);
+    }
+
+    #[test]
+    fn a_selected_day_the_symbol_never_traded_is_refused_instead_of_silently_passing() {
+        // A Saturday (or a holiday, or a day inside a listing gap): the lake
+        // holds plenty of context on both sides, but there is no candle ON the
+        // selected day, so the run has nothing to make a decision about. The
+        // walk cannot manufacture one either -- it only ever fetches days older
+        // than the lake's earliest bar -- so this must be an immediate, honest
+        // refusal rather than a `sufficient: true` that yields zero decision
+        // points and no banner.
+        let lookahead = 1;
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                BACKFILL_TIMEFRAME,
+                BACKFILL_SOURCE,
+                &weekly_candles(date(2024, 1, 15), 10),
+            )
+            .unwrap();
+        let mut attempts: Vec<NaiveDate> = Vec::new();
+        let mut fetch = |_e: &str, d: NaiveDate| {
+            attempts.push(d);
+            Ok(bhavcopy_csv(d, &["INFY"]))
+        };
+
+        // Sat 2024-01-13 sits between the Mon 8 and Mon 15 bars the lake holds.
+        let response = handle_ensure_day_backfill(
+            &store,
+            request("NSE:INFY", "obv", lookahead, selected_day_ts(date(2024, 1, 13))),
+            date(2024, 1, 15),
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        assert!(!response.sufficient, "a day the symbol never traded cannot be benchmarked");
+        assert!(attempts.is_empty(), "backfill cannot manufacture a trading day that did not happen");
+        assert_eq!(response.have, 0, "there is no bar for the selected day at all, not merely too little around one");
+        assert_eq!(response.need, lookback_of("obv") + lookahead);
         assert!(!response.archive_exhausted, "nothing was asked of the archive");
         assert_eq!(response.error, None);
     }
@@ -489,7 +617,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:ZYDUSWELL", "obv", lookahead, ist_session_close_epoch(date(2023, 12, 11))),
+            request("NSE:ZYDUSWELL", "obv", lookahead, selected_day_ts(date(2023, 12, 11))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -520,7 +648,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:ZYDUSWELL", "obv", 0, ist_session_close_epoch(date(2024, 1, 15))),
+            request("NSE:ZYDUSWELL", "obv", 0, selected_day_ts(date(2024, 1, 15))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |index, total| progress.push((index, total)),
@@ -554,7 +682,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv", 0, ist_session_close_epoch(date(2024, 1, 15))),
+            request("NSE:INFY", "obv", 0, selected_day_ts(date(2024, 1, 15))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -584,7 +712,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:ZYDUSWELL", "obv", 0, ist_session_close_epoch(date(2024, 1, 15))),
+            request("NSE:ZYDUSWELL", "obv", 0, selected_day_ts(date(2024, 1, 15))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -615,7 +743,7 @@ mod tests {
 
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "obv", 0, ist_session_close_epoch(date(2024, 1, 15))),
+            request("NSE:INFY", "obv", 0, selected_day_ts(date(2024, 1, 15))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},
@@ -643,7 +771,7 @@ mod tests {
         // alongside a real run's scoring window.
         let response = handle_ensure_day_backfill(
             &store,
-            request("NSE:INFY", "__not_an_algorithm__", 0, ist_session_close_epoch(date(2024, 1, 15))),
+            request("NSE:INFY", "__not_an_algorithm__", 0, selected_day_ts(date(2024, 1, 15))),
             date(2024, 1, 15),
             &mut fetch,
             &mut |_, _| {},

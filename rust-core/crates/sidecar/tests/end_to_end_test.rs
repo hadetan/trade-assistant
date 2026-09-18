@@ -504,9 +504,12 @@ fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
         .spawn()
         .expect("sidecar binary must start");
 
-    // A real IST session-close epoch (2024-01-15 15:30 IST), the same shape the
-    // Electron mirror sends as the selected day's start.
-    let request = r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__","lookahead":0,"from_ts":1705312800}"#;
+    // 2024-01-15 00:00 UTC: the START of the selected calendar day, which is
+    // exactly what the Electron mirror sends (BenchmarkView.tsx builds it as
+    // `Date("YYYY-MM-DDT00:00:00Z")`). The day's own candle is stamped ten hours
+    // later at 15:30 IST, so the handler's partition runs [from_ts,
+    // from_ts + 86400) for this day-only source.
+    let request = r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__","lookahead":0,"from_ts":1705276800}"#;
     {
         let stdin = child.stdin.as_mut().unwrap();
         writeln!(stdin, "{request}").unwrap();

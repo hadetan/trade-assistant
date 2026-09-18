@@ -179,8 +179,15 @@ pub struct EnsureDayBackfillRequest {
     /// a real bar exists `lookahead` bars after it, so the algorithm's own
     /// lookback alone never leaves room to score anything.
     pub lookahead: usize,
-    /// Start of the single day the run will actually test (its `fromTs`, Unix
-    /// epoch seconds -- the same convention `ist_session_close_epoch` emits).
+    /// START of the single day the run will actually test (its `fromTs`): UTC
+    /// midnight of the selected calendar day, Unix epoch seconds, exactly as
+    /// BenchmarkView.tsx builds it. NOT that day's candle stamp -- a bhavcopy
+    /// day candle carries `ist_session_close_epoch` (15:30 IST = 10:00 UTC), so
+    /// the selection's own bar sits 36000s AFTER this value. Since this source
+    /// is day-only, the selected partition is implicitly
+    /// `[from_ts, from_ts + 86_400)`, and that upper edge -- not `from_ts` --
+    /// is where `day_backfill` splits leading from trailing context.
+    ///
     /// Sizing is meaningless without it: the Benchmark UI tests exactly one
     /// candle per run, so what matters is that *that* candle has enough bars
     /// before and after it, not that the partition is deep in total.
@@ -191,8 +198,12 @@ pub struct EnsureDayBackfillRequest {
 pub struct DayBackfillResponse {
     pub id: u64,
     /// Of the `need` bars this run wants, how many it can actually use:
-    /// `min(leading, lookback) + min(trailing, lookahead)` around the selected
-    /// day. Capped on each side deliberately, so `sufficient: false` always
+    /// `min(leading, lookback) + min(trailing, lookahead)`, split at the END of
+    /// the selected day (`from_ts + 86_400`) so the selection's own bar counts
+    /// as leading context and not as something to score against. Zero when the
+    /// symbol has no candle on the selected day at all -- there is no bar to
+    /// decide about, which is a different shortfall from a thin one.
+    /// Capped on each side deliberately, so `sufficient: false` always
     /// implies `have < need` whichever side is short -- reporting a raw row
     /// count let an insufficient answer render as "has 22 days; needs 20",
     /// which reads as a contradiction. The cap can undersell a deep symbol
