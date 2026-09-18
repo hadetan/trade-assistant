@@ -56,9 +56,17 @@ function InsufficientHistory({ result }: { result: BenchmarkResult }): JSX.Eleme
           alone would overstate what the model itself requires. And "around the
           selected day", not "of history": `have` counts the bars on each side
           of the one day this run tests, capped at what each side can use, so
-          it is not a claim about the symbol's total depth. */}
-      {result.params.symbol} has {have} of the {need} days this run needs around the selected day. That is all the
-      real listed history the archive has there, so there is nothing to benchmark over.
+          it is not a claim about the symbol's total depth.
+
+          Deliberately silent about the archive. The wire carries only
+          have/need/reason, not which SIDE fell short, and the shortfall is
+          often on the trailing side -- too few days AFTER the selection, which
+          a backward walk can never fix and so answers with zero fetches. Saying
+          "that is all the archive has" there would assert something nothing
+          asked. Pointing at an earlier date covers the trailing case and costs
+          the leading case nothing. */}
+      {result.params.symbol} has {have} of the {need} days this run needs around the selected day. Try an earlier
+      date, or a symbol with more history.
     </Banner>
   );
 }

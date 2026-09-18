@@ -282,6 +282,11 @@ describe("BenchmarkView", () => {
         "NSE:ZYDUSWELL has 8 of the 256 days this run needs around the selected day",
       ),
     );
+    // Actionable, and silent about the archive: this same banner is shown for a
+    // trailing-side shortfall, which is answered with ZERO fetches, so it must
+    // not imply the archive was explored and came up empty.
+    expect(container.textContent).toContain("Try an earlier date");
+    expect(container.textContent).not.toMatch(/archive/i);
     // The confusing empty result is gone, not merely accompanied by a banner.
     expect(screen.queryByText(/0 decision points/i)).toBeNull();
     expect(screen.queryByText(/copy raw result/i)).toBeNull();
@@ -314,7 +319,11 @@ describe("BenchmarkView", () => {
     await waitFor(() => expect(container.textContent).toMatch(/could not reach far enough back into the NSE archive/i));
     expect(container.textContent).toContain("41");
     expect(container.textContent).toContain("256");
-    expect(container.textContent).not.toContain("real listed history the archive has there");
+    // The two banners must stay lexically distinguishable: this one names the
+    // archive and never offers the symbol_history remedy, which would be
+    // misleading advice when the walk simply could not see far enough back.
+    expect(container.textContent).not.toContain("Try an earlier date");
+    expect(container.textContent).not.toContain("days this run needs around the selected day");
     expect(screen.queryByText(/copy raw result/i)).toBeNull();
   });
 });

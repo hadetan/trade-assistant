@@ -561,9 +561,14 @@ describe("runBenchmark frontier walk", () => {
     const originalBars = 8;
     const backfilled = lookback - 1; // the earliest original bar already counts as one
     const total = backfilled + originalBars; // 27
-    const dayStart = 1_700_000_000;
+    // Production encoding, exactly: each day's candle is stamped at that day's
+    // 15:30 IST close (10:00 UTC), while the UI sends the day's UTC MIDNIGHT as
+    // `fromTs`. A fixture that collapses the two hides the off-by-one this test
+    // exists to pin.
+    const firstDayStart = Date.UTC(2023, 10, 13) / 1000;
+    const SESSION_CLOSE_OFFSET = 36_000;
     const candles: CandleWire[] = Array.from({ length: total }, (_, i) => ({
-      ts: dayStart + i * DAY_SECONDS,
+      ts: firstDayStart + i * DAY_SECONDS + SESSION_CLOSE_OFFSET,
       open: 100 + i,
       high: 100 + i,
       low: 100 + i,
@@ -573,8 +578,9 @@ describe("runBenchmark frontier walk", () => {
     // The UI's default: the earliest bar the entry had before the backfill.
     // Every backfilled bar is strictly older, so it sits at index `backfilled`.
     const selectedIndex = backfilled;
-    const fromTs = candles[selectedIndex].ts;
+    const fromTs = firstDayStart + selectedIndex * DAY_SECONDS;
     const toTs = fromTs + DAY_SECONDS;
+    expect(candles[selectedIndex].ts).toBe(fromTs + SESSION_CLOSE_OFFSET);
     // Both gates, for the ONE frontier the loop will actually reach:
     expect(candles.slice(0, selectedIndex + 1)).toHaveLength(lookback); // leading context
     expect(selectedIndex + lookahead).toBeLessThan(total); // a real bar to score against
@@ -582,9 +588,11 @@ describe("runBenchmark frontier walk", () => {
     const ensureDayBackfill = vi.fn().mockResolvedValue({
       type: "day_backfill",
       id: 1,
-      // What the sidecar would answer for this exact lake: 20 bars at-or-before
-      // the selected day (capped at the lookback) and 7 after it (capped at the
-      // lookahead).
+      // What the real Rust handler answers for this exact lake, recomputed
+      // against the frontier-boundary split: with to_ts = fromTs + 86400,
+      // leading = 20 bars ending with the selected day's own (capped at the
+      // lookback) and trailing = 7 bars after it (capped at the lookahead), so
+      // have = 20 + 5 = need and sufficient holds.
       have: lookback + lookahead,
       need: lookback + lookahead,
       sufficient: true,
@@ -608,7 +616,7 @@ describe("runBenchmark frontier walk", () => {
     expect(ensureDayBackfill.mock.calls[0][2]).toBe(fromTs);
     expect(result.insufficientHistory).toBeUndefined();
     expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([selectedIndex]);
-    expect(result.decisionPoints[0].ts).toBe(fromTs);
+    expect(result.decisionPoints[0].ts).toBe(candles[selectedIndex].ts);
     // One compute, over a window that is exactly the algorithm's lookback.
     expect(windows).toEqual([lookback]);
   });

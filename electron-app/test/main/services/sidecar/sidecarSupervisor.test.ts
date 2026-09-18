@@ -3,10 +3,11 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { BACKFILL_REQUEST_TIMEOUT_MS, SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
 
-// 2024-01-15 15:30 IST, the shape a real selected day carries. These
-// supervisor tests are about transport, not sizing, but 0 would be a 1970
-// selection no caller could ever make.
-const SELECTED_DAY_TS = 1_705_312_800;
+// 2024-01-15 00:00 UTC — the START of a selected calendar day, which is what
+// BenchmarkView.tsx actually sends (not the 15:30 IST stamp that day's candle
+// carries). These supervisor tests are about transport, not sizing, but 0 would
+// be a 1970 selection no caller could ever make.
+const SELECTED_DAY_TS = Date.UTC(2024, 0, 15) / 1000;
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
