@@ -42,8 +42,12 @@ fn error_for_http_status(status: u16, url: &str) -> Option<IngestionError> {
 /// by the #[ignore]d smoke test, never by CI's default run.
 pub fn fetch_udiff_bhavcopy(date: NaiveDate, exchange: &str) -> Result<Vec<u8>, IngestionError> {
     let url = bhavcopy_url(date, exchange)?;
+    // Phase 14's backfill issues hundreds of these sequentially through a
+    // single-threaded sidecar; a bound keeps one stalled TCP connection to NSE's
+    // archive from wedging the whole process instead of just this one fetch.
     let client = reqwest::blocking::Client::builder()
         .user_agent("trade-assistant/0.1 (personal-use)")
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| IngestionError::Fetch(e.to_string()))?;
     let resp = client.get(&url).send().map_err(|e| IngestionError::Fetch(e.to_string()))?;
