@@ -87,11 +87,28 @@ export interface BenchmarkComputeResponseWire {
   confluence: ConfluenceWire;
 }
 
+export interface DayBackfillResponseWire {
+  type: "day_backfill";
+  id: number;
+  have: number;
+  need: number;
+  sufficient: boolean;
+  // The walk gave up because the archive had no file for CLOSED_DAY_LIMIT
+  // weekdays running -- a different claim from "this symbol is only N days
+  // old", and the sidecar always sends it, so it is required here too.
+  archive_exhausted: boolean;
+  error?: string;
+}
+
 export interface SidecarProgressWire {
   type: "progress";
   id: number;
   step: string; // request-type name ("compute", …) or algorithm id ("rsi", …)
   status: "running" | "done";
+  // Present only on a counted step (today just "backfill"); absence is how a
+  // consumer tells an ordinary bracket line from an N-of-M one.
+  index?: number;
+  total?: number;
 }
 
 export interface AlgorithmWire {
@@ -114,7 +131,8 @@ export type SidecarResponseWire =
   | LakeSymbolsResponseWire
   | LakeCandlesResponseWire
   | BenchmarkComputeResponseWire
-  | ListAlgorithmsResponseWire;
+  | ListAlgorithmsResponseWire
+  | DayBackfillResponseWire;
 
 export type SidecarRequestWire =
   | { type: "compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[] }
@@ -127,7 +145,8 @@ export type SidecarRequestWire =
   | { type: "read_lake_candles"; id: number; symbol: string; timeframe: string; source: string }
   | { type: "benchmark_compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[]; algo_id: string }
   | { type: "evaluate_scan_gate_stateless"; id: number; prev: ConfluenceWire | null; curr: ConfluenceWire }
-  | { type: "list_algorithms"; id: number };
+  | { type: "list_algorithms"; id: number }
+  | { type: "ensure_day_backfill"; id: number; symbol: string; algo_id: string };
 
 export function encodeRequest(request: SidecarRequestWire): string {
   return `${JSON.stringify(request)}\n`;

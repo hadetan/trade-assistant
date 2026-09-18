@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
+import { BACKFILL_REQUEST_TIMEOUT_MS, SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -306,6 +306,132 @@ describe("SidecarSupervisor", () => {
     expect(response.type).toBe("algorithms");
     expect(response.algorithms[0].id).toBe("sma");
     expect(response.algorithms[0].required_lookback).toBe(20);
+  });
+
+  it("sends an ensure_day_backfill request and resolves the matching day_backfill response", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos");
+
+    const [request] = await requestsSeen;
+    expect(request).toEqual({ type: "ensure_day_backfill", id: 1, symbol: "NSE:ZYDUSWELL", algo_id: "kronos" });
+
+    children[0].stdout.write(
+      `${JSON.stringify({
+        type: "day_backfill",
+        id: 1,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+      })}\n`,
+    );
+    const response = await pending;
+    expect(response.type).toBe("day_backfill");
+    expect(response.have).toBe(8);
+    expect(response.need).toBe(256);
+    expect(response.sufficient).toBe(false);
+    expect(response.archive_exhausted).toBe(false);
+  });
+
+  it("carries an archive_exhausted answer through unchanged", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos");
+    await requestsSeen;
+
+    children[0].stdout.write(
+      `${JSON.stringify({
+        type: "day_backfill",
+        id: 1,
+        have: 41,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: true,
+      })}\n`,
+    );
+    const response = await pending;
+    expect(response.archive_exhausted).toBe(true);
+    expect(response.sufficient).toBe(false);
+  });
+
+  it("forwards only its own counted progress lines to the per-request backfill callback", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const seen: Array<[number, number]> = [];
+    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", (index, total) => seen.push([index, total]));
+    await requestsSeen;
+
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 1, step: "backfill", status: "running", index: 1, total: 256 })}\n`,
+    );
+    // The request-level bracket carries no counts and must be ignored here.
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 1, step: "ensure_day_backfill", status: "running" })}\n`,
+    );
+    // A counted line belonging to some other in-flight request must not leak in.
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 2, step: "backfill", status: "running", index: 99, total: 256 })}\n`,
+    );
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 1, step: "backfill", status: "running", index: 2, total: 256 })}\n`,
+    );
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 256, need: 256, sufficient: true, archive_exhausted: false })}\n`,
+    );
+
+    await pending;
+    expect(seen).toEqual([
+      [1, 256],
+      [2, 256],
+    ]);
+  });
+
+  it("stops forwarding backfill progress once the request has settled", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const seen: Array<[number, number]> = [];
+    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", (index, total) => seen.push([index, total]));
+    await requestsSeen;
+
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
+    );
+    await pending;
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 1, step: "backfill", status: "running", index: 7, total: 9 })}\n`,
+    );
+
+    expect(seen).toEqual([]);
+  });
+
+  it("gives a backfill its own long timeout instead of the ordinary per-request one", async () => {
+    // A from-scratch ttm/moirai backfill is ~750 requests at ~200ms apiece
+    // (P14§3) -- minutes, not seconds. Under the shared default it would be
+    // rejected every single time before the sidecar could finish.
+    const children: FakeChild[] = [];
+    const spawnFn = (_command: string, _args: string[]) => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as ReturnType<typeof spawnFn>;
+    };
+    const supervisor = new SidecarSupervisor({
+      binaryPath: "/fake/sidecar",
+      lakeRoot: "/fake/lake",
+      spawnFn,
+      requestTimeoutMs: 5,
+    });
+    supervisor.start();
+
+    const backfill = supervisor.ensureDayBackfill("NSE:INFY", "kronos"); // id 1
+    const ordinary = supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [], "sma"); // id 2
+
+    await expect(ordinary).rejects.toThrow(/timed out after 5ms/);
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
+    );
+    await expect(backfill).resolves.toMatchObject({ sufficient: true });
+    expect(BACKFILL_REQUEST_TIMEOUT_MS).toBeGreaterThan(5);
   });
 
   it("cancelCurrent kills the child and rejects pending requests with error.cancelled === true", async () => {

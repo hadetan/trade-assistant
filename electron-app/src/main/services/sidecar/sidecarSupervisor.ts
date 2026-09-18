@@ -6,6 +6,7 @@ import {
   CandleWire,
   ComputeResponseWire,
   ConfluenceWire,
+  DayBackfillResponseWire,
   LakeCandlesResponseWire,
   LakeSymbolsResponseWire,
   ListAlgorithmsResponseWire,
@@ -42,6 +43,10 @@ interface Pending {
 
 const RESTART_BACKOFF_MS = 500;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+// A from-scratch backfill is up to ~750 sequential HTTP requests with a
+// politeness delay between each (P14§3) -- minutes, not seconds. The user's
+// escape hatch is Stop (cancelCurrent), not this ceiling.
+export const BACKFILL_REQUEST_TIMEOUT_MS = 30 * 60 * 1000;
 
 export class SidecarSupervisor extends EventEmitter {
   private readonly binaryPath: string;
@@ -54,6 +59,7 @@ export class SidecarSupervisor extends EventEmitter {
   private stdoutBuffer = "";
   private stopped = false;
   private cancelling = false;
+  private readonly dayProgress = new Map<number, (index: number, total: number) => void>();
 
   constructor(options: SidecarSupervisorOptions) {
     super();
@@ -150,24 +156,44 @@ export class SidecarSupervisor extends EventEmitter {
     return this.send({ type: "list_algorithms", id: this.nextId }) as Promise<ListAlgorithmsResponseWire>;
   }
 
+  ensureDayBackfill(
+    symbol: string,
+    algoId: string,
+    onDayProgress?: (index: number, total: number) => void,
+  ): Promise<DayBackfillResponseWire> {
+    return this.send(
+      { type: "ensure_day_backfill", id: this.nextId, symbol, algo_id: algoId },
+      (id) => {
+        if (onDayProgress) this.dayProgress.set(id, onDayProgress);
+      },
+      BACKFILL_REQUEST_TIMEOUT_MS,
+    ) as Promise<DayBackfillResponseWire>;
+  }
+
   evaluateScanGateStateless(prev: ConfluenceWire | null, curr: ConfluenceWire): Promise<ScanGateResponseWire> {
     return this.send({ type: "evaluate_scan_gate_stateless", id: this.nextId, prev, curr }) as Promise<ScanGateResponseWire>;
   }
 
-  private send(request: SidecarRequestWire, onRequestId?: (id: number) => void): Promise<SidecarResponseWire> {
+  private send(
+    request: SidecarRequestWire,
+    onRequestId?: (id: number) => void,
+    timeoutMs: number = this.requestTimeoutMs,
+  ): Promise<SidecarResponseWire> {
     const id = this.nextId++;
     onRequestId?.(id);
     request.id = id;
     return new Promise<SidecarResponseWire>((resolve, reject) => {
       if (!this.child) {
+        this.dayProgress.delete(id);
         reject(new Error("sidecar is not running"));
         return;
       }
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) {
-          reject(new Error(`sidecar request ${id} timed out after ${this.requestTimeoutMs}ms`));
+          this.dayProgress.delete(id);
+          reject(new Error(`sidecar request ${id} timed out after ${timeoutMs}ms`));
         }
-      }, this.requestTimeoutMs);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(encodeRequest(request));
     });
@@ -202,12 +228,17 @@ export class SidecarSupervisor extends EventEmitter {
       return;
     }
     if (parsed.type === "progress") {
+      const counted = this.dayProgress.get(parsed.id);
+      if (counted && parsed.index !== undefined && parsed.total !== undefined) {
+        counted(parsed.index, parsed.total);
+      }
       this.emit("progress", parsed);
       return;
     }
     const waiting = this.pending.get(parsed.id);
     if (!waiting) return;
     this.pending.delete(parsed.id);
+    this.dayProgress.delete(parsed.id);
     clearTimeout(waiting.timer);
     waiting.resolve(parsed);
   }
@@ -224,6 +255,7 @@ export class SidecarSupervisor extends EventEmitter {
       waiting.reject(error);
     }
     this.pending.clear();
+    this.dayProgress.clear();
 
     if (this.stopped) {
       this.emitStatus("down");
