@@ -489,3 +489,38 @@ fn list_algorithms_answers_even_with_no_lake_root() {
     assert!(algorithms.iter().all(|a| a["cost"] == "fast" || a["cost"] == "slow"));
     assert!(algorithms.iter().all(|a| a["required_lookback"].is_u64()));
 }
+
+#[test]
+fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
+    // An algo id no registry knows needs zero bars, so the handler returns
+    // before it can ever reach walk_trading_days_backward -- which makes this a
+    // pure wiring smoke test for the new request/response pair.
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
+        .arg("--lake-root")
+        .arg(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("sidecar binary must start");
+
+    let request = r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__"}"#;
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{request}").unwrap();
+    }
+    drop(child.stdin.take());
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let response = read_next_response(&mut reader);
+    child.wait().ok();
+
+    assert_eq!(response["type"], "day_backfill");
+    assert_eq!(response["id"], 1);
+    assert_eq!(response["need"], 0);
+    assert_eq!(response["have"], 0);
+    assert_eq!(response["sufficient"], true);
+    assert_eq!(response["archive_exhausted"], false);
+    assert!(response.get("error").is_none(), "a clean answer must omit error entirely");
+}

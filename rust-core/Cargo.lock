@@ -2548,6 +2548,7 @@ dependencies = [
  "algo-core",
  "backtest",
  "chrono",
+ "ingestion",
  "serde",
  "serde_json",
  "storage",

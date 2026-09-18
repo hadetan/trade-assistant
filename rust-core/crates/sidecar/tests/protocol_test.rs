@@ -10,6 +10,7 @@ use sidecar::protocol::{
     ListLakeSymbolsRequest, ReadLakeCandlesRequest,
 };
 use sidecar::protocol::{AlgorithmWire, ListAlgorithmsRequest, ListAlgorithmsResponse};
+use sidecar::protocol::{DayBackfillResponse, EnsureDayBackfillRequest};
 
 #[test]
 fn request_round_trips_from_json_line() {
@@ -429,4 +430,84 @@ fn encodes_a_tagged_algorithms_response() {
     assert!(line.contains("\"type\":\"algorithms\""));
     assert!(line.contains("\"id\":\"sma\""));
     assert!(line.contains("\"required_lookback\":20"));
+}
+
+#[test]
+fn parses_a_tagged_ensure_day_backfill_request() {
+    let line = r#"{"type":"ensure_day_backfill","id":41,"symbol":"NSE:ZYDUSWELL","algo_id":"kronos"}"#;
+    match parse_request(line).unwrap() {
+        SidecarRequest::EnsureDayBackfill(request) => {
+            assert_eq!(request.id, 41);
+            assert_eq!(request.symbol, "NSE:ZYDUSWELL");
+            assert_eq!(request.algo_id, "kronos");
+        }
+        _ => panic!("expected an ensure_day_backfill request"),
+    }
+}
+
+#[test]
+fn encodes_a_tagged_day_backfill_response_and_omits_the_error_field_when_none() {
+    let line = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+        error: None,
+    }));
+    assert!(!line.contains('\n'));
+    assert!(line.contains("\"type\":\"day_backfill\""));
+    assert!(line.contains("\"id\":41"));
+    assert!(line.contains("\"have\":8"));
+    assert!(line.contains("\"need\":256"));
+    assert!(line.contains("\"sufficient\":false"));
+    // Always on the wire, even when false -- the TS mirror can then require it.
+    assert!(line.contains("\"archive_exhausted\":false"));
+    assert!(!line.contains("error"));
+}
+
+#[test]
+fn a_day_backfill_response_carries_its_error_when_one_occurred() {
+    let line = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 0,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+        error: Some("no --lake-root configured".to_string()),
+    }));
+    assert!(line.contains("\"error\":\"no --lake-root configured\""));
+}
+
+#[test]
+fn an_exhausted_archive_is_a_distinct_wire_outcome_from_a_merely_short_history() {
+    let short_history = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+        error: None,
+    }));
+    let exhausted = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: true,
+        error: None,
+    }));
+    assert_ne!(short_history, exhausted, "the two outcomes must not be wire-identical");
+    assert!(exhausted.contains("\"archive_exhausted\":true"));
+}
+
+#[test]
+fn an_ensure_day_backfill_request_is_constructible_for_a_round_trip() {
+    // Guards the field names the Electron mirror writes onto the wire.
+    let request = EnsureDayBackfillRequest {
+        id: 1,
+        symbol: "NSE:INFY".to_string(),
+        algo_id: "obv".to_string(),
+    };
+    assert_eq!(request.algo_id, "obv");
 }

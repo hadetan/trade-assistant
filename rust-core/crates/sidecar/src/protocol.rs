@@ -166,6 +166,35 @@ pub struct ListAlgorithmsRequest {
     pub id: u64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct EnsureDayBackfillRequest {
+    pub id: u64,
+    pub symbol: String,
+    /// Sizing is per the single selected algorithm, not a max across all of
+    /// them: the Benchmark UI already requires picking exactly one (P14§2
+    /// locked decision 2).
+    pub algo_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DayBackfillResponse {
+    pub id: u64,
+    pub have: usize,
+    pub need: usize,
+    /// false => `have` is the symbol's full available real history, capped by
+    /// the "10 consecutive absent trading days" heuristic (P14§2 item 4) --
+    /// UNLESS `archive_exhausted` is set, in which case `have` is only what the
+    /// walk managed to collect before the archive went quiet.
+    pub sufficient: bool,
+    /// The walk stopped because CLOSED_DAY_LIMIT weekdays in a row had no file
+    /// at all. Always serialized (like `sufficient`) rather than skipped when
+    /// false: this is a third outcome, and a consumer must never have to infer
+    /// it from an absent key (decision (xviii)).
+    pub archive_exhausted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AlgorithmWire {
     pub id: String,
@@ -246,6 +275,7 @@ pub enum SidecarRequest {
     BenchmarkCompute(BenchmarkComputeRequest),
     EvaluateScanGateStateless(EvaluateScanGateStatelessRequest),
     ListAlgorithms(ListAlgorithmsRequest),
+    EnsureDayBackfill(EnsureDayBackfillRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -259,6 +289,7 @@ pub enum SidecarResponse {
     LakeCandles(LakeCandlesResponse),
     BenchmarkCompute(BenchmarkComputeResponse),
     Algorithms(ListAlgorithmsResponse),
+    DayBackfill(DayBackfillResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {
