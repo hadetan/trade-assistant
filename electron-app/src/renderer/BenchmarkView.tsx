@@ -11,7 +11,7 @@ import { Banner } from "./ui/Banner";
 import { Spinner } from "./ui/Spinner";
 import { BarChart3, Copy } from "./ui/icons";
 import "./BenchmarkView.css";
-import type { AlgorithmEntry, BenchmarkResult, DecisionPoint, LakeSymbolEntry, RendererApi } from "../main/ipc/rendererApi";
+import type { AlgorithmEntry, BenchmarkProgress, BenchmarkResult, DecisionPoint, LakeSymbolEntry, RendererApi } from "../main/ipc/rendererApi";
 
 type BenchmarkApi = Pick<
   RendererApi,
@@ -27,6 +27,35 @@ function fromDate(value: string): number {
 }
 
 const DAY_SECONDS = 86_400;
+
+function progressLabel(algoId: string | null, progress: BenchmarkProgress | null): string {
+  if (progress?.phase === "backfill") {
+    return `Backfilling history — ${progress.index}/${progress.total} days`;
+  }
+  return `${algoId} — bar ${progress ? progress.index : 0}/${progress ? progress.total : "…"}`;
+}
+
+function InsufficientHistory({ result }: { result: BenchmarkResult }): JSX.Element {
+  const { have, need, reason } = result.insufficientHistory ?? { have: 0, need: 0, reason: "symbol_history" as const };
+  // Two different facts, two different sentences: the walk can tell "this
+  // symbol has no rows this far back" from "the archive answered nothing at
+  // all", and saying the first when the second happened is a lie about the
+  // user's symbol (decision (xviii)).
+  if (reason === "archive_unreachable") {
+    return (
+      <Banner variant="warning">
+        Could not reach far enough back into the NSE archive for {result.params.symbol} — collected {have} of the{" "}
+        {need} days {result.params.algoId} needs before the archive stopped answering. It may not cover this far back.
+      </Banner>
+    );
+  }
+  return (
+    <Banner variant="info">
+      {result.params.symbol} has {have} days of real listed history; {result.params.algoId} needs {need}. Nothing to
+      benchmark over.
+    </Banner>
+  );
+}
 
 function SummaryStrip({ points }: { points: DecisionPoint[] }): JSX.Element {
   const { correct, incorrect, neutral, hitRate } = summarize(points);
@@ -98,7 +127,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{ index: number; total: number } | null>(null);
+  const [progress, setProgress] = useState<BenchmarkProgress | null>(null);
   const setupRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -183,9 +212,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
     <div className="benchmark">
       {running && (
         <Card className="benchmark-progress-pill">
-          <span>
-            {selectedAlgoId} — bar {progress ? progress.index : 0}/{progress ? progress.total : "…"}
-          </span>
+          <span>{progressLabel(selectedAlgoId, progress)}</span>
           <div className="benchmark-progress-bar">
             <div
               className="benchmark-progress-bar-fill"
@@ -198,7 +225,11 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
         </Card>
       )}
       {result ? (
-        <ResultsView api={api} result={result} />
+        result.insufficientHistory ? (
+          <InsufficientHistory result={result} />
+        ) : (
+          <ResultsView api={api} result={result} />
+        )
       ) : (
         <>
           <h2>Benchmark</h2>
