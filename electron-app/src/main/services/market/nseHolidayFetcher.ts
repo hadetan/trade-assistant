@@ -31,7 +31,13 @@ function parseTradingDate(tradingDate: unknown): string | null {
   const match = /^(\d{2})-([A-Za-z]{3})-(\d{4})$/.exec(tradingDate);
   if (!match) return null;
   const [, day, monthAbbr, year] = match;
-  const month = MONTH_ABBREVIATIONS[monthAbbr];
+  // Case-normalize before lookup: NSE returns Title case today ("Jan"), but
+  // nothing about the endpoint's contract guarantees that stays true, and a
+  // silent casing change would otherwise disable this feature permanently
+  // with zero signal (every date would fail to parse, refreshNseHolidayCalendar
+  // would always report "fallback").
+  const normalizedMonth = monthAbbr.charAt(0).toUpperCase() + monthAbbr.slice(1).toLowerCase();
+  const month = MONTH_ABBREVIATIONS[normalizedMonth];
   if (!month) return null;
 
   const iso = `${year}-${month}-${day}`;
@@ -71,6 +77,10 @@ export async function fetchNseTradingHolidays(fetchFn: typeof fetch = fetch): Pr
         "User-Agent": BROWSER_USER_AGENT,
         Accept: "application/json",
       },
+      // This call is fire-and-forget at startup, but an unbounded hang against
+      // a black-holed connection would still leak a socket and silently delay
+      // ever logging the "fallback" outcome -- bound it instead.
+      signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return null;
     const json = await response.json();

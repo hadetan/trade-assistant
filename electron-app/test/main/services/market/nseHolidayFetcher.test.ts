@@ -50,6 +50,11 @@ describe("parseHolidayMasterResponse", () => {
   it("returns null when CM is present but not an array", () => {
     expect(parseHolidayMasterResponse({ CM: "not-an-array" })).toBeNull();
   });
+
+  it("accepts a month abbreviation in any case, not just NSE's current Title case", () => {
+    const json = { CM: [cmEntry("15-JAN-2026", 1), cmEntry("26-jan-2026", 2)] };
+    expect(parseHolidayMasterResponse(json)).toEqual(["2026-01-15", "2026-01-26"]);
+  });
 });
 
 describe("fetchNseTradingHolidays", () => {

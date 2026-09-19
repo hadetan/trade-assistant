@@ -13,25 +13,29 @@ import { fetchNseTradingHolidays } from "./nseHolidayFetcher";
 export const NSE_HOLIDAY_CALENDAR_SOURCE =
   "https://www.nseindia.com/resources/exchange-communication-holidays";
 
-export const NSE_HOLIDAY_CALENDAR_LAST_VERIFIED = "2026-09-17";
+export const NSE_HOLIDAY_CALENDAR_LAST_VERIFIED = "2026-09-19";
 
 export const NSE_HOLIDAY_CALENDAR: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "2026": Object.freeze([
+    "2026-01-15", // Municipal Corporation Election - Maharashtra
     "2026-01-26", // Republic Day
+    "2026-02-15", // Mahashivratri
     "2026-03-03", // Holi
-    "2026-03-21", // Id-ul-Fitr (Ramzan Id)
-    "2026-04-01", // Mahavir Jayanti
+    "2026-03-21", // Id-Ul-Fitr (Ramadan Eid)
+    "2026-03-26", // Shri Ram Navami
+    "2026-03-31", // Shri Mahavir Jayanti
     "2026-04-03", // Good Friday
-    "2026-04-14", // Dr. Ambedkar Jayanti
+    "2026-04-14", // Dr. Baba Saheb Ambedkar Jayanti
     "2026-05-01", // Maharashtra Day
     "2026-05-28", // Bakri Id
     "2026-06-26", // Muharram
     "2026-08-15", // Independence Day
-    "2026-08-28", // Ganesh Chaturthi
+    "2026-09-14", // Ganesh Chaturthi
     "2026-10-02", // Mahatma Gandhi Jayanti
-    "2026-10-21", // Dussehra
-    "2026-11-09", // Diwali Balipratipada
-    "2026-11-24", // Guru Nanak Jayanti
+    "2026-10-20", // Dussehra
+    "2026-11-08", // Diwali Laxmi Pujan
+    "2026-11-10", // Diwali Balipratipada
+    "2026-11-24", // Prakash Gurpurb Sri Guru Nanak Dev
     "2026-12-25", // Christmas
   ] as const),
 });

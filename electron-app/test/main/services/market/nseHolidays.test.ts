@@ -71,12 +71,21 @@ describe("refreshNseHolidayCalendar", () => {
     expect(getEffectiveHolidaysForYear("1999")).toEqual([]);
   });
 
-  it("closes the real 15-Jan-2026 regression: a successful refresh makes the effective 2026 calendar include a date the static calendar is missing", async () => {
+  // The static 2026 calendar was itself corrected to match NSE's live feed
+  // (a prior version was wrong on 12 of 20 entries -- discovered by diffing
+  // against this exact endpoint). That means every real 2026 date this test
+  // could pick is now already in NSE_HOLIDAY_CALENDAR, so it can no longer
+  // demonstrate the override winning over a stale static entry using a real
+  // date. A synthetic, deliberately-not-a-real-holiday date keeps proving the
+  // mechanism itself -- a successful refresh's data wins, regardless of
+  // whether the static list happens to already be correct that year.
+  it("a successful refresh makes the effective calendar include a date the static calendar does not have, even for an already-covered year", async () => {
     const { refreshNseHolidayCalendar, getEffectiveHolidaysForYear, NSE_HOLIDAY_CALENDAR } = await loadFreshModule();
-    expect(NSE_HOLIDAY_CALENDAR["2026"]).not.toContain("2026-01-15");
+    const SYNTHETIC_DATE = "2026-07-04"; // not a real NSE holiday; not in the static list
+    expect(NSE_HOLIDAY_CALENDAR["2026"]).not.toContain(SYNTHETIC_DATE);
 
     const fetchFn = fakeFetchWithTradingDates([
-      "15-Jan-2026",
+      "04-Jul-2026",
       ...NSE_HOLIDAY_CALENDAR["2026"].map((iso) => {
         const [y, m, d] = iso.split("-");
         const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -87,6 +96,6 @@ describe("refreshNseHolidayCalendar", () => {
     const result = await refreshNseHolidayCalendar(fetchFn as unknown as typeof fetch);
 
     expect(result).toBe("refreshed");
-    expect(getEffectiveHolidaysForYear("2026")).toContain("2026-01-15");
+    expect(getEffectiveHolidaysForYear("2026")).toContain(SYNTHETIC_DATE);
   });
 });
