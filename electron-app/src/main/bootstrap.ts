@@ -18,6 +18,7 @@ import { registerSettingsBridge } from "./ipc/settingsBridge";
 import { registerBenchmarkBridge } from "./ipc/benchmarkBridge";
 import { makeTraceSender } from "./ipc/traceBridge";
 import { HistoryStore } from "./services/history/historyStore";
+import { refreshNseHolidayCalendar } from "./services/market/nseHolidays";
 import { ScanScheduler } from "./scanScheduler";
 import { createTray } from "./tray";
 import type { AppStatus, BannerEvent, KiteSessionStatus, LoginResult, SidecarStatus } from "./ipc/rendererApi";
@@ -54,6 +55,13 @@ export function createApp(): AppRuntime {
   // populates it from electron-app/.env, so this must run first.
   dotenv.config({ path: path.join(app.getAppPath(), ".env") });
   const config = loadKiteConfig();
+  // Best-effort, fire-and-forget: refreshNseHolidayCalendar never rejects (its
+  // own fetch layer never throws), but this is wrapped defensively anyway
+  // since it runs on the actual startup path and must never be able to delay
+  // or crash app launch.
+  void refreshNseHolidayCalendar()
+    .then((outcome) => console.log(`market: NSE holiday calendar refresh -> ${outcome}`))
+    .catch((error) => console.error("market: NSE holiday calendar refresh failed unexpectedly", error));
   const sidecarOptions = () => ({
     binaryPath: resolveSidecarBinaryPath({
       isPackaged: app.isPackaged,
