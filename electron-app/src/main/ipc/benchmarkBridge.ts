@@ -27,6 +27,9 @@ export function registerBenchmarkBridge(deps: BenchmarkBridgeDeps): void {
       fromTs: e.from_ts,
       toTs: e.to_ts,
       candleCount: e.candle_count,
+      firstSeenFromTs: e.first_seen_from_ts,
+      firstSeenToTs: e.first_seen_to_ts,
+      firstSeenCandleCount: e.first_seen_candle_count,
       horizon: horizonForTimeframe(e.timeframe),
     }));
   });

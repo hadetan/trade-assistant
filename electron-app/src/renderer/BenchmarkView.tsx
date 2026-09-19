@@ -175,7 +175,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
   const onSelectEntry = (entry: LakeSymbolEntry): void => {
     setSelected(entry);
     setLookaheadBars(defaultLookaheadForHorizon(entry.horizon));
-    setDate(toDate(entry.fromTs));
+    setDate(toDate(entry.firstSeenFromTs));
     setResult(null);
   };
 
@@ -261,7 +261,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
                   aria-pressed={selected === entry}
                   onClick={() => onSelectEntry(entry)}
                 >
-                  {entry.symbol} · {entry.timeframe} · {entry.source} · {entry.horizon} · {toDate(entry.fromTs)}–{toDate(entry.toTs)} · {entry.candleCount} bars
+                  {entry.symbol} · {entry.timeframe} · {entry.source} · {entry.horizon} · {toDate(entry.firstSeenFromTs)}–{toDate(entry.firstSeenToTs)} · {entry.firstSeenCandleCount} bars
                 </button>
               </li>
             ))}

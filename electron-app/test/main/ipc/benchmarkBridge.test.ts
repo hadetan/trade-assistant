@@ -54,13 +54,24 @@ describe("registerBenchmarkBridge", () => {
       type: "lake_symbols",
       id: 1,
       entries: [
-        { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", from_ts: 100, to_ts: 200, candle_count: 3 },
-        { symbol: "NSE:BANKNIFTY", timeframe: "minute", source: "kaggle", from_ts: 10, to_ts: 20, candle_count: 5 },
+        { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", from_ts: 100, to_ts: 200, candle_count: 3, first_seen_from_ts: 50, first_seen_to_ts: 150, first_seen_candle_count: 2 },
+        { symbol: "NSE:BANKNIFTY", timeframe: "minute", source: "kaggle", from_ts: 10, to_ts: 20, candle_count: 5, first_seen_from_ts: 10, first_seen_to_ts: 20, first_seen_candle_count: 5 },
       ],
     });
     const handlers = harness(sidecar);
     const entries = (await handlers.get("benchmark:listLakeSymbols")!(fakeEvent(), undefined)) as Array<Record<string, unknown>>;
-    expect(entries[0]).toEqual({ symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", fromTs: 100, toTs: 200, candleCount: 3, horizon: "positional" });
+    expect(entries[0]).toEqual({
+      symbol: "NSE:INFY",
+      timeframe: "day",
+      source: "bhavcopy",
+      fromTs: 100,
+      toTs: 200,
+      candleCount: 3,
+      firstSeenFromTs: 50,
+      firstSeenToTs: 150,
+      firstSeenCandleCount: 2,
+      horizon: "positional",
+    });
     expect(entries[1].horizon).toBe("intraday");
   });
 

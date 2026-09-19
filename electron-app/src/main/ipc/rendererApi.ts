@@ -42,6 +42,9 @@ export interface LakeSymbolEntry {
   fromTs: number;
   toTs: number;
   candleCount: number;
+  firstSeenFromTs: number;
+  firstSeenToTs: number;
+  firstSeenCandleCount: number;
   horizon: Horizon; // derived from timeframe in the bridge
 }
 

@@ -16,6 +16,26 @@ const DAY_ENTRY: LakeSymbolEntry = {
   fromTs: 1_690_000_000,
   toTs: 1_710_000_000,
   candleCount: 240,
+  firstSeenFromTs: 1_690_000_000,
+  firstSeenToTs: 1_710_000_000,
+  firstSeenCandleCount: 240,
+  horizon: "positional",
+};
+
+// A backfilled entry: live fromTs/toTs/candleCount have moved far beyond what
+// the user originally saw. Any test using this fixture would fail if the
+// picker's display or the default-date seeding were wired to the live fields
+// instead of the first_seen_* ones.
+const BACKFILLED_ENTRY: LakeSymbolEntry = {
+  symbol: "NSE:20MICRONS",
+  timeframe: "day",
+  source: "bhavcopy",
+  fromTs: 1_670_000_000,
+  toTs: 1_710_000_000,
+  candleCount: 88,
+  firstSeenFromTs: 1_705_000_000,
+  firstSeenToTs: 1_705_800_000,
+  firstSeenCandleCount: 8,
   horizon: "positional",
 };
 
@@ -76,6 +96,23 @@ describe("BenchmarkView", () => {
     expect(option.textContent).toMatch(/day/);
     expect(option.textContent).toMatch(/positional/);
     expect(option.textContent).toMatch(/240/);
+  });
+
+  it("displays the picker list's first-seen extent, not the live backfilled extent", async () => {
+    render(<BenchmarkView api={api({ listLakeSymbols: vi.fn().mockResolvedValue([BACKFILLED_ENTRY]) })} />);
+    const option = await screen.findByRole("button", { name: /NSE:20MICRONS/ });
+    expect(option.textContent).toContain("8 bars");
+    expect(option.textContent).not.toContain("88 bars");
+    expect(option.textContent).toContain(new Date(BACKFILLED_ENTRY.firstSeenFromTs * 1000).toISOString().slice(0, 10));
+    expect(option.textContent).not.toContain(new Date(BACKFILLED_ENTRY.fromTs * 1000).toISOString().slice(0, 10));
+  });
+
+  it("seeds the default benchmark date from the first-seen extent, not the live backfilled extent, on selection", async () => {
+    render(<BenchmarkView api={api({ listLakeSymbols: vi.fn().mockResolvedValue([BACKFILLED_ENTRY]) })} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:20MICRONS/ }));
+    const date = (await screen.findByLabelText(/^date$/i)) as HTMLInputElement;
+    expect(date.value).toBe(new Date(BACKFILLED_ENTRY.firstSeenFromTs * 1000).toISOString().slice(0, 10));
+    expect(date.value).not.toBe(new Date(BACKFILLED_ENTRY.fromTs * 1000).toISOString().slice(0, 10));
   });
 
   it("renders the algorithm picker tagged fast/slow and tags a forecaster as an ML forecaster", async () => {

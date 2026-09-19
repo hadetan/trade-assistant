@@ -64,6 +64,9 @@ export interface LakeSymbolWire {
   from_ts: number;
   to_ts: number;
   candle_count: number;
+  first_seen_from_ts: number;
+  first_seen_to_ts: number;
+  first_seen_candle_count: number;
 }
 
 export interface LakeSymbolsResponseWire {
