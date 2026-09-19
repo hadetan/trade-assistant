@@ -159,10 +159,10 @@ describe("runBenchmark frontier walk", () => {
     const result = await runBenchmark(deps, baseParams({ lookaheadBars: 2 }));
     // N=6, L=2 -> eligible i in 0..3; i=2 has close -5 -> skipped.
     expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([0, 1, 3]);
-    // Bounded to firstFrontier..firstFrontier+lookaheadBars (0..2), not the
-    // full 6-bar series -- the glitch candle at index 2 still renders on the
-    // chart within that bound.
-    expect(result.candles).toHaveLength(3);
+    // Bounded past the LAST decision point's (frontierIndex 3) own lookahead
+    // window (3+2+1=6), which here reaches the full 6-bar series -- the
+    // glitch candle at index 2 still renders on the chart within that bound.
+    expect(result.candles).toHaveLength(6);
     expect(result.candles[2].close).toBe(-5);
   });
 
@@ -324,9 +324,10 @@ describe("runBenchmark frontier walk", () => {
     // everything up to and including itself, reaching back before fromTs.
     expect(windows).toEqual([38, 39]);
     // The chart still shows only the selected window: firstFrontier (37)
-    // through firstFrontier + lookaheadBars (38), i.e. 2 bars -- not the whole
-    // unbounded tail of `series` used above for lookback context.
-    expect(result.candles).toHaveLength(2);
+    // through the LAST decision point's (38) own lookahead bar (39), i.e. 3
+    // bars -- not the whole unbounded tail of `series` used above for
+    // lookback context.
+    expect(result.candles).toHaveLength(3);
     expect(result.candles[0].ts).toBe(fromTs);
   });
 
@@ -666,6 +667,43 @@ describe("runBenchmark frontier walk", () => {
     };
 
     await expect(runBenchmark(deps, baseParams())).rejects.toThrow(/HTTP 503/);
+  });
+
+  it("bounds result.candles past the LAST decision point's lookahead, not just the first, for a multi-decision-point stateless_gate run", async () => {
+    // A single intraday day-window can pack several stateless-gate decision
+    // points (unlike a day-timeframe run, which always has exactly one). The
+    // chart keys its markers by ts against `result.candles`, so bounding only
+    // past the FIRST decision point's lookahead silently drops every later
+    // one's marker and tested-candle highlight (they'd have no ts match at
+    // all) even though decisionPoints itself reports them correctly.
+    const closes = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19]; // N=10, L=2 -> eligible i in 0..7
+    const series = seriesOf(closes);
+    const perFrontier: ConfluenceWire[] = closes.map((_, i) => ({ bullish_count: i, bearish_count: 0, neutral_count: 1, weighted_vote: 0.5 }));
+    // Decision points at i=1 and i=6 -- far apart within the same window.
+    const decisions = ["NoChange", "WorthLook", "NoChange", "NoChange", "NoChange", "NoChange", "WorthAiCall", "NoChange"];
+    let gateCall = 0;
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        ensureDayBackfill: backfillOk(),
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: series }),
+        benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[]) =>
+          Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: perFrontier[window.length - 1] }),
+        ),
+        evaluateScanGateStateless: vi.fn().mockImplementation((_prev: ConfluenceWire | null, _curr: ConfluenceWire) =>
+          Promise.resolve({ type: "scan_gate", id: 1, decision: decisions[gateCall++] }),
+        ),
+      },
+    };
+
+    const result = await runBenchmark(deps, baseParams({ horizon: "intraday", lookaheadBars: 2 }));
+
+    expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([1, 6]);
+    const lastPoint = result.decisionPoints[result.decisionPoints.length - 1];
+    // The last decision point's own scoring bar (frontierIndex + lookaheadBars)
+    // must be present in result.candles, and its ts must be reachable there too.
+    expect(series[lastPoint.frontierIndex + 2].ts).toBe(series[8].ts);
+    expect(result.candles.some((c) => c.ts === lastPoint.ts)).toBe(true);
+    expect(result.candles[result.candles.length - 1].ts).toBe(series[8].ts);
   });
 
   it("bounds result.candles to the selected day plus lookaheadBars, not the entire backfilled partition", async () => {

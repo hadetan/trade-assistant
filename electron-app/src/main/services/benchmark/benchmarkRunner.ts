@@ -230,10 +230,17 @@ export async function runBenchmark(
   }
 
   // The chart renders result.candles as-is (BenchmarkView/benchmarkChart do no
-  // filtering of their own), so this must stop at the last bar the scoring
-  // actually uses (`series[firstFrontier + lookaheadBars]`) rather than
-  // running to the end of `series`, which P14's backfill can pad with 80-100+
-  // bars of older context that were never meant to reach the chart.
-  const candleEnd = Math.min(firstFrontier + params.lookaheadBars + 1, series.length);
+  // filtering of their own), so this must stop at the last bar any RECORDED
+  // decision point's scoring actually uses, not just the first candidate
+  // frontier: a day-timeframe window always yields one decision point, but a
+  // stateless_gate (intraday) window can flag several across the same day,
+  // and one whose frontierIndex sits past firstFrontier + lookaheadBars would
+  // otherwise have no ts in result.candles at all -- its marker AND its
+  // tested-candle highlight would be silently unrenderable. Falls back to
+  // firstFrontier when the walk recorded no decision points, so the chart
+  // still shows something sensible around the originally-selected window
+  // rather than an empty or arbitrary range.
+  const lastFrontierIndex = decisionPoints.length > 0 ? decisionPoints[decisionPoints.length - 1].frontierIndex : firstFrontier;
+  const candleEnd = Math.min(lastFrontierIndex + params.lookaheadBars + 1, series.length);
   return { params, candles: series.slice(firstFrontier, candleEnd), decisionPoints, cancelled };
 }
