@@ -32,7 +32,7 @@ export interface AssembleEnvelopeParams {
 
 export const KITE_FETCH_TIMEOUT_MS = 15000;
 
-function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+export function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: NodeJS.Timeout;
   const guard = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
@@ -44,7 +44,7 @@ export async function assembleEnvelope(
   deps: AssembleEnvelopeDeps,
   params: AssembleEnvelopeParams,
 ): Promise<AnalysisEnvelope> {
-  const { closes } = await withTimeout(
+  const { candles } = await withTimeout(
     fetchAndArchive(
       { kite: deps.kite, sidecar: deps.sidecar },
       {
@@ -62,7 +62,16 @@ export async function assembleEnvelope(
   let compute: ComputeResponseWire;
   try {
     compute = await withTimeout(
-      deps.sidecar.compute(params.instrument.symbol, params.timeframe, closes, params.onComputeId),
+      deps.sidecar.compute(
+        params.instrument.symbol,
+        params.timeframe,
+        // "auto" is an intake-side "you decide" marker, never a horizon the
+        // registry's applicable_horizons() filter understands; everything that
+        // is not explicitly positional is evaluated intraday.
+        params.horizon_requested === "positional" ? "positional" : "intraday",
+        candles,
+        params.onComputeId,
+      ),
       PERSONA_TIMEOUTS_MS.sidecar,
       "sidecar compute",
     );

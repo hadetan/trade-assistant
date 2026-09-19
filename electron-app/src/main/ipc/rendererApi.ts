@@ -9,6 +9,10 @@ import type { SessionSummary, HistoryMessage, SessionDetail } from "../services/
 export type { ScanConfig, ScanIntervalMinutes } from "../services/history/historyStore";
 
 export type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
+export type { CandleInterval } from "../services/market/candleInterval";
+import type { CandleInterval } from "../services/market/candleInterval";
+export type { ReadinessResult } from "../services/market/readinessGate";
+import type { ReadinessResult } from "../services/market/readinessGate";
 
 export type SidecarStatus = "up" | "down" | "restarting";
 export type KiteSessionStatus = "authenticated" | "needsLogin" | "unknown";
@@ -28,8 +32,8 @@ export interface BannerEvent {
 
 export type Horizon = "intraday" | "positional";
 
-export type { BenchmarkCadence, Outcome, DecisionPoint, BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
-import type { BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
+export type { BenchmarkCadence, Outcome, DecisionPoint, BenchmarkRunParams, BenchmarkResult, BenchmarkProgress } from "../services/benchmark/benchmarkRunner";
+import type { BenchmarkProgress, BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
 
 export interface LakeSymbolEntry {
   symbol: string;
@@ -38,27 +42,37 @@ export interface LakeSymbolEntry {
   fromTs: number;
   toTs: number;
   candleCount: number;
+  firstSeenFromTs: number;
+  firstSeenToTs: number;
+  firstSeenCandleCount: number;
   horizon: Horizon; // derived from timeframe in the bridge
 }
 
 export interface AlgorithmEntry {
   id: string;
   cost: "fast" | "slow";
+  requiredLookback: number;
 }
 
 export type AnalysisMode = "engine_only" | "ai_assisted";
 
 export type AnalysisRunParams =
-  | { mode: "engine_only"; sessionId: string; instrument: InstrumentSelection; horizon: Horizon; intent_lens: IntentLens }
+  | { mode: "engine_only"; sessionId: string; instrument: InstrumentSelection; interval: CandleInterval; intent_lens: IntentLens }
   | { mode: "ai_assisted"; sessionId: string; query: string; intent_lens: IntentLens; requestId: string };
 
 export type AnalysisResult =
   | {
       mode: "engine_only";
       instrument: InstrumentRef;
-      horizon: Horizon;
+      interval: CandleInterval;
       response: DeterministicResponse;
       algo_results: AlgoResultWire[];
+    }
+  | {
+      mode: "engine_only_blocked";
+      instrument: InstrumentRef;
+      interval: CandleInterval;
+      readiness: Extract<ReadinessResult, { ok: false }>;
     }
   | {
       mode: "ai_assisted";
@@ -70,6 +84,11 @@ export type AnalysisResult =
       algo_results: AlgoResultWire[];
       confluence: ConfluenceWire;
     };
+
+export interface ReadinessCheckParams {
+  instrument: InstrumentSelection;
+  interval: CandleInterval;
+}
 
 export type TraceSource =
   | "sidecar"
@@ -104,6 +123,7 @@ export interface RendererApi {
   login(): Promise<LoginResult>;
   searchInstruments(query: string): Promise<unknown>;
   runAnalysis(params: AnalysisRunParams): Promise<AnalysisResult>;
+  checkReadiness(params: ReadinessCheckParams): Promise<ReadinessResult>;
   createSession(mode: AnalysisMode): Promise<SessionSummary>;
   listSessions(): Promise<SessionSummary[]>;
   getSession(id: string): Promise<SessionDetail>;
@@ -111,7 +131,7 @@ export interface RendererApi {
   listAlgorithms(): Promise<AlgorithmEntry[]>;
   runBenchmark(params: BenchmarkRunParams): Promise<BenchmarkResult>;
   cancelBenchmark(): Promise<void>;
-  onBenchmarkProgress(handler: (progress: { index: number; total: number }) => void): void;
+  onBenchmarkProgress(handler: (progress: BenchmarkProgress) => void): void;
   copyBenchmarkResult(text: string): Promise<void>;
 }
 
@@ -126,6 +146,7 @@ export function buildRendererApi(
     login: () => invoke("kite:login") as Promise<LoginResult>,
     searchInstruments: (query) => invoke("kite:searchInstruments", { query }),
     runAnalysis: (params) => invoke("analysis:run", params) as Promise<AnalysisResult>,
+    checkReadiness: (params) => invoke("analysis:checkReadiness", params) as Promise<ReadinessResult>,
     createSession: (mode) => invoke("history:createSession", { mode }) as Promise<SessionSummary>,
     listSessions: () => invoke("history:listSessions") as Promise<SessionSummary[]>,
     getSession: (id) => invoke("history:getSession", { id }) as Promise<SessionDetail>,

@@ -64,6 +64,9 @@ export interface LakeSymbolWire {
   from_ts: number;
   to_ts: number;
   candle_count: number;
+  first_seen_from_ts: number;
+  first_seen_to_ts: number;
+  first_seen_candle_count: number;
 }
 
 export interface LakeSymbolsResponseWire {
@@ -87,16 +90,41 @@ export interface BenchmarkComputeResponseWire {
   confluence: ConfluenceWire;
 }
 
+export interface DayBackfillResponseWire {
+  type: "day_backfill";
+  id: number;
+  // Of the `need` bars this run wants, how many it can actually use around the
+  // selected day: bars at-or-before it capped at the lookback, plus bars after
+  // it capped at the lookahead. Capped per side on purpose, so an insufficient
+  // answer can never show have >= need whichever side is short.
+  have: number;
+  // The total bars this run needs before it can produce even one result: the
+  // algorithm's own required_lookback plus the request's lookahead scoring
+  // window -- not the bare registry lookback.
+  need: number;
+  sufficient: boolean;
+  // The walk gave up because the archive had no file for CLOSED_DAY_LIMIT
+  // weekdays running -- a different claim from "this symbol is only N days
+  // old", and the sidecar always sends it, so it is required here too.
+  archive_exhausted: boolean;
+  error?: string;
+}
+
 export interface SidecarProgressWire {
   type: "progress";
   id: number;
   step: string; // request-type name ("compute", …) or algorithm id ("rsi", …)
   status: "running" | "done";
+  // Present only on a counted step (today just "backfill"); absence is how a
+  // consumer tells an ordinary bracket line from an N-of-M one.
+  index?: number;
+  total?: number;
 }
 
 export interface AlgorithmWire {
   id: string;
   cost: "fast" | "slow";
+  required_lookback: number;
 }
 
 export interface ListAlgorithmsResponseWire {
@@ -113,10 +141,11 @@ export type SidecarResponseWire =
   | LakeSymbolsResponseWire
   | LakeCandlesResponseWire
   | BenchmarkComputeResponseWire
-  | ListAlgorithmsResponseWire;
+  | ListAlgorithmsResponseWire
+  | DayBackfillResponseWire;
 
 export type SidecarRequestWire =
-  | { type: "compute"; id: number; symbol: string; timeframe: string; closes: number[] }
+  | { type: "compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[] }
   | { type: "persist_candles"; id: number; symbol: string; timeframe: string; source: string; candles: CandleWire[] }
   | { type: "add_watchlist_symbol"; id: number; symbol: string }
   | { type: "remove_watchlist_symbol"; id: number; symbol: string }
@@ -126,7 +155,12 @@ export type SidecarRequestWire =
   | { type: "read_lake_candles"; id: number; symbol: string; timeframe: string; source: string }
   | { type: "benchmark_compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[]; algo_id: string }
   | { type: "evaluate_scan_gate_stateless"; id: number; prev: ConfluenceWire | null; curr: ConfluenceWire }
-  | { type: "list_algorithms"; id: number };
+  | { type: "list_algorithms"; id: number }
+  // `lookahead` is the requesting run's scoring window and `from_ts` the start
+  // of the one day it will test. The sidecar needs both: it sizes against the
+  // bars around THAT day -- required_lookback at-or-before it, lookahead after
+  // it -- and total partition depth answers neither question.
+  | { type: "ensure_day_backfill"; id: number; symbol: string; algo_id: string; lookahead: number; from_ts: number };
 
 export function encodeRequest(request: SidecarRequestWire): string {
   return `${JSON.stringify(request)}\n`;

@@ -9,7 +9,7 @@ afterEach(cleanup);
 const result: AnalysisResult = {
   mode: "engine_only",
   instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
-  horizon: "positional",
+  interval: "5minute",
   response: {
     direction: "bullish",
     conviction: "high",
@@ -46,5 +46,20 @@ describe("AnalysisResultView", () => {
     expect(screen.getByText(/Past turns in this session/i)).toBeTruthy();
     expect(await screen.findByText(/earlier question/)).toBeTruthy();
     expect(await screen.findByText(/earlier answer/)).toBeTruthy();
+  });
+
+  it("renders one specific message per readiness reason and no confluence badges", () => {
+    render(
+      <AnalysisResultView
+        result={{
+          mode: "engine_only_blocked",
+          instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+          interval: "5minute",
+          readiness: { ok: false, reason: "market_closed", nextOpenAt: 1_790_000_000 },
+        }}
+      />,
+    );
+    expect(screen.getByText(/nse is closed/i)).toBeTruthy();
+    expect(screen.queryByText(/bullish/i)).toBeNull();
   });
 });

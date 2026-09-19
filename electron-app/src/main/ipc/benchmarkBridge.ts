@@ -7,7 +7,13 @@ export interface BenchmarkBridgeDeps {
   ipcMain: Pick<IpcMain, "handle">;
   sidecar: Pick<
     SidecarSupervisor,
-    "listLakeSymbols" | "listAlgorithms" | "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless" | "cancelCurrent"
+    | "listLakeSymbols"
+    | "listAlgorithms"
+    | "readLakeCandles"
+    | "benchmarkCompute"
+    | "evaluateScanGateStateless"
+    | "ensureDayBackfill"
+    | "cancelCurrent"
   >;
 }
 
@@ -21,17 +27,18 @@ export function registerBenchmarkBridge(deps: BenchmarkBridgeDeps): void {
       fromTs: e.from_ts,
       toTs: e.to_ts,
       candleCount: e.candle_count,
+      firstSeenFromTs: e.first_seen_from_ts,
+      firstSeenToTs: e.first_seen_to_ts,
+      firstSeenCandleCount: e.first_seen_candle_count,
       horizon: horizonForTimeframe(e.timeframe),
     }));
   });
   deps.ipcMain.handle("benchmark:listAlgorithms", async (): Promise<AlgorithmEntry[]> => {
     const { algorithms } = await deps.sidecar.listAlgorithms();
-    return algorithms.map((a) => ({ id: a.id, cost: a.cost as "fast" | "slow" }));
+    return algorithms.map((a) => ({ id: a.id, cost: a.cost as "fast" | "slow", requiredLookback: a.required_lookback }));
   });
   deps.ipcMain.handle("benchmark:runBenchmark", (event, params: BenchmarkRunParams) =>
-    runBenchmark({ sidecar: deps.sidecar }, params, (index, total) =>
-      event.sender.send("benchmark:progress", { index, total }),
-    ),
+    runBenchmark({ sidecar: deps.sidecar }, params, (progress) => event.sender.send("benchmark:progress", progress)),
   );
   deps.ipcMain.handle("benchmark:cancelBenchmark", () => {
     deps.sidecar.cancelCurrent();

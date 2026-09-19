@@ -10,10 +10,11 @@ use sidecar::protocol::{
     ListLakeSymbolsRequest, ReadLakeCandlesRequest,
 };
 use sidecar::protocol::{AlgorithmWire, ListAlgorithmsRequest, ListAlgorithmsResponse};
+use sidecar::protocol::{DayBackfillResponse, EnsureDayBackfillRequest};
 
 #[test]
 fn request_round_trips_from_json_line() {
-    let line = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0]}"#;
+    let line = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":10},{"ts":200,"open":101.0,"high":101.0,"low":101.0,"close":101.0,"volume":10},{"ts":300,"open":102.0,"high":102.0,"low":102.0,"close":102.0,"volume":10}]}"#;
 
     let request = match parse_request(line).unwrap() {
         SidecarRequest::Compute(request) => request,
@@ -22,7 +23,9 @@ fn request_round_trips_from_json_line() {
 
     assert_eq!(request.id, 1);
     assert_eq!(request.symbol, "NSE:INFY");
-    assert_eq!(request.closes, vec![100.0, 101.0, 102.0]);
+    assert_eq!(request.horizon, "positional");
+    assert_eq!(request.candles.len(), 3);
+    assert_eq!(request.candles[2].close, 102.0);
 }
 
 #[test]
@@ -260,12 +263,16 @@ fn lake_symbols_response_serializes_its_entries() {
             from_ts: 1_690_000_000,
             to_ts: 1_710_000_000,
             candle_count: 240,
+            first_seen_from_ts: 1_705_000_000,
+            first_seen_to_ts: 1_710_000_000,
+            first_seen_candle_count: 8,
         }],
         error: None,
     })
     .unwrap();
     assert!(json.contains("\"symbol\":\"NSE:INFY\""));
     assert!(json.contains("\"candle_count\":240"));
+    assert!(json.contains("\"first_seen_candle_count\":8"));
     assert!(!json.contains("error"));
 }
 
@@ -359,12 +366,16 @@ fn encodes_a_tagged_lake_symbols_response() {
             from_ts: 1_690_000_000,
             to_ts: 1_710_000_000,
             candle_count: 240,
+            first_seen_from_ts: 1_705_000_000,
+            first_seen_to_ts: 1_710_000_000,
+            first_seen_candle_count: 8,
         }],
         error: None,
     }));
     assert!(!line.contains('\n'));
     assert!(line.contains("\"type\":\"lake_symbols\""));
     assert!(line.contains("\"candle_count\":240"));
+    assert!(line.contains("\"first_seen_candle_count\":8"));
 }
 
 #[test]
@@ -396,8 +407,8 @@ fn algorithms_response_serializes_its_tagged_algorithm_list() {
     let json = serde_json::to_string(&ListAlgorithmsResponse {
         id: 40,
         algorithms: vec![
-            AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string() },
-            AlgorithmWire { id: "kronos".to_string(), cost: "slow".to_string() },
+            AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string(), required_lookback: 20 },
+            AlgorithmWire { id: "kronos".to_string(), cost: "slow".to_string(), required_lookback: 256 },
         ],
     })
     .unwrap();
@@ -405,6 +416,8 @@ fn algorithms_response_serializes_its_tagged_algorithm_list() {
     assert!(json.contains("\"id\":\"sma\""));
     assert!(json.contains("\"cost\":\"fast\""));
     assert!(json.contains("\"cost\":\"slow\""));
+    assert!(json.contains("\"required_lookback\":20"));
+    assert!(json.contains("\"required_lookback\":256"));
 }
 
 #[test]
@@ -419,9 +432,103 @@ fn parses_a_tagged_list_algorithms_request() {
 fn encodes_a_tagged_algorithms_response() {
     let line = encode_response(&SidecarResponse::Algorithms(ListAlgorithmsResponse {
         id: 40,
-        algorithms: vec![AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string() }],
+        algorithms: vec![AlgorithmWire { id: "sma".to_string(), cost: "fast".to_string(), required_lookback: 20 }],
     }));
     assert!(!line.contains('\n'));
     assert!(line.contains("\"type\":\"algorithms\""));
     assert!(line.contains("\"id\":\"sma\""));
+    assert!(line.contains("\"required_lookback\":20"));
+}
+
+#[test]
+fn parses_a_tagged_ensure_day_backfill_request() {
+    // 1705276800 is 2024-01-15 00:00 UTC -- the selected day's START, which is
+    // what BenchmarkView.tsx puts on the wire. NOT that day's candle stamp
+    // (15:30 IST = 1705312800); the two differ by 36000 and confusing them is
+    // what made the leading/trailing split off by one bar.
+    let line = r#"{"type":"ensure_day_backfill","id":41,"symbol":"NSE:ZYDUSWELL","algo_id":"kronos","lookahead":5,"from_ts":1705276800}"#;
+    match parse_request(line).unwrap() {
+        SidecarRequest::EnsureDayBackfill(request) => {
+            assert_eq!(request.id, 41);
+            assert_eq!(request.symbol, "NSE:ZYDUSWELL");
+            assert_eq!(request.algo_id, "kronos");
+            assert_eq!(request.lookahead, 5, "sizing is per-run, so the run's scoring window must cross the wire");
+            assert_eq!(
+                request.from_ts, 1_705_276_800,
+                "sizing is per-selected-day, so the day the run tests must cross the wire too"
+            );
+        }
+        _ => panic!("expected an ensure_day_backfill request"),
+    }
+}
+
+#[test]
+fn encodes_a_tagged_day_backfill_response_and_omits_the_error_field_when_none() {
+    let line = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+        error: None,
+    }));
+    assert!(!line.contains('\n'));
+    assert!(line.contains("\"type\":\"day_backfill\""));
+    assert!(line.contains("\"id\":41"));
+    assert!(line.contains("\"have\":8"));
+    assert!(line.contains("\"need\":256"));
+    assert!(line.contains("\"sufficient\":false"));
+    // Always on the wire, even when false -- the TS mirror can then require it.
+    assert!(line.contains("\"archive_exhausted\":false"));
+    assert!(!line.contains("error"));
+}
+
+#[test]
+fn a_day_backfill_response_carries_its_error_when_one_occurred() {
+    let line = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 0,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+        error: Some("no --lake-root configured".to_string()),
+    }));
+    assert!(line.contains("\"error\":\"no --lake-root configured\""));
+}
+
+#[test]
+fn an_exhausted_archive_is_a_distinct_wire_outcome_from_a_merely_short_history() {
+    let short_history = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+        error: None,
+    }));
+    let exhausted = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+        id: 41,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: true,
+        error: None,
+    }));
+    assert_ne!(short_history, exhausted, "the two outcomes must not be wire-identical");
+    assert!(exhausted.contains("\"archive_exhausted\":true"));
+}
+
+#[test]
+fn an_ensure_day_backfill_request_is_constructible_for_a_round_trip() {
+    // Guards the field names the Electron mirror writes onto the wire.
+    let request = EnsureDayBackfillRequest {
+        id: 1,
+        symbol: "NSE:INFY".to_string(),
+        algo_id: "obv".to_string(),
+        lookahead: 5,
+        from_ts: 1_705_329_000,
+    };
+    assert_eq!(request.algo_id, "obv");
+    assert_eq!(request.lookahead, 5);
+    assert_eq!(request.from_ts, 1_705_329_000);
 }

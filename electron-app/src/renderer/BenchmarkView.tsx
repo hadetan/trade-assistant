@@ -11,7 +11,7 @@ import { Banner } from "./ui/Banner";
 import { Spinner } from "./ui/Spinner";
 import { BarChart3, Copy } from "./ui/icons";
 import "./BenchmarkView.css";
-import type { AlgorithmEntry, BenchmarkResult, DecisionPoint, LakeSymbolEntry, RendererApi } from "../main/ipc/rendererApi";
+import type { AlgorithmEntry, BenchmarkProgress, BenchmarkResult, DecisionPoint, LakeSymbolEntry, RendererApi } from "../main/ipc/rendererApi";
 
 type BenchmarkApi = Pick<
   RendererApi,
@@ -26,7 +26,55 @@ function fromDate(value: string): number {
   return Math.floor(new Date(`${value}T00:00:00Z`).getTime() / 1000);
 }
 
+// `fromDate` yields UTC midnight of the selected day; `ensureDayBackfill`'s
+// `fromTs` argument is exactly this value. `day_backfill.rs` derives that
+// run's partition as `[from_ts, from_ts + DAY_SECONDS)` and splits leading
+// (before) from trailing (at-or-after) history at that upper edge — changing
+// this encoding or the day length here requires changing that file too.
 const DAY_SECONDS = 86_400;
+
+function progressLabel(algoId: string | null, progress: BenchmarkProgress | null): string {
+  if (progress?.phase === "backfill") {
+    return `Backfilling history — ${progress.index}/${progress.total} days`;
+  }
+  return `${algoId} — bar ${progress ? progress.index : 0}/${progress ? progress.total : "…"}`;
+}
+
+function InsufficientHistory({ result }: { result: BenchmarkResult }): JSX.Element {
+  const { have, need, reason } = result.insufficientHistory ?? { have: 0, need: 0, reason: "symbol_history" as const };
+  // Two different facts, two different sentences: the walk can tell "this
+  // symbol has no rows this far back" from "the archive answered nothing at
+  // all", and saying the first when the second happened is a lie about the
+  // user's symbol (decision (xviii)).
+  if (reason === "archive_unreachable") {
+    return (
+      <Banner variant="warning">
+        Could not reach far enough back into the NSE archive for {result.params.symbol} — collected {have} of the{" "}
+        {need} days this run needs before the archive stopped answering. It may not cover this far back.
+      </Banner>
+    );
+  }
+  return (
+    <Banner variant="info">
+      {/* "this run", not "{algoId}": `need` is the algorithm's lookback plus
+          this run's lookahead scoring window, so crediting it to the algorithm
+          alone would overstate what the model itself requires. And "around the
+          selected day", not "of history": `have` counts the bars on each side
+          of the one day this run tests, capped at what each side can use, so
+          it is not a claim about the symbol's total depth.
+
+          Deliberately silent about the archive. The wire carries only
+          have/need/reason, not which SIDE fell short, and the shortfall is
+          often on the trailing side -- too few days AFTER the selection, which
+          a backward walk can never fix and so answers with zero fetches. Saying
+          "that is all the archive has" there would assert something nothing
+          asked. Pointing at an earlier date covers the trailing case and costs
+          the leading case nothing. */}
+      {result.params.symbol} has {have} of the {need} days this run needs around the selected day. Try an earlier
+      date, or a symbol with more history.
+    </Banner>
+  );
+}
 
 function SummaryStrip({ points }: { points: DecisionPoint[] }): JSX.Element {
   const { correct, incorrect, neutral, hitRate } = summarize(points);
@@ -51,6 +99,11 @@ function ResultsView({ api, result }: { api: BenchmarkApi; result: BenchmarkResu
   useEffect(() => {
     const container = chartRef.current;
     if (!container) return;
+    // Open the first decision point's explanation up front -- the popover only
+    // otherwise appears on a chart-marker click, an interaction nothing in the UI
+    // hints at, which made a run's result look unexplained even though the model's
+    // own forecast text was there all along.
+    setSelected(result.decisionPoints[0] ?? null);
     const handle = createBenchmarkChart(container, result, setSelected);
     return () => handle.dispose();
   }, [result]);
@@ -62,6 +115,9 @@ function ResultsView({ api, result }: { api: BenchmarkApi; result: BenchmarkResu
       <Button variant="ghost" onClick={() => void api.copyBenchmarkResult(JSON.stringify(result))}>
         <Copy size={14} aria-hidden="true" /> Copy raw result
       </Button>
+      {result.decisionPoints.length > 0 && (
+        <p className="benchmark-chart-hint">Click a marker on the chart to see what the algorithm predicted for that bar.</p>
+      )}
       <div className="benchmark-chart" ref={chartRef} />
       {selected && (
         <Card className="benchmark-popover">
@@ -89,18 +145,37 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState<{ index: number; total: number } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<BenchmarkProgress | null>(null);
+  const setupRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    void api.listLakeSymbols().then(setEntries);
-    void api.listAlgorithms().then(setAlgorithms);
+    // Without a .catch() here, a rejection leaves entries/algorithms null forever --
+    // the view is stuck on the loading spinner with no indication anything failed.
+    api
+      .listLakeSymbols()
+      .then(setEntries)
+      .catch((e) => setLoadError((e as Error).message));
+    api
+      .listAlgorithms()
+      .then(setAlgorithms)
+      .catch((e) => setLoadError((e as Error).message));
     api.onBenchmarkProgress(setProgress);
   }, [api]);
+
+  // The setup card renders below the full lake-entry list inside a scrolling pane,
+  // so on a long list a click can land off-screen with no visible change.
+  useEffect(() => {
+    // jsdom (unit tests) doesn't implement scrollIntoView -- guard rather than crash.
+    if (selected && typeof setupRef.current?.scrollIntoView === "function") {
+      setupRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [selected]);
 
   const onSelectEntry = (entry: LakeSymbolEntry): void => {
     setSelected(entry);
     setLookaheadBars(defaultLookaheadForHorizon(entry.horizon));
-    setDate(toDate(entry.fromTs));
+    setDate(toDate(entry.firstSeenFromTs));
     setResult(null);
   };
 
@@ -138,6 +213,9 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
     void api.cancelBenchmark();
   };
 
+  if (loadError) {
+    return <Banner variant="error">Failed to load benchmark data: {loadError}</Banner>;
+  }
   if (entries === null || algorithms === null) {
     return (
       <div className="benchmark-loading">
@@ -153,9 +231,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
     <div className="benchmark">
       {running && (
         <Card className="benchmark-progress-pill">
-          <span>
-            {selectedAlgoId} — bar {progress ? progress.index : 0}/{progress ? progress.total : "…"}
-          </span>
+          <span>{progressLabel(selectedAlgoId, progress)}</span>
           <div className="benchmark-progress-bar">
             <div
               className="benchmark-progress-bar-fill"
@@ -168,68 +244,85 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
         </Card>
       )}
       {result ? (
-        <ResultsView api={api} result={result} />
+        result.insufficientHistory ? (
+          <InsufficientHistory result={result} />
+        ) : (
+          <ResultsView api={api} result={result} />
+        )
       ) : (
         <>
           <h2>Benchmark</h2>
           <ul className="benchmark-picker">
             {entries.map((entry) => (
               <li key={`${entry.symbol}_${entry.timeframe}_${entry.source}`}>
-                <button type="button" className="benchmark-picker-item" onClick={() => onSelectEntry(entry)}>
-                  {entry.symbol} · {entry.timeframe} · {entry.source} · {entry.horizon} · {toDate(entry.fromTs)}–{toDate(entry.toTs)} · {entry.candleCount} bars
+                <button
+                  type="button"
+                  className={`benchmark-picker-item${selected === entry ? " benchmark-picker-item-selected" : ""}`}
+                  aria-pressed={selected === entry}
+                  onClick={() => onSelectEntry(entry)}
+                >
+                  {entry.symbol} · {entry.timeframe} · {entry.source} · {entry.horizon} · {toDate(entry.firstSeenFromTs)}–{toDate(entry.firstSeenToTs)} · {entry.firstSeenCandleCount} bars
                 </button>
               </li>
             ))}
           </ul>
 
           {selected && (
-            <Card>
-              <form
-                className="benchmark-setup"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void onRun();
-                }}
-              >
-                <p>
-                  Horizon: <strong>{selected.horizon}</strong> (derived from timeframe)
-                </p>
-                <fieldset className="benchmark-algo-picker">
-                  <legend>Algorithm</legend>
-                  {algorithms.map((algo) => (
-                    <Button
-                      key={algo.id}
-                      type="button"
-                      variant={selectedAlgoId === algo.id ? "primary" : "secondary"}
-                      size="sm"
-                      aria-pressed={selectedAlgoId === algo.id}
-                      onClick={() => setSelectedAlgoId(algo.id)}
-                    >
-                      {algo.id} · {algo.cost === "slow" ? "slow (ML forecaster)" : "fast"}
-                    </Button>
-                  ))}
-                </fieldset>
-                <label className="benchmark-field">
-                  Lookahead bars
-                  <TextField type="number" min={1} value={lookaheadBars} onChange={(e) => setLookaheadBars(Number(e.target.value))} />
-                </label>
-                <label className="benchmark-field">
-                  Date
-                  <TextField
-                    type="date"
-                    required
-                    min={toDate(selected.fromTs)}
-                    max={toDate(selected.toTs)}
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                  />
-                </label>
-                <Button type="submit" disabled={running || !selectedAlgoId}>
-                  {running && <Spinner size={14} />} {running ? "Running…" : "Run benchmark"}
-                </Button>
-                {error && <Banner variant="error">{error}</Banner>}
-              </form>
-            </Card>
+            <div ref={setupRef}>
+              <Card>
+                <form
+                  className="benchmark-setup"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void onRun();
+                  }}
+                >
+                  <p>
+                    Horizon: <strong>{selected.horizon}</strong> (derived from timeframe)
+                  </p>
+                  <fieldset className="benchmark-algo-picker">
+                    <legend>Algorithm</legend>
+                    {algorithms.map((algo) => (
+                      <Button
+                        key={algo.id}
+                        type="button"
+                        variant={selectedAlgoId === algo.id ? "primary" : "secondary"}
+                        size="sm"
+                        aria-pressed={selectedAlgoId === algo.id}
+                        onClick={() => setSelectedAlgoId(algo.id)}
+                      >
+                        {algo.id} · {algo.cost === "slow" ? "slow (ML forecaster)" : "fast"}
+                      </Button>
+                    ))}
+                  </fieldset>
+                  <label className="benchmark-field">
+                    Lookahead bars
+                    <TextField type="number" min={1} value={lookaheadBars} onChange={(e) => setLookaheadBars(Number(e.target.value))} />
+                  </label>
+                  <label className="benchmark-field">
+                    Date
+                    <TextField
+                      type="date"
+                      required
+                      // Deliberately the live extent, not firstSeen* (used above for the
+                      // summary line and the default date): backfilled bars are real and
+                      // benchmarkable, so bounding this to firstSeen* would make legitimately
+                      // available history unreachable. The original bug was a *silent* wrong
+                      // default; picking a date outside the first-seen window here is a
+                      // visible, deliberate user action, not a repeat of that bug.
+                      min={toDate(selected.fromTs)}
+                      max={toDate(selected.toTs)}
+                      value={date}
+                      onChange={(e) => setDate(e.target.value)}
+                    />
+                  </label>
+                  <Button type="submit" disabled={running || !selectedAlgoId}>
+                    {running && <Spinner size={14} />} {running ? "Running…" : "Run benchmark"}
+                  </Button>
+                  {error && <Banner variant="error">{error}</Banner>}
+                </form>
+              </Card>
+            </div>
           )}
         </>
       )}

@@ -1,19 +1,19 @@
 use crate::protocol::{
-    benchmark_empty_response, AddWatchlistSymbolRequest, AlgoResultWire, AlgorithmWire,
-    BenchmarkComputeRequest, BenchmarkComputeResponse, CandleWire, ComputeRequest, ComputeResponse,
-    ConfluenceWire, EvaluateScanGateRequest, EvaluateScanGateStatelessRequest, LakeCandlesResponse,
-    LakeSymbolWire, LakeSymbolsResponse, ListAlgorithmsRequest, ListAlgorithmsResponse,
-    ListLakeSymbolsRequest, ListWatchlistRequest, PersistCandlesRequest, PersistCandlesResponse,
-    ReadLakeCandlesRequest, RemoveWatchlistSymbolRequest, ScanGateResponse, WatchlistResponse,
+    benchmark_empty_response, empty_response, AddWatchlistSymbolRequest, AlgoResultWire,
+    AlgorithmWire, BenchmarkComputeRequest, BenchmarkComputeResponse, CandleWire, ComputeRequest,
+    ComputeResponse, ConfluenceWire, EvaluateScanGateRequest, EvaluateScanGateStatelessRequest,
+    LakeCandlesResponse, LakeSymbolWire, LakeSymbolsResponse, ListAlgorithmsRequest,
+    ListAlgorithmsResponse, ListLakeSymbolsRequest, ListWatchlistRequest, PersistCandlesRequest,
+    PersistCandlesResponse, ReadLakeCandlesRequest, RemoveWatchlistSymbolRequest, ScanGateResponse,
+    WatchlistResponse,
 };
 use algo_core::confluence::{compute_confluence, ScorecardSummary};
 use algo_core::scan_gate::{evaluate_scan_gate, GateThresholds};
 use algo_core::{
     registry::{self, run_applicable, run_applicable_with_progress},
-    AlgoOutput, Algorithm, Horizon, MarketContext, Timeframe,
+    AlgoOutput, Algorithm, Horizon, Timeframe,
 };
 use backtest::frontier::context_at;
-use chrono::Utc;
 use std::collections::HashMap;
 use storage::{Candle, CandleStore, ConfluenceSnapshot, LakeSymbolEntry, StateStore};
 
@@ -21,6 +21,7 @@ fn timeframe_to_wire(timeframe: Timeframe) -> &'static str {
     match timeframe {
         Timeframe::Minute => "minute",
         Timeframe::FiveMinute => "5minute",
+        Timeframe::TenMinute => "10minute",
         Timeframe::FifteenMinute => "15minute",
         Timeframe::Day => "day",
     }
@@ -68,6 +69,9 @@ fn lake_entry_to_wire(e: &LakeSymbolEntry) -> LakeSymbolWire {
         from_ts: e.from_ts,
         to_ts: e.to_ts,
         candle_count: e.candle_count,
+        first_seen_from_ts: e.first_seen_from_ts,
+        first_seen_to_ts: e.first_seen_to_ts,
+        first_seen_candle_count: e.first_seen_candle_count,
     }
 }
 
@@ -75,6 +79,7 @@ fn parse_timeframe(s: &str) -> Timeframe {
     match s {
         "minute" => Timeframe::Minute,
         "5minute" => Timeframe::FiveMinute,
+        "10minute" => Timeframe::TenMinute,
         "15minute" => Timeframe::FifteenMinute,
         _ => Timeframe::Day,
     }
@@ -96,16 +101,21 @@ pub fn handle_request_with_progress(
     request: ComputeRequest,
     on_progress: &mut dyn FnMut(&str, bool),
 ) -> ComputeResponse {
-    let timeframe = match request.timeframe.as_str() {
-        "minute" => Timeframe::Minute,
-        "5minute" => Timeframe::FiveMinute,
-        "15minute" => Timeframe::FifteenMinute,
-        _ => Timeframe::Day,
-    };
-
-    // Backtest-only per design Q2: the live sidecar path has no OHLCV/options
-    // feed yet, so every extra field stays empty/None via from_closes.
-    let ctx = MarketContext::from_closes(request.symbol.clone(), timeframe, Horizon::Positional, request.closes, Utc::now());
+    let candles: Vec<Candle> = request
+        .candles
+        .iter()
+        .map(|c| Candle { ts: c.ts, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume })
+        .collect();
+    if candles.is_empty() {
+        return empty_response(request.id);
+    }
+    let timeframe = parse_timeframe(&request.timeframe);
+    let horizon = parse_horizon(&request.horizon);
+    // Full OHLCV at the last bar, the same assembly handle_benchmark_compute
+    // uses. Kronos and the other forecasters guard on opens/highs/lows/volumes
+    // being populated, so a from_closes context sends them to their neutral
+    // branch on every tick regardless of how much history exists (P13§1).
+    let ctx = context_at(&candles, candles.len() - 1, &request.symbol, timeframe, horizon);
 
     // Route every compute() call through the one shared lookback gate
     // (algo_core::registry::run_applicable_with_progress) so the sidecar and
@@ -123,11 +133,7 @@ pub fn handle_request_with_progress(
 
     let algo_results = outputs.iter().map(algo_output_to_wire).collect();
 
-    ComputeResponse {
-        id: request.id,
-        algo_results,
-        confluence: confluence_to_wire(&confluence),
-    }
+    ComputeResponse { id: request.id, algo_results, confluence: confluence_to_wire(&confluence) }
 }
 
 pub fn handle_persist(store: &CandleStore, request: PersistCandlesRequest) -> PersistCandlesResponse {
@@ -228,8 +234,8 @@ pub fn handle_benchmark_compute(request: BenchmarkComputeRequest) -> BenchmarkCo
     }
     let timeframe = parse_timeframe(&request.timeframe);
     let horizon = parse_horizon(&request.horizon);
-    // Full OHLCV context at the last visible bar -- richer than the live
-    // Compute handler's closes-only from_closes path (which is left unchanged).
+    // Full OHLCV context at the last visible bar, the same assembly
+    // handle_request_with_progress uses for the live path (P13§1).
     // Anti-lookahead holds: context_at's as_of is the frontier bar's own ts, and
     // only series[0..=frontier] is in the window.
     let ctx = context_at(&candles, candles.len() - 1, &request.symbol, timeframe, horizon);
@@ -280,10 +286,18 @@ fn tag_algorithms(fast_source: &[Box<dyn Algorithm>], slow_source: &[Box<dyn Alg
     let mut algorithms: Vec<AlgorithmWire> = fast_source
         .iter()
         .filter(|a| !slow_ids.contains(a.id()))
-        .map(|a| AlgorithmWire { id: a.id().to_string(), cost: "fast".to_string() })
+        .map(|a| AlgorithmWire {
+            id: a.id().to_string(),
+            cost: "fast".to_string(),
+            required_lookback: a.required_lookback(),
+        })
         .collect();
     for algo in slow_source {
-        algorithms.push(AlgorithmWire { id: algo.id().to_string(), cost: "slow".to_string() });
+        algorithms.push(AlgorithmWire {
+            id: algo.id().to_string(),
+            cost: "slow".to_string(),
+            required_lookback: algo.required_lookback(),
+        });
     }
     algorithms.sort_by(|a, b| a.id.cmp(&b.id));
     algorithms
@@ -298,70 +312,100 @@ pub fn handle_list_algorithms(request: ListAlgorithmsRequest) -> ListAlgorithmsR
 mod tests {
     use super::*;
 
-    fn closes_seq(n: usize) -> Vec<f64> {
-        (0..n).map(|i| 100.0 + i as f64).collect()
-    }
-
-    fn request(id: u64, closes: Vec<f64>) -> ComputeRequest {
+    fn request(id: u64, len: usize) -> ComputeRequest {
         ComputeRequest {
             id,
             symbol: "NSE:NEWLISTING".to_string(),
             timeframe: "day".to_string(),
-            closes,
+            horizon: "positional".to_string(),
+            candles: ohlcv_window(len),
         }
     }
 
     #[test]
     fn skips_algorithms_without_enough_lookback_instead_of_panicking() {
-        // 15 closes: enough for every algorithm with required_lookback <= 15
-        // (rsi included) out of the full 34-algorithm default catalog, but
-        // short of e.g. sma/ema's required_lookback of 20. Before the fix,
-        // calling sma/ema here underflowed `closes.len() - period` and
-        // panicked the whole process.
-        let response = handle_request(request(42, closes_seq(15)));
+        // 15 bars: enough for every algorithm with required_lookback <= 15,
+        // short of e.g. sma/ema's 20. Before the shared run_applicable gate,
+        // calling sma/ema here underflowed `closes.len() - period` and panicked.
+        let response = handle_request(request(42, 15));
 
         assert_eq!(response.id, 42);
-        assert_eq!(response.algo_results.len(), 24);
         assert!(response.algo_results.iter().any(|r| r.algo_id == "rsi"));
+        assert!(!response.algo_results.iter().any(|r| r.algo_id == "sma"));
     }
 
     #[test]
-    fn empty_closes_yields_well_formed_zeroed_response() {
-        // Zero closes still satisfies the options/OI overlays' lookback of 0
-        // (bsm_greeks, implied_vol, max_pain, oi_buildup, put_call_ratio),
-        // which no-op to Neutral internally on the missing options context
-        // rather than being filtered out by run_applicable. Every
-        // closes-based algorithm is filtered out, so handle_request must
-        // still return a well-formed response, not panic.
-        let response = handle_request(request(7, vec![]));
+    fn empty_candles_yields_well_formed_zeroed_response() {
+        // context_at cannot index an empty series, so an empty window returns
+        // the same well-formed zeroed answer benchmark_compute already returns
+        // -- the client blocks on `id` and is still owed exactly one line.
+        let response = handle_request(ComputeRequest {
+            id: 7,
+            symbol: "NSE:NEWLISTING".to_string(),
+            timeframe: "day".to_string(),
+            horizon: "positional".to_string(),
+            candles: Vec::new(),
+        });
 
         assert_eq!(response.id, 7);
-        assert_eq!(response.algo_results.len(), 5);
-        assert!(response.algo_results.iter().all(|r| r.direction == "Neutral"));
+        assert!(response.algo_results.is_empty());
         assert_eq!(response.confluence.bullish_count, 0);
         assert_eq!(response.confluence.bearish_count, 0);
-        assert_eq!(response.confluence.neutral_count, 5);
+        assert_eq!(response.confluence.neutral_count, 0);
         assert!(!response.confluence.weighted_vote.is_nan());
     }
 
     #[test]
-    fn sufficient_closes_runs_every_algorithm_applicable_at_that_lookback() {
-        // 21 closes clears the 3 Phase-1 algorithms (rsi/sma/ema, lookback
-        // <= 20) plus every catalog algorithm requiring <= 21 bars; adx (28),
-        // garch (30), macd (35), and ichimoku (52) are the only default-
-        // catalog algorithms still excluded at this length.
-        let response = handle_request(request(1, closes_seq(21)));
+    fn live_compute_builds_a_full_ohlcv_context_not_a_closes_only_one() {
+        // The whole point of P13§5: a volume/OHLCV-reading algorithm must be able
+        // to produce a directional signal on the LIVE path. Under from_closes
+        // (empty volumes) obv no-ops to Neutral no matter how much history exists.
+        let response = handle_request(request(8, 60));
 
-        assert_eq!(response.algo_results.len(), 30);
+        let obv = response
+            .algo_results
+            .iter()
+            .find(|r| r.algo_id == "obv")
+            .expect("obv runs at 60 bars");
+        assert_ne!(obv.direction, "Neutral");
+    }
+
+    #[test]
+    fn live_compute_honors_the_requested_horizon_instead_of_hardcoding_positional() {
+        let response = handle_request(ComputeRequest {
+            id: 9,
+            symbol: "NSE:NEWLISTING".to_string(),
+            timeframe: "5minute".to_string(),
+            horizon: "intraday".to_string(),
+            candles: ohlcv_window(60),
+        });
+
+        let first = response.algo_results.first().expect("60 bars runs several algorithms");
+        assert_eq!(first.horizon, "intraday");
+        assert_eq!(first.timeframe, "5minute");
+        assert!(response.algo_results.iter().all(|r| r.horizon == "intraday"));
+    }
+
+    #[test]
+    fn live_compute_maps_the_ten_minute_timeframe_instead_of_falling_through_to_day() {
+        let response = handle_request(ComputeRequest {
+            id: 10,
+            symbol: "NSE:NEWLISTING".to_string(),
+            timeframe: "10minute".to_string(),
+            horizon: "intraday".to_string(),
+            candles: ohlcv_window(60),
+        });
+
+        let first = response.algo_results.first().expect("60 bars runs several algorithms");
+        assert_eq!(first.timeframe, "10minute");
     }
 
     #[test]
     fn handle_request_with_progress_brackets_each_algorithm_running_then_done_in_registry_order() {
         let mut events: Vec<(String, bool)> = Vec::new();
-        let response = handle_request_with_progress(request(1, closes_seq(21)), &mut |id, done| {
+        let response = handle_request_with_progress(request(1, 60), &mut |id, done| {
             events.push((id.to_string(), done))
         });
-        // one running/done pair per produced algo_result, in the same order
         let expected: Vec<(String, bool)> = response
             .algo_results
             .iter()
@@ -372,15 +416,11 @@ mod tests {
 
     #[test]
     fn widened_algo_result_carries_symbol_timeframe_horizon_and_rfc3339_timestamp() {
-        let response = handle_request(request(3, closes_seq(21)));
-        let first = response
-            .algo_results
-            .first()
-            .expect("21 closes runs several algorithms");
+        let response = handle_request(request(3, 60));
+        let first = response.algo_results.first().expect("60 bars runs several algorithms");
 
         assert_eq!(first.symbol, "NSE:NEWLISTING");
         assert_eq!(first.timeframe, "day");
-        // handle_request pins Horizon::Positional for the whole request today.
         assert_eq!(first.horizon, "positional");
         assert!(first.computed_at.contains('T'));
     }
@@ -670,5 +710,26 @@ mod tests {
         let matches: Vec<_> = algorithms.iter().filter(|w| w.id == overlapping_id).collect();
         assert_eq!(matches.len(), 1, "an id present in both sources must appear exactly once");
         assert_eq!(matches[0].cost, "slow", "any id present in the slow source must be tagged slow, even if the fast source also contains it");
+    }
+
+    #[test]
+    fn handle_list_algorithms_reports_each_algorithms_own_required_lookback() {
+        let response = handle_list_algorithms(ListAlgorithmsRequest { id: 42 });
+        for algo in registry::all_for_binary() {
+            let wire = response
+                .algorithms
+                .iter()
+                .find(|w| w.id == algo.id())
+                .unwrap_or_else(|| panic!("id {} missing from the response", algo.id()));
+            assert_eq!(
+                wire.required_lookback,
+                algo.required_lookback(),
+                "required_lookback for {} must be the algorithm's own, not a constant",
+                algo.id()
+            );
+        }
+        // At least one algorithm in every build declares a non-zero lookback --
+        // proves the field is populated, not uniformly defaulted to 0.
+        assert!(response.algorithms.iter().any(|w| w.required_lookback > 0));
     }
 }

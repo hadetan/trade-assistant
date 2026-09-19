@@ -124,7 +124,7 @@ export class ScanScheduler {
     const result: AnalysisResult = {
       mode: "engine_only",
       instrument: envelope.instrument,
-      horizon: SCAN_HORIZON,
+      interval: "5minute",
       response,
       algo_results: envelope.algo_results,
     };

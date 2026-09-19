@@ -211,6 +211,41 @@ fn list_symbols_reports_correct_ts_bounds_and_count() {
 }
 
 #[test]
+fn an_old_format_manifest_line_falls_back_to_reporting_its_live_extent_as_first_seen() {
+    // Simulates a partition created before first_seen_* existed: a raw
+    // manifest line with no first_seen_* keys at all, written directly to the
+    // file, bypassing write_sourced_candles/append_partition_key entirely.
+    let dir = tempdir().unwrap();
+    let store = CandleStore::open(dir.path()).unwrap();
+    store
+        .write_sourced_candles("NSE:INFY", "day", "bhavcopy", &[
+            Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 },
+        ])
+        .unwrap();
+
+    let manifest_path = dir.path().join("lake_manifest.jsonl");
+    let old_format_line = serde_json::json!({
+        "symbol": "NSE:INFY",
+        "timeframe": "day",
+        "source": "bhavcopy",
+        "from_ts": 9_000,
+        "to_ts": 9_500,
+        "candle_count": 42,
+    });
+    std::fs::write(&manifest_path, format!("{old_format_line}\n")).unwrap();
+
+    let entries = store.list_symbols().unwrap();
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].from_ts, 9_000);
+    assert_eq!(entries[0].to_ts, 9_500);
+    assert_eq!(entries[0].candle_count, 42);
+    assert_eq!(entries[0].first_seen_from_ts, 9_000, "no recorded first-seen extent -- must fall back to the live extent");
+    assert_eq!(entries[0].first_seen_to_ts, 9_500, "no recorded first-seen extent -- must fall back to the live extent");
+    assert_eq!(entries[0].first_seen_candle_count, 42, "no recorded first-seen extent -- must fall back to the live extent");
+}
+
+#[test]
 fn re_ingesting_the_same_partition_does_not_duplicate_its_manifest_entry() {
     let dir = tempdir().unwrap();
     let store = CandleStore::open(dir.path()).unwrap();

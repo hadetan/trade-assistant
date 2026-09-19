@@ -7,7 +7,7 @@ use std::ffi::OsStr;
 use std::path::PathBuf;
 use storage::CandleStore;
 
-const USAGE: &str = "usage: replay --lake <dir> --symbol <sym> --timeframe <day|minute|5minute|15minute> \
+const USAGE: &str = "usage: replay --lake <dir> --symbol <sym> --timeframe <day|minute|5minute|10minute|15minute> \
 --source <src> --horizon <n> [--ingest-dir <dir>]";
 
 fn arg(map: &HashMap<String, String>, key: &str) -> Result<String, Box<dyn Error>> {
@@ -32,10 +32,11 @@ fn parse_timeframe(s: &str) -> Result<Timeframe, Box<dyn Error>> {
     match s {
         "minute" => Ok(Timeframe::Minute),
         "5minute" => Ok(Timeframe::FiveMinute),
+        "10minute" => Ok(Timeframe::TenMinute),
         "15minute" => Ok(Timeframe::FifteenMinute),
         "day" => Ok(Timeframe::Day),
         other => {
-            Err(format!("unrecognized --timeframe '{other}' (valid: day, minute, 5minute, 15minute)").into())
+            Err(format!("unrecognized --timeframe '{other}' (valid: day, minute, 5minute, 10minute, 15minute)").into())
         }
     }
 }
@@ -110,7 +111,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_symbol;
+    use super::{parse_symbol, parse_timeframe};
+    use algo_core::Timeframe;
 
     #[test]
     fn accepts_exchange_and_ticker() {
@@ -122,5 +124,19 @@ mod tests {
         for bad in ["INFY", ":INFY", "NSE:", ":", ""] {
             assert!(parse_symbol(bad).is_err(), "{bad:?} should be rejected");
         }
+    }
+
+    #[test]
+    fn accepts_10minute_alongside_every_other_supported_timeframe() {
+        assert!(matches!(parse_timeframe("10minute"), Ok(Timeframe::TenMinute)));
+        assert!(matches!(parse_timeframe("minute"), Ok(Timeframe::Minute)));
+        assert!(matches!(parse_timeframe("5minute"), Ok(Timeframe::FiveMinute)));
+        assert!(matches!(parse_timeframe("15minute"), Ok(Timeframe::FifteenMinute)));
+        assert!(matches!(parse_timeframe("day"), Ok(Timeframe::Day)));
+    }
+
+    #[test]
+    fn rejects_an_unrecognized_timeframe() {
+        assert!(parse_timeframe("30minute").is_err());
     }
 }

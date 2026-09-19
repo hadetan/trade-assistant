@@ -30,7 +30,7 @@ fn compiled_binary_computes_algorithms_over_stdin_stdout() {
         .spawn()
         .expect("sidecar binary must start");
 
-    let request = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0,103.0,104.0,105.0,106.0,107.0,108.0,109.0,110.0,111.0,112.0,113.0,114.0,115.0,116.0,117.0,118.0,119.0,120.0]}"#;
+    let request = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":10},{"ts":200,"open":101.0,"high":101.0,"low":101.0,"close":101.0,"volume":10},{"ts":300,"open":102.0,"high":102.0,"low":102.0,"close":102.0,"volume":10},{"ts":400,"open":103.0,"high":103.0,"low":103.0,"close":103.0,"volume":10},{"ts":500,"open":104.0,"high":104.0,"low":104.0,"close":104.0,"volume":10},{"ts":600,"open":105.0,"high":105.0,"low":105.0,"close":105.0,"volume":10},{"ts":700,"open":106.0,"high":106.0,"low":106.0,"close":106.0,"volume":10},{"ts":800,"open":107.0,"high":107.0,"low":107.0,"close":107.0,"volume":10},{"ts":900,"open":108.0,"high":108.0,"low":108.0,"close":108.0,"volume":10},{"ts":1000,"open":109.0,"high":109.0,"low":109.0,"close":109.0,"volume":10},{"ts":1100,"open":110.0,"high":110.0,"low":110.0,"close":110.0,"volume":10},{"ts":1200,"open":111.0,"high":111.0,"low":111.0,"close":111.0,"volume":10},{"ts":1300,"open":112.0,"high":112.0,"low":112.0,"close":112.0,"volume":10},{"ts":1400,"open":113.0,"high":113.0,"low":113.0,"close":113.0,"volume":10},{"ts":1500,"open":114.0,"high":114.0,"low":114.0,"close":114.0,"volume":10},{"ts":1600,"open":115.0,"high":115.0,"low":115.0,"close":115.0,"volume":10},{"ts":1700,"open":116.0,"high":116.0,"low":116.0,"close":116.0,"volume":10},{"ts":1800,"open":117.0,"high":117.0,"low":117.0,"close":117.0,"volume":10},{"ts":1900,"open":118.0,"high":118.0,"low":118.0,"close":118.0,"volume":10},{"ts":2000,"open":119.0,"high":119.0,"low":119.0,"close":119.0,"volume":10},{"ts":2100,"open":120.0,"high":120.0,"low":120.0,"close":120.0,"volume":10}]}"#;
 
     {
         let stdin = child.stdin.as_mut().unwrap();
@@ -68,13 +68,13 @@ fn a_thin_history_request_between_two_valid_ones_does_not_kill_the_sidecar() {
         .spawn()
         .expect("sidecar binary must start");
 
-    let valid_request = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0,103.0,104.0,105.0,106.0,107.0,108.0,109.0,110.0,111.0,112.0,113.0,114.0,115.0,116.0,117.0,118.0,119.0,120.0]}"#;
-    // Only 3 closes: shorter than rsi (15) and sma/ema (20)'s
+    let valid_request = r#"{"type":"compute","id":1,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":10},{"ts":200,"open":101.0,"high":101.0,"low":101.0,"close":101.0,"volume":10},{"ts":300,"open":102.0,"high":102.0,"low":102.0,"close":102.0,"volume":10},{"ts":400,"open":103.0,"high":103.0,"low":103.0,"close":103.0,"volume":10},{"ts":500,"open":104.0,"high":104.0,"low":104.0,"close":104.0,"volume":10},{"ts":600,"open":105.0,"high":105.0,"low":105.0,"close":105.0,"volume":10},{"ts":700,"open":106.0,"high":106.0,"low":106.0,"close":106.0,"volume":10},{"ts":800,"open":107.0,"high":107.0,"low":107.0,"close":107.0,"volume":10},{"ts":900,"open":108.0,"high":108.0,"low":108.0,"close":108.0,"volume":10},{"ts":1000,"open":109.0,"high":109.0,"low":109.0,"close":109.0,"volume":10},{"ts":1100,"open":110.0,"high":110.0,"low":110.0,"close":110.0,"volume":10},{"ts":1200,"open":111.0,"high":111.0,"low":111.0,"close":111.0,"volume":10},{"ts":1300,"open":112.0,"high":112.0,"low":112.0,"close":112.0,"volume":10},{"ts":1400,"open":113.0,"high":113.0,"low":113.0,"close":113.0,"volume":10},{"ts":1500,"open":114.0,"high":114.0,"low":114.0,"close":114.0,"volume":10},{"ts":1600,"open":115.0,"high":115.0,"low":115.0,"close":115.0,"volume":10},{"ts":1700,"open":116.0,"high":116.0,"low":116.0,"close":116.0,"volume":10},{"ts":1800,"open":117.0,"high":117.0,"low":117.0,"close":117.0,"volume":10},{"ts":1900,"open":118.0,"high":118.0,"low":118.0,"close":118.0,"volume":10},{"ts":2000,"open":119.0,"high":119.0,"low":119.0,"close":119.0,"volume":10},{"ts":2100,"open":120.0,"high":120.0,"low":120.0,"close":120.0,"volume":10}]}"#;
+    // Only 3 candles: shorter than rsi (15) and sma/ema (20)'s
     // required_lookback, though not every catalog algorithm -- a handful of
     // OHLCV-derived algorithms declare required_lookback <= 3.
     let too_few_closes_request =
-        r#"{"type":"compute","id":2,"symbol":"NSE:NEWLISTING","timeframe":"day","closes":[100.0,101.0,102.0]}"#;
-    let valid_request_2 = r#"{"type":"compute","id":3,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0,103.0,104.0,105.0,106.0,107.0,108.0,109.0,110.0,111.0,112.0,113.0,114.0,115.0,116.0,117.0,118.0,119.0,120.0]}"#;
+        r#"{"type":"compute","id":2,"symbol":"NSE:NEWLISTING","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":10},{"ts":200,"open":101.0,"high":101.0,"low":101.0,"close":101.0,"volume":10},{"ts":300,"open":102.0,"high":102.0,"low":102.0,"close":102.0,"volume":10}]}"#;
+    let valid_request_2 = r#"{"type":"compute","id":3,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":10},{"ts":200,"open":101.0,"high":101.0,"low":101.0,"close":101.0,"volume":10},{"ts":300,"open":102.0,"high":102.0,"low":102.0,"close":102.0,"volume":10},{"ts":400,"open":103.0,"high":103.0,"low":103.0,"close":103.0,"volume":10},{"ts":500,"open":104.0,"high":104.0,"low":104.0,"close":104.0,"volume":10},{"ts":600,"open":105.0,"high":105.0,"low":105.0,"close":105.0,"volume":10},{"ts":700,"open":106.0,"high":106.0,"low":106.0,"close":106.0,"volume":10},{"ts":800,"open":107.0,"high":107.0,"low":107.0,"close":107.0,"volume":10},{"ts":900,"open":108.0,"high":108.0,"low":108.0,"close":108.0,"volume":10},{"ts":1000,"open":109.0,"high":109.0,"low":109.0,"close":109.0,"volume":10},{"ts":1100,"open":110.0,"high":110.0,"low":110.0,"close":110.0,"volume":10},{"ts":1200,"open":111.0,"high":111.0,"low":111.0,"close":111.0,"volume":10},{"ts":1300,"open":112.0,"high":112.0,"low":112.0,"close":112.0,"volume":10},{"ts":1400,"open":113.0,"high":113.0,"low":113.0,"close":113.0,"volume":10},{"ts":1500,"open":114.0,"high":114.0,"low":114.0,"close":114.0,"volume":10},{"ts":1600,"open":115.0,"high":115.0,"low":115.0,"close":115.0,"volume":10},{"ts":1700,"open":116.0,"high":116.0,"low":116.0,"close":116.0,"volume":10},{"ts":1800,"open":117.0,"high":117.0,"low":117.0,"close":117.0,"volume":10},{"ts":1900,"open":118.0,"high":118.0,"low":118.0,"close":118.0,"volume":10},{"ts":2000,"open":119.0,"high":119.0,"low":119.0,"close":119.0,"volume":10},{"ts":2100,"open":120.0,"high":120.0,"low":120.0,"close":120.0,"volume":10}]}"#;
 
     {
         let stdin = child.stdin.as_mut().unwrap();
@@ -107,17 +107,18 @@ fn a_thin_history_request_between_two_valid_ones_does_not_kill_the_sidecar() {
 
     assert_eq!(responses[1]["id"], 2);
     // 18 of the 34 default-catalog algorithms declare required_lookback <= 3
-    // and still run (well-formed response either way, not a panic). Most
-    // need OHLC/volume/peer/chain context this closes-only request doesn't
-    // supply and no-op to Neutral, except ou_half_life: with no peer leg it
-    // falls back to single-instrument mean reversion on closes itself
-    // (see ou_half_life.rs's `spread_series`), and this rising 3-bar series
-    // has a z-score > 1, i.e. Bearish.
+    // and still run (well-formed response either way, not a panic). Since P13§5
+    // this is a full OHLCV context_at window, not closes-only from_closes, so
+    // OHLC/volume-reading algorithms (vwap, obv, donchian, volume_profile, mfi)
+    // now produce real directional signals instead of no-op-ing to Neutral on
+    // missing series; the options/OI/higher-timeframe/peer overlays still have
+    // no context to read here and stay Neutral.
     assert_eq!(responses[1]["algo_results"].as_array().unwrap().len(), 18);
-    assert_eq!(responses[1]["confluence"]["bullish_count"], 0);
-    assert_eq!(responses[1]["confluence"]["bearish_count"], 1);
+    assert_eq!(responses[1]["confluence"]["bullish_count"], 3);
+    assert_eq!(responses[1]["confluence"]["bearish_count"], 3);
+    assert_eq!(responses[1]["confluence"]["neutral_count"], 12);
     let weighted_vote = responses[1]["confluence"]["weighted_vote"].as_f64().unwrap();
-    assert!((weighted_vote - (-1.0 / 18.0)).abs() < 1e-9);
+    assert!(weighted_vote.abs() < 1e-9);
 
     assert_eq!(responses[2]["id"], 3);
     assert_eq!(responses[2]["algo_results"].as_array().unwrap().len(), 30);
@@ -166,7 +167,7 @@ fn watchlist_and_scan_gate_flow_over_stdin_stdout_with_a_lake_root() {
 
     let add = r#"{"type":"add_watchlist_symbol","id":1,"symbol":"NSE:INFY"}"#;
     let list = r#"{"type":"list_watchlist","id":2}"#;
-    let compute = r#"{"type":"compute","id":3,"symbol":"NSE:INFY","timeframe":"day","closes":[100.0,101.0,102.0,103.0,104.0,105.0,106.0,107.0,108.0,109.0,110.0,111.0,112.0,113.0,114.0,115.0,116.0,117.0,118.0,119.0,120.0]}"#;
+    let compute = r#"{"type":"compute","id":3,"symbol":"NSE:INFY","timeframe":"day","horizon":"positional","candles":[{"ts":100,"open":100.0,"high":100.0,"low":100.0,"close":100.0,"volume":10},{"ts":200,"open":101.0,"high":101.0,"low":101.0,"close":101.0,"volume":10},{"ts":300,"open":102.0,"high":102.0,"low":102.0,"close":102.0,"volume":10},{"ts":400,"open":103.0,"high":103.0,"low":103.0,"close":103.0,"volume":10},{"ts":500,"open":104.0,"high":104.0,"low":104.0,"close":104.0,"volume":10},{"ts":600,"open":105.0,"high":105.0,"low":105.0,"close":105.0,"volume":10},{"ts":700,"open":106.0,"high":106.0,"low":106.0,"close":106.0,"volume":10},{"ts":800,"open":107.0,"high":107.0,"low":107.0,"close":107.0,"volume":10},{"ts":900,"open":108.0,"high":108.0,"low":108.0,"close":108.0,"volume":10},{"ts":1000,"open":109.0,"high":109.0,"low":109.0,"close":109.0,"volume":10},{"ts":1100,"open":110.0,"high":110.0,"low":110.0,"close":110.0,"volume":10},{"ts":1200,"open":111.0,"high":111.0,"low":111.0,"close":111.0,"volume":10},{"ts":1300,"open":112.0,"high":112.0,"low":112.0,"close":112.0,"volume":10},{"ts":1400,"open":113.0,"high":113.0,"low":113.0,"close":113.0,"volume":10},{"ts":1500,"open":114.0,"high":114.0,"low":114.0,"close":114.0,"volume":10},{"ts":1600,"open":115.0,"high":115.0,"low":115.0,"close":115.0,"volume":10},{"ts":1700,"open":116.0,"high":116.0,"low":116.0,"close":116.0,"volume":10},{"ts":1800,"open":117.0,"high":117.0,"low":117.0,"close":117.0,"volume":10},{"ts":1900,"open":118.0,"high":118.0,"low":118.0,"close":118.0,"volume":10},{"ts":2000,"open":119.0,"high":119.0,"low":119.0,"close":119.0,"volume":10},{"ts":2100,"open":120.0,"high":120.0,"low":120.0,"close":120.0,"volume":10}]}"#;
     let gate = r#"{"type":"evaluate_scan_gate","id":4,"symbol":"NSE:INFY","confluence":{"bullish_count":8,"bearish_count":1,"neutral_count":2,"weighted_vote":0.5}}"#;
 
     {
@@ -486,4 +487,45 @@ fn list_algorithms_answers_even_with_no_lake_root() {
     let algorithms = response["algorithms"].as_array().unwrap();
     assert!(!algorithms.is_empty());
     assert!(algorithms.iter().all(|a| a["cost"] == "fast" || a["cost"] == "slow"));
+    assert!(algorithms.iter().all(|a| a["required_lookback"].is_u64()));
+}
+
+#[test]
+fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
+    // An algo id no registry knows needs zero bars, so the handler returns
+    // before it can ever reach walk_trading_days_backward -- which makes this a
+    // pure wiring smoke test for the new request/response pair.
+    let dir = tempfile::tempdir().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
+        .arg("--lake-root")
+        .arg(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("sidecar binary must start");
+
+    // 2024-01-15 00:00 UTC: the START of the selected calendar day, which is
+    // exactly what the Electron mirror sends (BenchmarkView.tsx builds it as
+    // `Date("YYYY-MM-DDT00:00:00Z")`). The day's own candle is stamped ten hours
+    // later at 15:30 IST, so the handler's partition runs [from_ts,
+    // from_ts + 86400) for this day-only source.
+    let request = r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__","lookahead":0,"from_ts":1705276800}"#;
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "{request}").unwrap();
+    }
+    drop(child.stdin.take());
+
+    let stdout = child.stdout.take().unwrap();
+    let mut reader = BufReader::new(stdout);
+    let response = read_next_response(&mut reader);
+    child.wait().ok();
+
+    assert_eq!(response["type"], "day_backfill");
+    assert_eq!(response["id"], 1);
+    assert_eq!(response["need"], 0);
+    assert_eq!(response["have"], 0);
+    assert_eq!(response["sufficient"], true);
+    assert_eq!(response["archive_exhausted"], false);
+    assert!(response.get("error").is_none(), "a clean answer must omit error entirely");
 }

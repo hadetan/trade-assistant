@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../src/renderer/benchmarkChart", () => ({ createBenchmarkChart: vi.fn(() => ({ dispose: vi.fn() })) }));
 
 import { BenchmarkView } from "../../src/renderer/BenchmarkView";
-import type { AlgorithmEntry, BenchmarkResult, LakeSymbolEntry, RendererApi } from "../../src/main/ipc/rendererApi";
+import type { AlgorithmEntry, BenchmarkProgress, BenchmarkResult, LakeSymbolEntry, RendererApi } from "../../src/main/ipc/rendererApi";
 
 afterEach(cleanup);
 
@@ -16,12 +16,32 @@ const DAY_ENTRY: LakeSymbolEntry = {
   fromTs: 1_690_000_000,
   toTs: 1_710_000_000,
   candleCount: 240,
+  firstSeenFromTs: 1_690_000_000,
+  firstSeenToTs: 1_710_000_000,
+  firstSeenCandleCount: 240,
+  horizon: "positional",
+};
+
+// A backfilled entry: live fromTs/toTs/candleCount have moved far beyond what
+// the user originally saw. Any test using this fixture would fail if the
+// picker's display or the default-date seeding were wired to the live fields
+// instead of the first_seen_* ones.
+const BACKFILLED_ENTRY: LakeSymbolEntry = {
+  symbol: "NSE:20MICRONS",
+  timeframe: "day",
+  source: "bhavcopy",
+  fromTs: 1_670_000_000,
+  toTs: 1_710_000_000,
+  candleCount: 88,
+  firstSeenFromTs: 1_705_000_000,
+  firstSeenToTs: 1_705_800_000,
+  firstSeenCandleCount: 8,
   horizon: "positional",
 };
 
 const ALGORITHMS: AlgorithmEntry[] = [
-  { id: "sma", cost: "fast" },
-  { id: "kronos", cost: "slow" },
+  { id: "sma", cost: "fast", requiredLookback: 20 },
+  { id: "kronos", cost: "slow", requiredLookback: 256 },
 ];
 
 function api(
@@ -76,6 +96,23 @@ describe("BenchmarkView", () => {
     expect(option.textContent).toMatch(/day/);
     expect(option.textContent).toMatch(/positional/);
     expect(option.textContent).toMatch(/240/);
+  });
+
+  it("displays the picker list's first-seen extent, not the live backfilled extent", async () => {
+    render(<BenchmarkView api={api({ listLakeSymbols: vi.fn().mockResolvedValue([BACKFILLED_ENTRY]) })} />);
+    const option = await screen.findByRole("button", { name: /NSE:20MICRONS/ });
+    expect(option.textContent).toContain("8 bars");
+    expect(option.textContent).not.toContain("88 bars");
+    expect(option.textContent).toContain(new Date(BACKFILLED_ENTRY.firstSeenFromTs * 1000).toISOString().slice(0, 10));
+    expect(option.textContent).not.toContain(new Date(BACKFILLED_ENTRY.fromTs * 1000).toISOString().slice(0, 10));
+  });
+
+  it("seeds the default benchmark date from the first-seen extent, not the live backfilled extent, on selection", async () => {
+    render(<BenchmarkView api={api({ listLakeSymbols: vi.fn().mockResolvedValue([BACKFILLED_ENTRY]) })} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:20MICRONS/ }));
+    const date = (await screen.findByLabelText(/^date$/i)) as HTMLInputElement;
+    expect(date.value).toBe(new Date(BACKFILLED_ENTRY.firstSeenFromTs * 1000).toISOString().slice(0, 10));
+    expect(date.value).not.toBe(new Date(BACKFILLED_ENTRY.fromTs * 1000).toISOString().slice(0, 10));
   });
 
   it("renders the algorithm picker tagged fast/slow and tags a forecaster as an ML forecaster", async () => {
@@ -140,6 +177,22 @@ describe("BenchmarkView", () => {
     expect(await screen.findByText(/0 decision points/i)).toBeTruthy();
   });
 
+  it("auto-opens the first decision point's explanation instead of hiding it behind an undiscoverable click", async () => {
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith(["neutral"])) });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    expect(await screen.findByText(/bullish \(medium conviction\) — neutral/i)).toBeTruthy();
+  });
+
+  it("hints that other markers on the chart can be clicked for their own explanation", async () => {
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith(["neutral", "correct"])) });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    expect(await screen.findByText(/click a marker/i)).toBeTruthy();
+  });
+
   it("renders a Cancelled banner in place of an error when the result is cancelled", async () => {
     const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith([], true)) });
     render(<BenchmarkView api={deps} />);
@@ -169,12 +222,30 @@ describe("BenchmarkView", () => {
     expect(screen.getByRole("status")).toBeTruthy();
   });
 
+  it("marks the clicked lake entry as selected so a click is never visually silent", async () => {
+    render(<BenchmarkView api={api()} />);
+    const option = await screen.findByRole("button", { name: /NSE:INFY/ });
+    expect(option).toHaveProperty("ariaPressed", "false");
+    fireEvent.click(option);
+    expect(option).toHaveProperty("ariaPressed", "true");
+  });
+
+  it("shows an error instead of hanging on the spinner forever when the initial lake fetch rejects", async () => {
+    render(<BenchmarkView api={api({ listLakeSymbols: vi.fn().mockRejectedValue(new Error("sidecar unreachable")) })} />);
+    expect(await screen.findByText(/sidecar unreachable/i)).toBeTruthy();
+  });
+
+  it("shows an error instead of hanging on the spinner forever when the initial algorithm fetch rejects", async () => {
+    render(<BenchmarkView api={api({ listAlgorithms: vi.fn().mockRejectedValue(new Error("sidecar unreachable")) })} />);
+    expect(await screen.findByText(/sidecar unreachable/i)).toBeTruthy();
+  });
+
   it("shows a fixed progress pill reflecting onBenchmarkProgress updates while running", async () => {
-    let progressHandler: ((p: { index: number; total: number }) => void) | undefined;
+    let progressHandler: ((p: BenchmarkProgress) => void) | undefined;
     const runBenchmark = vi.fn(() => new Promise<BenchmarkResult>(() => {})); // never resolves -- keeps `running` true
     const deps = api({
       runBenchmark,
-      onBenchmarkProgress: vi.fn((handler: (p: { index: number; total: number }) => void) => {
+      onBenchmarkProgress: vi.fn((handler: (p: BenchmarkProgress) => void) => {
         progressHandler = handler;
       }),
     });
@@ -182,7 +253,7 @@ describe("BenchmarkView", () => {
     await selectEntryAndAlgo();
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
     await waitFor(() => expect(runBenchmark).toHaveBeenCalledTimes(1));
-    progressHandler?.({ index: 3, total: 10 });
+    progressHandler?.({ phase: "run", index: 3, total: 10 });
     expect(await screen.findByText(/bar 3\/10/i)).toBeTruthy();
   });
 
@@ -195,5 +266,101 @@ describe("BenchmarkView", () => {
     await waitFor(() => expect(runBenchmark).toHaveBeenCalledTimes(1));
     fireEvent.click(await screen.findByRole("button", { name: /^stop$/i }));
     expect(deps.cancelBenchmark).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels the progress pill by phase, so a long first-time backfill does not read as a stalled bar count", async () => {
+    let progressHandler: ((p: BenchmarkProgress) => void) | undefined;
+    const runBenchmark = vi.fn(() => new Promise<BenchmarkResult>(() => {})); // never resolves -- keeps `running` true
+    const deps = api({
+      runBenchmark,
+      onBenchmarkProgress: vi.fn((handler: (p: BenchmarkProgress) => void) => {
+        progressHandler = handler;
+      }),
+    });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(runBenchmark).toHaveBeenCalledTimes(1));
+
+    progressHandler?.({ phase: "backfill", index: 143, total: 256 });
+    expect(await screen.findByText(/backfilling history — 143\/256 days/i)).toBeTruthy();
+
+    progressHandler?.({ phase: "run", index: 3, total: 8 });
+    expect(await screen.findByText(/bar 3\/8/i)).toBeTruthy();
+    expect(screen.queryByText(/backfilling history/i)).toBeNull();
+  });
+
+  it("renders one insufficient-history banner in place of the summary strip and chart", async () => {
+    // The exact incident this phase exists for: a thin symbol used to come back
+    // as an empty `algos:` list with zeroed confluence and no explanation.
+    const insufficient: BenchmarkResult = {
+      params: {
+        symbol: "NSE:ZYDUSWELL",
+        timeframe: "day",
+        source: "bhavcopy",
+        horizon: "positional",
+        algoId: "kronos",
+        lookaheadBars: 5,
+        fromTs: 0,
+        toTs: 0,
+      },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 8, need: 256, reason: "symbol_history" },
+    };
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(insufficient) });
+    const { container } = render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+
+    await waitFor(() =>
+      expect(container.textContent).toContain(
+        "NSE:ZYDUSWELL has 8 of the 256 days this run needs around the selected day",
+      ),
+    );
+    // Actionable, and silent about the archive: this same banner is shown for a
+    // trailing-side shortfall, which is answered with ZERO fetches, so it must
+    // not imply the archive was explored and came up empty.
+    expect(container.textContent).toContain("Try an earlier date");
+    expect(container.textContent).not.toMatch(/archive/i);
+    // The confusing empty result is gone, not merely accompanied by a banner.
+    expect(screen.queryByText(/0 decision points/i)).toBeNull();
+    expect(screen.queryByText(/copy raw result/i)).toBeNull();
+  });
+
+  it("says the archive could not be reached, not that the symbol is young, when the walk hit the closed-day cap", async () => {
+    // Same shortfall shape, different cause: the walker cannot see past a
+    // silent archive, so the banner must not assert anything about the symbol.
+    const unreachable: BenchmarkResult = {
+      params: {
+        symbol: "NSE:ZYDUSWELL",
+        timeframe: "day",
+        source: "bhavcopy",
+        horizon: "positional",
+        algoId: "kronos",
+        lookaheadBars: 5,
+        fromTs: 0,
+        toTs: 0,
+      },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 41, need: 256, reason: "archive_unreachable" },
+    };
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(unreachable) });
+    const { container } = render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+
+    await waitFor(() => expect(container.textContent).toMatch(/could not reach far enough back into the NSE archive/i));
+    expect(container.textContent).toContain("41");
+    expect(container.textContent).toContain("256");
+    // The two banners must stay lexically distinguishable: this one names the
+    // archive and never offers the symbol_history remedy, which would be
+    // misleading advice when the walk simply could not see far enough back.
+    expect(container.textContent).not.toContain("Try an earlier date");
+    expect(container.textContent).not.toContain("days this run needs around the selected day");
+    expect(screen.queryByText(/copy raw result/i)).toBeNull();
   });
 });

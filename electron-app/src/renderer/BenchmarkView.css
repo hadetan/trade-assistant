@@ -36,6 +36,12 @@
   background: var(--bg-subtle);
 }
 
+.benchmark-picker-item-selected {
+  background: var(--bg-subtle);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .benchmark-setup {
   display: flex;
   flex-direction: column;
@@ -80,6 +86,12 @@
 
 .benchmark-chart {
   height: 360px;
+}
+
+.benchmark-chart-hint {
+  margin: 0;
+  font-size: var(--text-sm);
+  opacity: 0.8;
 }
 
 .benchmark-popover {

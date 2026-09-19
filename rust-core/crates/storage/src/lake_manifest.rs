@@ -13,6 +13,17 @@ pub struct LakePartitionKey {
     pub from_ts: i64,
     pub to_ts: i64,
     pub candle_count: usize,
+    // Recorded once, on the write that first creates this (symbol, timeframe,
+    // source) partition, and never overwritten afterward. `Option` (not a bare
+    // value) so a manifest line written before this field existed deserializes
+    // as `None` -- unambiguously "unknown", distinguishable from "recorded as
+    // zero".
+    #[serde(default)]
+    pub first_seen_from_ts: Option<i64>,
+    #[serde(default)]
+    pub first_seen_to_ts: Option<i64>,
+    #[serde(default)]
+    pub first_seen_candle_count: Option<usize>,
 }
 
 fn manifest_path(root: &Path) -> PathBuf {
@@ -70,6 +81,9 @@ mod tests {
                 from_ts: 100,
                 to_ts: 200,
                 candle_count: 5,
+                first_seen_from_ts: Some(100),
+                first_seen_to_ts: Some(200),
+                first_seen_candle_count: Some(5),
             },
         )
         .unwrap();
@@ -82,6 +96,9 @@ mod tests {
                 from_ts: 100,
                 to_ts: 300,
                 candle_count: 8,
+                first_seen_from_ts: Some(100),
+                first_seen_to_ts: Some(200),
+                first_seen_candle_count: Some(5),
             },
         )
         .unwrap();
@@ -91,5 +108,28 @@ mod tests {
         assert_eq!(keys.len(), 1, "duplicate (symbol, timeframe, source) must fold to one entry");
         assert_eq!(keys[0].to_ts, 300, "last write's bounds must win");
         assert_eq!(keys[0].candle_count, 8, "last write's candle_count must win");
+        assert_eq!(keys[0].first_seen_to_ts, Some(200), "first_seen_* must carry forward from the last line, not recompute");
+    }
+
+    #[test]
+    fn an_old_format_line_with_no_first_seen_keys_deserializes_them_as_none() {
+        let dir = tempdir().unwrap();
+        let path = manifest_path(dir.path());
+        let old_format_line = serde_json::json!({
+            "symbol": "NSE:INFY",
+            "timeframe": "day",
+            "source": "bhavcopy",
+            "from_ts": 100,
+            "to_ts": 200,
+            "candle_count": 5,
+        });
+        std::fs::write(&path, format!("{old_format_line}\n")).unwrap();
+
+        let keys = read_partition_keys(dir.path()).unwrap();
+
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].first_seen_from_ts, None, "a pre-migration line has no recorded first-seen extent");
+        assert_eq!(keys[0].first_seen_to_ts, None);
+        assert_eq!(keys[0].first_seen_candle_count, None);
     }
 }

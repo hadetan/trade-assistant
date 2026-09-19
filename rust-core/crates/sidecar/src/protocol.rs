@@ -5,7 +5,10 @@ pub struct ComputeRequest {
     pub id: u64,
     pub symbol: String,
     pub timeframe: String,
-    pub closes: Vec<f64>,
+    /// "intraday" | "positional".
+    pub horizon: String,
+    /// Full OHLCV, ascending by ts; the last element is the frontier bar.
+    pub candles: Vec<CandleWire>,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,11 +166,76 @@ pub struct ListAlgorithmsRequest {
     pub id: u64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct EnsureDayBackfillRequest {
+    pub id: u64,
+    pub symbol: String,
+    /// Sizing is per the single selected algorithm, not a max across all of
+    /// them: the Benchmark UI already requires picking exactly one (P14§2
+    /// locked decision 2).
+    pub algo_id: String,
+    /// The scoring window of the run asking for the backfill (its
+    /// `lookaheadBars`). Sizing needs it because a frontier is only usable when
+    /// a real bar exists `lookahead` bars after it, so the algorithm's own
+    /// lookback alone never leaves room to score anything.
+    pub lookahead: usize,
+    /// START of the single day the run will actually test (its `fromTs`): UTC
+    /// midnight of the selected calendar day, Unix epoch seconds, exactly as
+    /// BenchmarkView.tsx builds it. NOT that day's candle stamp -- a bhavcopy
+    /// day candle carries `ist_session_close_epoch` (15:30 IST = 10:00 UTC), so
+    /// the selection's own bar sits 36000s AFTER this value. Since this source
+    /// is day-only, the selected partition is implicitly
+    /// `[from_ts, from_ts + 86_400)`, and that upper edge -- not `from_ts` --
+    /// is where `day_backfill` splits leading from trailing context.
+    ///
+    /// Sizing is meaningless without it: the Benchmark UI tests exactly one
+    /// candle per run, so what matters is that *that* candle has enough bars
+    /// before and after it, not that the partition is deep in total.
+    pub from_ts: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DayBackfillResponse {
+    pub id: u64,
+    /// Of the `need` bars this run wants, how many it can actually use:
+    /// `min(leading, lookback) + min(trailing, lookahead)`, split at the END of
+    /// the selected day (`from_ts + 86_400`) so the selection's own bar counts
+    /// as leading context and not as something to score against. Zero when the
+    /// symbol has no candle on the selected day at all -- there is no bar to
+    /// decide about, which is a different shortfall from a thin one.
+    /// Capped on each side deliberately, so `sufficient: false` always
+    /// implies `have < need` whichever side is short -- reporting a raw row
+    /// count let an insufficient answer render as "has 22 days; needs 20",
+    /// which reads as a contradiction. The cap can undersell a deep symbol
+    /// whose *trailing* side is the blocker; see `day_backfill`.
+    pub have: usize,
+    /// The total bars this run needs before it can produce even one result: the
+    /// algorithm's own required_lookback plus the run's lookahead scoring
+    /// window.
+    pub need: usize,
+    /// false => `have` is the symbol's full available real history, capped by
+    /// the "10 consecutive absent trading days" heuristic (P14§2 item 4) --
+    /// UNLESS `archive_exhausted` is set, in which case `have` is only what the
+    /// walk managed to collect before the archive went quiet.
+    pub sufficient: bool,
+    /// The walk stopped because CLOSED_DAY_LIMIT weekdays in a row had no file
+    /// at all. Always serialized (like `sufficient`) rather than skipped when
+    /// false: this is a third outcome, and a consumer must never have to infer
+    /// it from an absent key (decision (xviii)).
+    pub archive_exhausted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AlgorithmWire {
     pub id: String,
     /// "fast" | "slow" -- see handlers::handle_list_algorithms for the split.
     pub cost: String,
+    /// The algorithm's own Algorithm::required_lookback(). The Electron side
+    /// sizes its warm-up backfill against the maximum of these (P13§4.2), so a
+    /// newly linked model widens the fetch window without a code change here.
+    pub required_lookback: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -184,6 +252,9 @@ pub struct LakeSymbolWire {
     pub from_ts: i64,
     pub to_ts: i64,
     pub candle_count: usize,
+    pub first_seen_from_ts: i64,
+    pub first_seen_to_ts: i64,
+    pub first_seen_candle_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -239,6 +310,7 @@ pub enum SidecarRequest {
     BenchmarkCompute(BenchmarkComputeRequest),
     EvaluateScanGateStateless(EvaluateScanGateStatelessRequest),
     ListAlgorithms(ListAlgorithmsRequest),
+    EnsureDayBackfill(EnsureDayBackfillRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -252,6 +324,7 @@ pub enum SidecarResponse {
     LakeCandles(LakeCandlesResponse),
     BenchmarkCompute(BenchmarkComputeResponse),
     Algorithms(ListAlgorithmsResponse),
+    DayBackfill(DayBackfillResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {
@@ -268,6 +341,13 @@ pub struct ProgressLine {
     pub id: u64,
     pub step: String,
     pub status: String,
+    /// Present only for a step that can say "N of M" -- today just the day
+    /// backfill walk. Skipped when absent so every pre-existing progress line
+    /// is byte-for-byte what it was before (P14§5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
 }
 
 pub fn encode_progress(id: u64, step: &str, status: &str) -> String {
@@ -276,6 +356,20 @@ pub fn encode_progress(id: u64, step: &str, status: &str) -> String {
         id,
         step: step.to_string(),
         status: status.to_string(),
+        index: None,
+        total: None,
+    })
+    .expect("ProgressLine always serializes")
+}
+
+pub fn encode_progress_counted(id: u64, step: &str, status: &str, index: usize, total: usize) -> String {
+    serde_json::to_string(&ProgressLine {
+        r#type: "progress",
+        id,
+        step: step.to_string(),
+        status: status.to_string(),
+        index: Some(index),
+        total: Some(total),
     })
     .expect("ProgressLine always serializes")
 }
@@ -294,12 +388,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_tagged_compute_request() {
-        let line = r#"{"type":"compute","id":5,"symbol":"NSE:INFY","timeframe":"day","closes":[1.0,2.0]}"#;
+    fn parses_a_tagged_compute_request_carrying_full_ohlcv_and_a_horizon() {
+        let line = r#"{"type":"compute","id":5,"symbol":"NSE:INFY","timeframe":"5minute","horizon":"intraday","candles":[{"ts":100,"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":10}]}"#;
         match parse_request(line).unwrap() {
             SidecarRequest::Compute(request) => {
                 assert_eq!(request.id, 5);
-                assert_eq!(request.closes, vec![1.0, 2.0]);
+                assert_eq!(request.horizon, "intraday");
+                assert_eq!(request.candles.len(), 1);
+                assert_eq!(request.candles[0].volume, 10);
             }
             _ => panic!("expected a compute request"),
         }
@@ -342,5 +438,37 @@ mod tests {
         assert!(!line.contains('\n'));
         // per-algorithm step is just another string in the same field
         assert!(encode_progress(7, "rsi", "done").contains("\"step\":\"rsi\""));
+    }
+
+    #[test]
+    fn encode_progress_omits_the_count_fields_so_every_existing_line_stays_byte_identical() {
+        let line = encode_progress(7, "compute", "running");
+        assert!(!line.contains("index"), "an uncounted step must not gain an index key: {line}");
+        assert!(!line.contains("total"), "an uncounted step must not gain a total key: {line}");
+        assert_eq!(
+            line,
+            r#"{"type":"progress","id":7,"step":"compute","status":"running"}"#
+        );
+    }
+
+    #[test]
+    fn encode_progress_counted_carries_the_day_index_and_total_alongside_the_step() {
+        let line = encode_progress_counted(9, "backfill", "running", 143, 256);
+        assert!(line.contains("\"type\":\"progress\""));
+        assert!(line.contains("\"id\":9"));
+        assert!(line.contains("\"step\":\"backfill\""));
+        assert!(line.contains("\"status\":\"running\""));
+        assert!(line.contains("\"index\":143"));
+        assert!(line.contains("\"total\":256"));
+        assert!(!line.contains('\n'));
+    }
+
+    #[test]
+    fn encode_progress_counted_reports_a_zero_denominator_rather_than_omitting_it() {
+        // A symbol that needs nothing still emits a well-formed counted line if
+        // anything ever walks zero days -- Some(0) is not None.
+        let line = encode_progress_counted(9, "backfill", "running", 0, 0);
+        assert!(line.contains("\"index\":0"));
+        assert!(line.contains("\"total\":0"));
     }
 }

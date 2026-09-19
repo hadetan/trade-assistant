@@ -108,11 +108,27 @@ describe("session continuity across a simulated restart", () => {
       mode: "engine_only" as const,
       sessionId: session.id,
       instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
-      horizon: "positional" as const,
+      interval: "5minute" as const,
       intent_lens: "buying" as const,
     };
-    await runAnalysisRequest({ kite: kiteClient(), sidecar: mockSidecar() as never, history: store }, params);
-    await runAnalysisRequest({ kite: kiteClient(), sidecar: mockSidecar() as never, history: store }, params);
+    const engineDeps = {
+      kite: kiteClient(),
+      sidecar: mockSidecar() as never,
+      history: store,
+      checkReadiness: vi.fn().mockResolvedValue({ ok: true }),
+      assembleEnvelope: vi.fn().mockResolvedValue({
+        trigger: "reactive" as const,
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+        horizon_requested: "intraday" as const,
+        intent_lens: "buying" as const,
+        algo_results: [],
+        confluence: { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 },
+        overlays: {},
+      }),
+      kiteStatus: () => "authenticated" as const,
+    };
+    await runAnalysisRequest(engineDeps, params);
+    await runAnalysisRequest(engineDeps, params);
     expect(store.getSession(session.id)?.messages.map((m) => m.role)).toEqual(["user", "assistant", "user", "assistant"]);
     expect(store.getClaudeSessionId(session.id)).toBeNull();
     store.close();

@@ -33,11 +33,25 @@ export interface BenchmarkRunParams {
   toTs: number;
 }
 
+export interface BenchmarkProgress {
+  phase: "backfill" | "run";
+  index: number;
+  total: number;
+}
+
 export interface BenchmarkResult {
   params: BenchmarkRunParams;
   candles: CandleWire[];
   decisionPoints: DecisionPoint[];
   cancelled: boolean;
+  // Set only when the run has fewer usable bars around its selected day than
+  // this run needs even after backfill (P14§6); the UI renders this instead of
+  // the empty summary
+  // strip and chart that started this phase. `reason` keeps the two shortfalls
+  // apart: "symbol_history" is a claim about the symbol, "archive_unreachable"
+  // is a claim about the archive, and they must not be worded alike
+  // (decision (xviii)).
+  insufficientHistory?: { have: number; need: number; reason: "symbol_history" | "archive_unreachable" };
 }
 
 export const NEUTRAL_BAND = 0.001; // mirrors algo_core::benchmark_classify::DEFAULT_NEUTRAL_BAND
@@ -74,28 +88,77 @@ export function summarize(points: DecisionPoint[]): { correct: number; incorrect
 }
 
 export interface BenchmarkRunnerDeps {
-  sidecar: Pick<SidecarSupervisor, "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless">;
+  sidecar: Pick<
+    SidecarSupervisor,
+    "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless" | "ensureDayBackfill"
+  >;
 }
 
 export async function runBenchmark(
   deps: BenchmarkRunnerDeps,
   params: BenchmarkRunParams,
-  onProgress?: (index: number, total: number) => void,
+  onProgress?: (progress: BenchmarkProgress) => void,
 ): Promise<BenchmarkResult> {
+  // Bhavcopy is the one on-demand source this app has, and it is day-only
+  // (P14§1). The source check is not redundant with the timeframe check: the
+  // live warm-up path writes ("day", "kite") partitions into the same lake, and
+  // backfilling would top up ("day", "bhavcopy") while the run below reads the
+  // partition this entry actually names (decision (viii)).
+  if (params.timeframe === "day" && params.source === "bhavcopy") {
+    let backfill;
+    try {
+      backfill = await deps.sidecar.ensureDayBackfill(params.symbol, params.algoId, params.fromTs, params.lookaheadBars, (index, total) =>
+        onProgress?.({ phase: "backfill", index, total }),
+      );
+    } catch (error) {
+      if ((error as { cancelled?: boolean }).cancelled !== true) throw error;
+      return { params, candles: [], decisionPoints: [], cancelled: true };
+    }
+    if (backfill.error && !backfill.sufficient) {
+      throw new Error(`backfill failed for ${params.symbol}: ${backfill.error}`);
+    }
+    if (backfill.error) {
+      console.error(`benchmark: backfill for ${params.symbol} reported: ${backfill.error}`);
+    }
+    if (!backfill.sufficient) {
+      return {
+        params,
+        candles: [],
+        decisionPoints: [],
+        cancelled: false,
+        insufficientHistory: {
+          have: backfill.have,
+          need: backfill.need,
+          reason: backfill.archive_exhausted ? "archive_unreachable" : "symbol_history",
+        },
+      };
+    }
+  }
+
   const { candles } = await deps.sidecar.readLakeCandles(params.symbol, params.timeframe, params.source);
-  // No upper bound here: a day-timeframe entry's single selected day is only one
-  // bar, and scoring its outcome needs `lookaheadBars` MORE bars beyond it -- an
-  // upper-bounded series would silently produce zero decision points for every
-  // day-timeframe run. `toTs` instead bounds which bars are eligible *frontiers*
-  // in the loop below, not which bars exist in `series` at all.
-  const series = candles.filter((c) => c.ts >= params.fromTs);
+  // The FULL lake partition is the compute window: each frontier's
+  // series.slice(0, i + 1) must legitimately reach back before fromTs, or
+  // registry::run_applicable's lookback gate silently drops every algorithm
+  // whose required_lookback() exceeds it (P13§8).
+  const series = candles;
+  // A separate index governs eligibility as a *frontier*: only bars inside
+  // [fromTs, toTs) are decision points, and only those render on the chart.
+  const windowStartIndex = series.findIndex((c) => c.ts >= params.fromTs);
+  const firstFrontier = windowStartIndex === -1 ? series.length : windowStartIndex;
+  const windowEndIndex = series.findIndex((c) => c.ts >= params.toTs);
+  const boundByWindow = windowEndIndex === -1 ? series.length : windowEndIndex;
+  // No upper bound from toTs on `series` itself: a day-timeframe entry's single
+  // selected day is one bar, and scoring its outcome needs `lookaheadBars` MORE
+  // bars beyond it.
+  const boundByLookahead = Math.max(0, series.length - params.lookaheadBars);
+  const progressTotal = Math.max(0, Math.min(boundByWindow, boundByLookahead) - firstFrontier);
   const cadence = defaultCadenceForHorizon(params.horizon);
   const decisionPoints: DecisionPoint[] = [];
   let prevConfluence: ConfluenceWire | null = null;
   let cancelled = false;
 
   try {
-    for (let i = 0; i < series.length; i++) {
+    for (let i = firstFrontier; i < series.length; i++) {
       // A frontier must fall inside the requested window; `toTs` is exclusive
       // (start of the next day) so a candle stamped exactly at that boundary is
       // never mistaken for part of the selected day.
@@ -103,7 +166,7 @@ export async function runBenchmark(
       // Mirror run_replay's boundary: stop once no future bar exists at i+lookahead.
       if (i + params.lookaheadBars >= series.length) break;
 
-      onProgress?.(i, series.length);
+      onProgress?.({ phase: "run", index: i - firstFrontier, total: progressTotal });
 
       let compute: { algo_results: AlgoResultWire[]; confluence: ConfluenceWire } | null = null;
       let isDecisionPoint = false;
@@ -166,5 +229,18 @@ export async function runBenchmark(
     }
   }
 
-  return { params, candles: series, decisionPoints, cancelled };
+  // The chart renders result.candles as-is (BenchmarkView/benchmarkChart do no
+  // filtering of their own), so this must stop at the last bar any RECORDED
+  // decision point's scoring actually uses, not just the first candidate
+  // frontier: a day-timeframe window always yields one decision point, but a
+  // stateless_gate (intraday) window can flag several across the same day,
+  // and one whose frontierIndex sits past firstFrontier + lookaheadBars would
+  // otherwise have no ts in result.candles at all -- its marker AND its
+  // tested-candle highlight would be silently unrenderable. Falls back to
+  // firstFrontier when the walk recorded no decision points, so the chart
+  // still shows something sensible around the originally-selected window
+  // rather than an empty or arbitrary range.
+  const lastFrontierIndex = decisionPoints.length > 0 ? decisionPoints[decisionPoints.length - 1].frontierIndex : firstFrontier;
+  const candleEnd = Math.min(lastFrontierIndex + params.lookaheadBars + 1, series.length);
+  return { params, candles: series.slice(firstFrontier, candleEnd), decisionPoints, cancelled };
 }

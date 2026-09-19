@@ -10,6 +10,7 @@ function harness(sidecar: {
   readLakeCandles: ReturnType<typeof vi.fn>;
   benchmarkCompute: ReturnType<typeof vi.fn>;
   evaluateScanGateStateless: ReturnType<typeof vi.fn>;
+  ensureDayBackfill: ReturnType<typeof vi.fn>;
   cancelCurrent: ReturnType<typeof vi.fn>;
 }) {
   const handlers = new Map<string, (event: unknown, arg: unknown) => unknown>();
@@ -27,6 +28,17 @@ function idleSidecar() {
     readLakeCandles: vi.fn(),
     benchmarkCompute: vi.fn(),
     evaluateScanGateStateless: vi.fn(),
+    // Every fixture in this file uses timeframe "day" with source "bhavcopy",
+    // so the pre-flight runs; a lake that already has plenty means the run
+    // proceeds unchanged.
+    ensureDayBackfill: vi.fn().mockResolvedValue({
+      type: "day_backfill",
+      id: 1,
+      have: 10_000,
+      need: 0,
+      sufficient: true,
+      archive_exhausted: false,
+    }),
     cancelCurrent: vi.fn(),
   };
 }
@@ -42,13 +54,24 @@ describe("registerBenchmarkBridge", () => {
       type: "lake_symbols",
       id: 1,
       entries: [
-        { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", from_ts: 100, to_ts: 200, candle_count: 3 },
-        { symbol: "NSE:BANKNIFTY", timeframe: "minute", source: "kaggle", from_ts: 10, to_ts: 20, candle_count: 5 },
+        { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", from_ts: 100, to_ts: 200, candle_count: 3, first_seen_from_ts: 50, first_seen_to_ts: 150, first_seen_candle_count: 2 },
+        { symbol: "NSE:BANKNIFTY", timeframe: "minute", source: "kaggle", from_ts: 10, to_ts: 20, candle_count: 5, first_seen_from_ts: 10, first_seen_to_ts: 20, first_seen_candle_count: 5 },
       ],
     });
     const handlers = harness(sidecar);
     const entries = (await handlers.get("benchmark:listLakeSymbols")!(fakeEvent(), undefined)) as Array<Record<string, unknown>>;
-    expect(entries[0]).toEqual({ symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", fromTs: 100, toTs: 200, candleCount: 3, horizon: "positional" });
+    expect(entries[0]).toEqual({
+      symbol: "NSE:INFY",
+      timeframe: "day",
+      source: "bhavcopy",
+      fromTs: 100,
+      toTs: 200,
+      candleCount: 3,
+      firstSeenFromTs: 50,
+      firstSeenToTs: 150,
+      firstSeenCandleCount: 2,
+      horizon: "positional",
+    });
     expect(entries[1].horizon).toBe("intraday");
   });
 
@@ -58,15 +81,15 @@ describe("registerBenchmarkBridge", () => {
       type: "algorithms",
       id: 1,
       algorithms: [
-        { id: "sma", cost: "fast" },
-        { id: "kronos", cost: "slow" },
+        { id: "sma", cost: "fast", required_lookback: 20 },
+        { id: "kronos", cost: "slow", required_lookback: 256 },
       ],
     });
     const handlers = harness(sidecar);
     const entries = await handlers.get("benchmark:listAlgorithms")!(fakeEvent(), undefined);
     expect(entries).toEqual([
-      { id: "sma", cost: "fast" },
-      { id: "kronos", cost: "slow" },
+      { id: "sma", cost: "fast", requiredLookback: 20 },
+      { id: "kronos", cost: "slow", requiredLookback: 256 },
     ]);
   });
 
@@ -121,7 +144,7 @@ describe("registerBenchmarkBridge", () => {
     };
     await handlers.get("benchmark:runBenchmark")!(event, params);
     // series has 2 bars, lookaheadBars=0 -> eligible i in {0} only.
-    expect(event.sender.send).toHaveBeenCalledWith("benchmark:progress", { index: 0, total: 2 });
+    expect(event.sender.send).toHaveBeenCalledWith("benchmark:progress", { phase: "run", index: 0, total: 2 });
   });
 
   it("calls cancelCurrent on the sidecar", async () => {

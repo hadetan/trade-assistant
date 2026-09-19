@@ -61,7 +61,7 @@ describe("InstrumentSearch", () => {
     expect(await screen.findByRole("button", { name: "NSE:INFY" })).toBeTruthy();
   });
 
-  it("submits the selected instrument and chosen horizon", async () => {
+  it("submits the selected instrument and chosen candle interval", async () => {
     installBridge({
       searchInstruments: vi.fn(async () => ({
         data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
@@ -72,15 +72,33 @@ describe("InstrumentSearch", () => {
 
     fireEvent.change(screen.getByLabelText(/instrument search/i), { target: { value: "infy" } });
     fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
-    fireEvent.click(screen.getByRole("button", { name: /positional/i }));
+    fireEvent.click(screen.getByRole("button", { name: /15-minute/i }));
     fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
 
     await waitFor(() =>
       expect(onSubmit).toHaveBeenCalledWith(
         { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
-        "positional",
+        "15minute",
       ),
     );
+  });
+
+  it("offers exactly the three intraday intervals and no Horizon choice at all", () => {
+    installBridge();
+    render(<InstrumentSearch onSubmit={vi.fn()} />);
+
+    expect(screen.getByRole("group", { name: /candle interval/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^5-minute$/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /10-minute/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /15-minute/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /positional/i })).toBeNull();
+    expect(screen.queryByRole("group", { name: /horizon/i })).toBeNull();
+  });
+
+  it("defaults to the 5-minute interval", () => {
+    installBridge();
+    render(<InstrumentSearch onSubmit={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /^5-minute$/i })).toHaveProperty("ariaPressed", "true");
   });
 
   it("shows an error banner when the search fails instead of failing silently", async () => {

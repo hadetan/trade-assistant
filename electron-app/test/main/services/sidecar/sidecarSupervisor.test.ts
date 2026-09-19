@@ -1,7 +1,13 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import { SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
+import { BACKFILL_REQUEST_TIMEOUT_MS, SidecarSupervisor } from "../../../../src/main/services/sidecar/sidecarSupervisor";
+
+// 2024-01-15 00:00 UTC — the START of a selected calendar day, which is what
+// BenchmarkView.tsx actually sends (not the 15:30 IST stamp that day's candle
+// carries). These supervisor tests are about transport, not sizing, but 0 would
+// be a 1970 selection no caller could ever make.
+const SELECTED_DAY_TS = Date.UTC(2024, 0, 15) / 1000;
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -51,7 +57,7 @@ describe("SidecarSupervisor", () => {
   it("resolves a compute request with the response carrying the matching id", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     await requestsSeen;
     children[0].stdout.write(
@@ -65,7 +71,7 @@ describe("SidecarSupervisor", () => {
 
   it("routes interleaved out-of-order responses to the correct waiting promise", async () => {
     const { supervisor, children } = makeSupervisor();
-    const first = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const first = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
     const second = supervisor.persistCandles("NSE:INFY", "day", [
       { ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 },
     ]);
@@ -81,7 +87,7 @@ describe("SidecarSupervisor", () => {
 
   it("rejects in-flight requests and respawns when the child exits unexpectedly", async () => {
     const { supervisor, children } = makeSupervisor();
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     children[0].emit("exit", 1, null);
 
@@ -94,7 +100,7 @@ describe("SidecarSupervisor", () => {
   it("logs and skips a malformed JSON line without crashing, then still resolves later requests", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { supervisor, children } = makeSupervisor();
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     expect(() => children[0].stdout.write("{not valid json\n")).not.toThrow();
     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
@@ -125,7 +131,7 @@ describe("SidecarSupervisor", () => {
     });
     supervisor.start();
 
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     await expect(pending).rejects.toThrow(/sidecar request 1 timed out after 20ms/);
     // No leak: a late response for id 1 must find no pending entry and be dropped.
@@ -199,7 +205,23 @@ describe("SidecarSupervisor", () => {
     const pending = supervisor.listLakeSymbols();
     await requestsSeen;
     children[0].stdout.write(
-      `${JSON.stringify({ type: "lake_symbols", id: 1, entries: [{ symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", from_ts: 1, to_ts: 2, candle_count: 3 }] })}\n`,
+      `${JSON.stringify({
+        type: "lake_symbols",
+        id: 1,
+        entries: [
+          {
+            symbol: "NSE:INFY",
+            timeframe: "day",
+            source: "bhavcopy",
+            from_ts: 1,
+            to_ts: 2,
+            candle_count: 3,
+            first_seen_from_ts: 1,
+            first_seen_to_ts: 2,
+            first_seen_candle_count: 3,
+          },
+        ],
+      })}\n`,
     );
     const response = await pending;
     expect(response.type).toBe("lake_symbols");
@@ -267,7 +289,7 @@ describe("SidecarSupervisor", () => {
     const { supervisor, children } = makeSupervisor();
     const progress: unknown[] = [];
     supervisor.on("progress", (p) => progress.push(p));
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
     children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "compute", status: "running" })}\n`);
     children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "rsi", status: "running" })}\n`);
     children[0].stdout.write(`${JSON.stringify({ type: "progress", id: 1, step: "rsi", status: "done" })}\n`);
@@ -288,7 +310,7 @@ describe("SidecarSupervisor", () => {
   it("fires onRequestId synchronously with the allocated id before any progress can arrive", () => {
     const { supervisor } = makeSupervisor();
     let seen: number | undefined;
-    supervisor.compute("NSE:INFY", "day", [1, 2, 3], (id) => {
+    supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }], (id) => {
       seen = id;
     });
     expect(seen).toBe(1);
@@ -300,16 +322,154 @@ describe("SidecarSupervisor", () => {
     const pending = supervisor.listAlgorithms();
     await requestsSeen;
     children[0].stdout.write(
-      `${JSON.stringify({ type: "algorithms", id: 1, algorithms: [{ id: "sma", cost: "fast" }] })}\n`,
+      `${JSON.stringify({ type: "algorithms", id: 1, algorithms: [{ id: "sma", cost: "fast", required_lookback: 20 }] })}\n`,
     );
     const response = await pending;
     expect(response.type).toBe("algorithms");
     expect(response.algorithms[0].id).toBe("sma");
+    expect(response.algorithms[0].required_lookback).toBe(20);
+  });
+
+  it("sends an ensure_day_backfill request and resolves the matching day_backfill response", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", SELECTED_DAY_TS, 5);
+
+    const [request] = await requestsSeen;
+    // Both sizing inputs ride along: the sidecar counts the bars at-or-before
+    // `from_ts` against required_lookback and the bars after it against
+    // `lookahead`, and it has no other way to learn either (P14 third-pass fix
+    // C2).
+    expect(request).toEqual({
+      type: "ensure_day_backfill",
+      id: 1,
+      symbol: "NSE:ZYDUSWELL",
+      algo_id: "kronos",
+      lookahead: 5,
+      from_ts: SELECTED_DAY_TS,
+    });
+
+    children[0].stdout.write(
+      `${JSON.stringify({
+        type: "day_backfill",
+        id: 1,
+        have: 8,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: false,
+      })}\n`,
+    );
+    const response = await pending;
+    expect(response.type).toBe("day_backfill");
+    expect(response.have).toBe(8);
+    expect(response.need).toBe(256);
+    expect(response.sufficient).toBe(false);
+    expect(response.archive_exhausted).toBe(false);
+  });
+
+  it("carries an archive_exhausted answer through unchanged", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", SELECTED_DAY_TS, 0);
+    await requestsSeen;
+
+    children[0].stdout.write(
+      `${JSON.stringify({
+        type: "day_backfill",
+        id: 1,
+        have: 41,
+        need: 256,
+        sufficient: false,
+        archive_exhausted: true,
+      })}\n`,
+    );
+    const response = await pending;
+    expect(response.archive_exhausted).toBe(true);
+    expect(response.sufficient).toBe(false);
+  });
+
+  it("forwards only its own counted progress lines to the per-request backfill callback", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const seen: Array<[number, number]> = [];
+    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0, (index, total) => seen.push([index, total]));
+    await requestsSeen;
+
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 1, step: "backfill", status: "running", index: 1, total: 256 })}\n`,
+    );
+    // The request-level bracket carries no counts and must be ignored here.
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 1, step: "ensure_day_backfill", status: "running" })}\n`,
+    );
+    // A counted line belonging to some other in-flight request must not leak in.
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 2, step: "backfill", status: "running", index: 99, total: 256 })}\n`,
+    );
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 1, step: "backfill", status: "running", index: 2, total: 256 })}\n`,
+    );
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 256, need: 256, sufficient: true, archive_exhausted: false })}\n`,
+    );
+
+    await pending;
+    expect(seen).toEqual([
+      [1, 256],
+      [2, 256],
+    ]);
+  });
+
+  it("stops forwarding backfill progress once the request has settled", async () => {
+    const { supervisor, children } = makeSupervisor();
+    const requestsSeen = readRequests(children[0]);
+    const seen: Array<[number, number]> = [];
+    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0, (index, total) => seen.push([index, total]));
+    await requestsSeen;
+
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
+    );
+    await pending;
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "progress", id: 1, step: "backfill", status: "running", index: 7, total: 9 })}\n`,
+    );
+
+    expect(seen).toEqual([]);
+  });
+
+  it("gives a backfill its own long timeout instead of the ordinary per-request one", async () => {
+    // A from-scratch ttm/moirai backfill is ~750 requests at ~200ms apiece
+    // (P14§3) -- minutes, not seconds. Under the shared default it would be
+    // rejected every single time before the sidecar could finish.
+    const children: FakeChild[] = [];
+    const spawnFn = (_command: string, _args: string[]) => {
+      const child = new FakeChild();
+      children.push(child);
+      return child as unknown as ReturnType<typeof spawnFn>;
+    };
+    const supervisor = new SidecarSupervisor({
+      binaryPath: "/fake/sidecar",
+      lakeRoot: "/fake/lake",
+      spawnFn,
+      requestTimeoutMs: 5,
+    });
+    supervisor.start();
+
+    const backfill = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0); // id 1
+    const ordinary = supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [], "sma"); // id 2
+
+    await expect(ordinary).rejects.toThrow(/timed out after 5ms/);
+    children[0].stdout.write(
+      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
+    );
+    await expect(backfill).resolves.toMatchObject({ sufficient: true });
+    expect(BACKFILL_REQUEST_TIMEOUT_MS).toBeGreaterThan(5);
   });
 
   it("cancelCurrent kills the child and rejects pending requests with error.cancelled === true", async () => {
     const { supervisor, children } = makeSupervisor();
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     supervisor.cancelCurrent();
 
@@ -344,7 +504,7 @@ describe("SidecarSupervisor", () => {
     expect(children.length).toBe(1);
 
     // Spawn a pending request so we can capture the exit error.
-    const pending = supervisor.compute("NSE:INFY", "day", [1, 2, 3]);
+    const pending = supervisor.compute("NSE:INFY", "day", "positional", [{ ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }]);
 
     // Cause the child to exit unexpectedly (not via cancelCurrent).
     children[0].emit("exit", 1, null);

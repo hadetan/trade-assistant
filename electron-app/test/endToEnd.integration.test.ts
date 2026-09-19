@@ -41,7 +41,7 @@ describe.skipIf(!existsSync(SIDECAR))("end-to-end: fetch -> archive -> compute",
 
       expect(archived.persisted).toBe(20);
 
-      const compute = await supervisor.compute("NSE:INFY", "day", archived.closes);
+      const compute = await supervisor.compute("NSE:INFY", "day", "positional", archived.candles);
       expect(compute.type).toBe("compute");
       expect(compute.algo_results.length).toBeGreaterThan(0);
       expect(compute.algo_results.some((r) => r.algo_id === "rsi")).toBe(true);

@@ -71,6 +71,7 @@ pub fn timeframe_step(tf: Timeframe) -> Duration {
     match tf {
         Timeframe::Minute => Duration::minutes(1),
         Timeframe::FiveMinute => Duration::minutes(5),
+        Timeframe::TenMinute => Duration::minutes(10),
         Timeframe::FifteenMinute => Duration::minutes(15),
         Timeframe::Day => Duration::days(1),
     }

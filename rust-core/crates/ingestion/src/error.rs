@@ -6,6 +6,10 @@ pub enum IngestionError {
     Io(std::io::Error),
     Storage(storage::StorageError),
     Fetch(String),
+    /// The archive has no file for this date. For a per-day bhavcopy URL that
+    /// means "not a trading day", which a backward walk must skip rather than
+    /// abort on -- a distinction Fetch(String) cannot carry (P14§2 item 3).
+    NotFound,
 }
 
 impl std::fmt::Display for IngestionError {
@@ -17,6 +21,7 @@ impl std::fmt::Display for IngestionError {
             IngestionError::Io(e) => write!(f, "io error: {e}"),
             IngestionError::Storage(e) => write!(f, "storage error: {e}"),
             IngestionError::Fetch(m) => write!(f, "fetch error: {m}"),
+            IngestionError::NotFound => write!(f, "not found (404)"),
         }
     }
 }

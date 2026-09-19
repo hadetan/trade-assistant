@@ -9,6 +9,9 @@ import {
 import { KiteClient } from "../../../src/main/services/kite/kiteClient";
 import type { KiteSession } from "../../../src/main/services/kite/kiteLogin";
 import type { AiAssistedProvider } from "../../../src/main/services/claude/provider";
+import { checkEngineOnlyReadiness } from "../../../src/main/services/market/readinessGate";
+import { assembleWarmedEnvelope } from "../../../src/main/services/analysis/warmedEnvelope";
+import type { CandleWire } from "../../../src/main/services/sidecar/sidecarProtocol";
 import { computeResponse, historicalResponse, mockSidecar } from "../../fixtures/sidecarFixtures";
 
 function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedProvider {
@@ -33,7 +36,7 @@ function fakeProvider(overrides: Partial<AiAssistedProvider> = {}): AiAssistedPr
 
 function sidecarWithProgress() {
   const bus = new EventEmitter();
-  const compute = vi.fn(async (_s: string, _t: string, _c: number[], onRequestId?: (id: number) => void) => {
+  const compute = vi.fn(async (_s: string, _t: string, _h: string, _c: unknown[], onRequestId?: (id: number) => void) => {
     onRequestId?.(42);
     return computeResponse();
   });
@@ -71,56 +74,6 @@ describe("horizonToFetchParams", () => {
     expect(params.timeframe).toBe("day");
     expect(params.from).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(params.to).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  });
-});
-
-describe("runAnalysisRequest", () => {
-  it("assembles an envelope and returns a generated engine_only result", async () => {
-    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
-    const sidecar = mockSidecar();
-    const history = fakeHistory();
-
-    const result = await runAnalysisRequest(
-      { kite, sidecar: sidecar as never, history },
-      {
-        mode: "engine_only",
-        sessionId: "sess-1",
-        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
-        horizon: "positional",
-        intent_lens: "selling",
-      },
-    );
-
-    expect(result.mode).toBe("engine_only");
-    if (result.mode !== "engine_only") throw new Error("mode");
-    expect(result.response.direction).toBe("bullish");
-    expect(result.algo_results[0].algo_id).toBe("rsi");
-    expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "day", [104, 107], undefined);
-  });
-
-  it("writes the user message before analysis and the assistant message only after success", async () => {
-    const kite = new KiteClient({ callTool: vi.fn().mockResolvedValue(historicalResponse()) });
-    const history = fakeHistory();
-    await runAnalysisRequest(
-      { kite, sidecar: mockSidecar() as never, history },
-      { mode: "engine_only", sessionId: "sess-1", instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" }, horizon: "positional", intent_lens: "buying" },
-    );
-    expect(history.appendMessage).toHaveBeenCalledTimes(2);
-    expect(history.appendMessage.mock.calls[0][0]).toMatchObject({ sessionId: "sess-1", role: "user" });
-    expect(history.appendMessage.mock.calls[1][0]).toMatchObject({ sessionId: "sess-1", role: "assistant" });
-  });
-
-  it("leaves the user message orphaned (no assistant write) when the engine call throws", async () => {
-    const kite = new KiteClient({ callTool: vi.fn().mockRejectedValue(new Error("boom")) });
-    const history = fakeHistory();
-    await expect(
-      runAnalysisRequest(
-        { kite, sidecar: mockSidecar() as never, history },
-        { mode: "engine_only", sessionId: "sess-1", instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" }, horizon: "positional", intent_lens: "buying" },
-      ),
-    ).rejects.toThrow(/boom/);
-    expect(history.appendMessage).toHaveBeenCalledTimes(1);
-    expect(history.appendMessage.mock.calls[0][0]).toMatchObject({ role: "user" });
   });
 });
 
@@ -206,7 +159,7 @@ describe("runAiAssistedRequest", () => {
     const sidecar = sidecarWithProgress();
     const sends: Array<{ source: string; kind: string; detail?: string }> = [];
     // emit an unowned id BEFORE the owned compute registers 42, and owned ones after
-    sidecar.compute.mockImplementationOnce(async (_s, _t, _c, onRequestId?: (id: number) => void) => {
+    sidecar.compute.mockImplementationOnce(async (_s, _t, _h, _c, onRequestId?: (id: number) => void) => {
       (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 999, step: "compute", status: "running" }); // unowned → ignored
       onRequestId?.(42);
       (sidecar as unknown as EventEmitter).emit("progress", { type: "progress", id: 42, step: "compute", status: "running" });
@@ -245,6 +198,18 @@ describe("runAiAssistedRequest", () => {
   });
 });
 
+function gateReadySidecar() {
+  return {
+    ...mockSidecar(),
+    readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles" as const, id: 1, candles: [] }),
+    listAlgorithms: vi.fn().mockResolvedValue({
+      type: "algorithms" as const,
+      id: 1,
+      algorithms: [{ id: "rsi", cost: "fast" as const, required_lookback: 200 }],
+    }),
+  };
+}
+
 describe("registerAnalysisBridge", () => {
   function harness(session: KiteSession | null) {
     const handlers = new Map<string, (event: unknown, arg: unknown) => unknown>();
@@ -255,11 +220,12 @@ describe("registerAnalysisBridge", () => {
       ipcMain: { handle: (channel, fn) => handlers.set(channel, fn as never) } as never,
       login,
       getSession: () => session,
-      sidecar: mockSidecar() as never,
+      sidecar: gateReadySidecar() as never,
       provider: fakeProvider(),
       history,
       sendTrace: vi.fn(),
       markNeedsLogin,
+      kiteStatus: () => "authenticated" as const,
     });
     return { handlers, login, markNeedsLogin, history };
   }
@@ -278,7 +244,7 @@ describe("registerAnalysisBridge", () => {
         mode: "engine_only",
         sessionId: "sess-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
-        horizon: "positional",
+        interval: "5minute" as const,
         intent_lens: "buying",
       }),
     ).toThrow(/not logged in/);
@@ -320,7 +286,7 @@ describe("registerAnalysisBridge", () => {
         mode: "engine_only",
         sessionId: "sess-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
-        horizon: "positional",
+        interval: "5minute" as const,
         intent_lens: "buying",
       }),
     ).rejects.toThrow(/403/);
@@ -337,10 +303,167 @@ describe("registerAnalysisBridge", () => {
         mode: "engine_only",
         sessionId: "sess-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
-        horizon: "positional",
+        interval: "5minute" as const,
         intent_lens: "buying",
       }),
     ).rejects.toThrow(/sidecar unreachable/);
     expect(markNeedsLogin).not.toHaveBeenCalled();
+  });
+
+  it("calls markNeedsLogin when analysis:checkReadiness fails with a session-expiry-shaped error, then rethrows", async () => {
+    const callTool = vi.fn().mockRejectedValue(new Error("request failed with status 403"));
+    const session = { kite: new KiteClient({ callTool }) } as KiteSession;
+    const { handlers, markNeedsLogin } = harness(session);
+
+    await expect(
+      handlers.get("analysis:checkReadiness")!(null, {
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        interval: "5minute" as const,
+      }),
+    ).rejects.toThrow(/403/);
+    expect(markNeedsLogin).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call markNeedsLogin when analysis:checkReadiness fails with an ordinary error", async () => {
+    const callTool = vi.fn().mockRejectedValue(new Error("sidecar unreachable"));
+    const session = { kite: new KiteClient({ callTool }) } as KiteSession;
+    const { handlers, markNeedsLogin } = harness(session);
+
+    await expect(
+      handlers.get("analysis:checkReadiness")!(null, {
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        interval: "5minute" as const,
+      }),
+    ).rejects.toThrow(/sidecar unreachable/);
+    expect(markNeedsLogin).not.toHaveBeenCalled();
+  });
+});
+
+describe("runAnalysisRequest readiness gate", () => {
+  const INSTRUMENT = { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" };
+  const PARAMS = {
+    mode: "engine_only" as const,
+    sessionId: "sess-1",
+    instrument: INSTRUMENT,
+    interval: "5minute" as const,
+    intent_lens: "buying" as const,
+  };
+
+  function gateDeps(readiness: import("../../../src/main/services/market/readinessGate").ReadinessResult) {
+    return {
+      kite: { getHistoricalData: vi.fn() },
+      sidecar: {
+        compute: vi.fn(),
+        persistCandles: vi.fn(),
+        readLakeCandles: vi.fn(),
+        listAlgorithms: vi.fn(),
+      },
+      history: { appendMessage: vi.fn() },
+      checkReadiness: vi.fn().mockResolvedValue(readiness),
+      assembleEnvelope: vi.fn(),
+      now: () => new Date("2026-09-17T11:00:00+05:30"),
+    };
+  }
+
+  it("returns a blocked result and computes nothing when the gate fails", async () => {
+    const deps = gateDeps({ ok: false, reason: "insufficient_history", have: 180, need: 256 });
+
+    const result = await runAnalysisRequest(deps as never, PARAMS);
+
+    expect(result).toEqual({
+      mode: "engine_only_blocked",
+      instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+      interval: "5minute",
+      readiness: { ok: false, reason: "insufficient_history", have: 180, need: 256 },
+    });
+    expect(deps.assembleEnvelope).not.toHaveBeenCalled();
+  });
+
+  it("persists the blocked result as the session's assistant turn so a reopen can replay it", async () => {
+    const deps = gateDeps({ ok: false, reason: "kite_not_connected" });
+
+    await runAnalysisRequest(deps as never, PARAMS);
+
+    const assistant = deps.history.appendMessage.mock.calls.find((c) => c[0].role === "assistant");
+    expect(assistant).toBeTruthy();
+    expect(assistant![0].structuredPayload.mode).toBe("engine_only_blocked");
+  });
+
+  it("runs the warmed envelope and returns an ordinary engine_only result when the gate passes", async () => {
+    const deps = gateDeps({ ok: true, warmed: { candles: [], requiredBars: 256 } });
+    deps.assembleEnvelope = vi.fn().mockResolvedValue({
+      trigger: "reactive",
+      instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+      horizon_requested: "intraday",
+      intent_lens: "buying",
+      algo_results: [],
+      confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
+      overlays: {},
+    });
+
+    const result = await runAnalysisRequest(deps as never, PARAMS);
+
+    expect(result.mode).toBe("engine_only");
+    expect((result as { interval: string }).interval).toBe("5minute");
+    expect(deps.assembleEnvelope).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the user's message with no assistant reply when assembleEnvelope throws after the gate passes", async () => {
+    const deps = gateDeps({ ok: true, warmed: { candles: [], requiredBars: 256 } });
+    deps.assembleEnvelope = vi.fn().mockRejectedValue(new Error("boom"));
+
+    await expect(runAnalysisRequest(deps as never, PARAMS)).rejects.toThrow("boom");
+
+    expect(deps.history.appendMessage).toHaveBeenCalledTimes(1);
+    expect(deps.history.appendMessage).toHaveBeenCalledWith(expect.objectContaining({ role: "user" }));
+  });
+
+  it("warms the lake only ONCE for a full readiness-gate-then-analysis run, not once per stage", async () => {
+    // Wires the REAL gate and REAL envelope assembler (not mocks), so this
+    // actually proves the fix: without it, both stages call topUpCandles
+    // independently and this doubles the Kite fetch and the lake read/write.
+    const lastTs = Math.floor(new Date("2026-09-17T10:55:00+05:30").getTime() / 1000);
+    let stored: CandleWire[] = [
+      { ts: lastTs - 300, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+      { ts: lastTs, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+    ];
+    const readLakeCandles = vi.fn(async () => ({ type: "lake_candles" as const, id: 1, candles: [...stored] }));
+    const persistCandles = vi.fn(async (_s: string, _t: string, candles: CandleWire[]) => {
+      stored = [...stored, ...candles].sort((a, b) => a.ts - b.ts);
+      return { type: "persist_candles" as const, id: 1, written: candles.length };
+    });
+    const kite = {
+      getHistoricalData: vi.fn().mockResolvedValue({
+        data: { candles: [["2026-09-17T11:00:00+0530", 1, 2, 0.5, 1.5, 10]] },
+      }),
+    };
+    const sidecar = {
+      readLakeCandles,
+      persistCandles,
+      listAlgorithms: vi.fn().mockResolvedValue({
+        type: "algorithms" as const,
+        id: 1,
+        algorithms: [{ id: "rsi", cost: "fast" as const, required_lookback: 3 }],
+      }),
+      compute: vi.fn().mockResolvedValue(computeResponse()),
+    };
+
+    const result = await runAnalysisRequest(
+      {
+        kite,
+        sidecar,
+        history: { appendMessage: vi.fn() },
+        checkReadiness: checkEngineOnlyReadiness,
+        assembleEnvelope: assembleWarmedEnvelope,
+        kiteStatus: () => "authenticated" as const,
+        now: () => new Date("2026-09-17T11:00:00+05:30"),
+      } as never,
+      PARAMS,
+    );
+
+    expect(result.mode).toBe("engine_only");
+    expect(kite.getHistoricalData).toHaveBeenCalledTimes(1);
+    expect(readLakeCandles).toHaveBeenCalledTimes(2);
+    expect(persistCandles).toHaveBeenCalledTimes(1);
   });
 });
