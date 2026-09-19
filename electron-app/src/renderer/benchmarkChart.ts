@@ -33,15 +33,30 @@ export function createBenchmarkChart(
   // distinguishing them -- hide both; the popover (click a marker) is the one
   // place forecast info is meant to come from.
   const candleSeries = chart.addSeries(CandlestickSeries, { priceLineVisible: false });
-  candleSeries.setData(
-    result.candles.map((c: CandleWire) => ({
-      time: c.ts as UTCTimestamp,
-      open: c.open,
-      high: c.high,
-      low: c.low,
-      close: c.close,
-    })),
-  );
+
+  const testedTimes = new Set(result.decisionPoints.map((p) => p.ts));
+
+  // The benchmark tests exactly one candle per run, and an outcome-colored
+  // arrow marker alone proved too small to spot next to the volume bars.
+  // Overriding this one candle's own color/border/wick to the app's accent
+  // token (distinct from the bullish/bearish/neutral palette) makes it
+  // unmistakable without needing a separate full-height overlay primitive.
+  const buildCandleData = () => {
+    const accent = getComputedStyle(container).getPropertyValue("--accent").trim();
+    return result.candles.map((c: CandleWire) => {
+      const tested = testedTimes.has(c.ts);
+      return {
+        time: c.ts as UTCTimestamp,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
+        ...(tested ? { color: accent, borderColor: accent, wickColor: accent } : {}),
+      };
+    });
+  };
+
+  candleSeries.setData(buildCandleData());
 
   const volumeSeries = chart.addSeries(HistogramSeries, {
     priceScaleId: "volume",
@@ -77,6 +92,7 @@ export function createBenchmarkChart(
   // document subtree for that one attribute rather than assuming a fixed depth.
   const themeObserver = new MutationObserver(() => {
     seriesMarkers.setMarkers(result.decisionPoints.map(markerFor));
+    candleSeries.setData(buildCandleData());
   });
   themeObserver.observe(document.body, { attributes: true, attributeFilter: ["data-theme"], subtree: true });
 

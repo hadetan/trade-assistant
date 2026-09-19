@@ -78,6 +78,39 @@ describe("createBenchmarkChart", () => {
     expect(volumeOptions.priceFormat?.type).toBe("volume");
   });
 
+  it("colors only the tested candle with the container's --accent token, leaving the rest plain", () => {
+    addSeries.mockClear();
+    const container = containerWithTokens();
+    container.style.setProperty("--accent", "#6366f1");
+    const result = resultWith(["correct"]);
+    result.candles = [
+      { ts: 0, open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 },
+      { ts: 1, open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 },
+      { ts: 2, open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 },
+    ];
+    createBenchmarkChart(container, result, () => {});
+
+    const candleSetData = addSeries.mock.results[0].value.setData as ReturnType<typeof vi.fn>;
+    const candleData = candleSetData.mock.calls[0][0] as Array<{
+      time: number;
+      color?: string;
+      borderColor?: string;
+      wickColor?: string;
+    }>;
+
+    const tested = candleData.find((c) => c.time === 1);
+    const untested = candleData.filter((c) => c.time !== 1);
+
+    expect(tested?.color).toBe("#6366f1");
+    expect(tested?.borderColor).toBe("#6366f1");
+    expect(tested?.wickColor).toBe("#6366f1");
+    untested.forEach((c) => {
+      expect(c.color).toBeUndefined();
+      expect(c.borderColor).toBeUndefined();
+      expect(c.wickColor).toBeUndefined();
+    });
+  });
+
   it("dispose() removes the chart", () => {
     remove.mockClear();
     const container = containerWithTokens();
