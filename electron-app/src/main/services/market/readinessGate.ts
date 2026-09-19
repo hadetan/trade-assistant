@@ -5,7 +5,6 @@ import type { KiteSessionStatus } from "../../ipc/rendererApi";
 import { requiredBarsFor } from "../analysis/warmedEnvelope";
 import { topUpCandles } from "./candleWarmup";
 import { isHolidayCalendarCovered, istYear, isWithinSessionHours, nextSessionOpen } from "./tradingCalendar";
-import { NSE_HOLIDAY_CALENDAR_SOURCE } from "./nseHolidays";
 import type { CandleInterval } from "./candleInterval";
 
 // What the gate already fetched to prove the lake was warm enough, handed
@@ -41,8 +40,9 @@ function warnOnceAboutCalendarCoverage(year: number): void {
   if (isHolidayCalendarCovered(year) || warnedYears.has(year)) return;
   warnedYears.add(year);
   console.warn(
-    `market: no NSE holiday calendar bundled for ${year}; falling back to weekends-only. ` +
-      `Refresh nseHolidays.ts from ${NSE_HOLIDAY_CALENDAR_SOURCE}.`,
+    `market: no NSE holiday data for ${year}; falling back to weekends-only. Either the live ` +
+      `NSE holiday refresh hasn't succeeded yet (fresh install, no network at startup) or NSE's ` +
+      `holiday-master endpoint has changed -- check nseHolidayFetcher.ts against the live feed.`,
   );
 }
 

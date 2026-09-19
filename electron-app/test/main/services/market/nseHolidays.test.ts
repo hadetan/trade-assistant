@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 function cmEntry(tradingDate: string) {
   return {
@@ -28,19 +31,46 @@ async function loadFreshModule() {
   return import("../../../../src/main/services/market/nseHolidays");
 }
 
+let tempDir: string;
+
+beforeEach(() => {
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "nse-holiday-cache-test-"));
+});
+
+afterEach(() => {
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+function tempCachePath(name = "cache.json"): string {
+  return path.join(tempDir, name);
+}
+
 describe("getEffectiveHolidaysForYear", () => {
   beforeEach(() => {
     vi.resetModules();
   });
 
-  it("falls back to the static calendar for a year with no override", async () => {
-    const { getEffectiveHolidaysForYear, NSE_HOLIDAY_CALENDAR } = await loadFreshModule();
-    expect(getEffectiveHolidaysForYear("2026")).toEqual(NSE_HOLIDAY_CALENDAR["2026"]);
+  it("returns an empty array for a year that has never been refreshed or cached", async () => {
+    const { getEffectiveHolidaysForYear } = await loadFreshModule();
+    expect(getEffectiveHolidaysForYear("2026")).toEqual([]);
+    expect(getEffectiveHolidaysForYear("1999")).toEqual([]);
+  });
+});
+
+describe("isYearCoveredByEffectiveCalendar", () => {
+  beforeEach(() => {
+    vi.resetModules();
   });
 
-  it("falls back to an empty array for a year covered by neither the static calendar nor an override", async () => {
-    const { getEffectiveHolidaysForYear } = await loadFreshModule();
-    expect(getEffectiveHolidaysForYear("1999")).toEqual([]);
+  it("reports uncovered for any year before a refresh or cache load has ever populated it", async () => {
+    const { isYearCoveredByEffectiveCalendar } = await loadFreshModule();
+    expect(isYearCoveredByEffectiveCalendar("2026")).toBe(false);
+  });
+
+  it("reports covered for a year populated by a successful refresh", async () => {
+    const { refreshNseHolidayCalendar, isYearCoveredByEffectiveCalendar } = await loadFreshModule();
+    await refreshNseHolidayCalendar(fakeFetchWithTradingDates(["01-Jan-2031"]) as unknown as typeof fetch, tempCachePath());
+    expect(isYearCoveredByEffectiveCalendar("2031")).toBe(true);
   });
 });
 
@@ -49,53 +79,148 @@ describe("refreshNseHolidayCalendar", () => {
     vi.resetModules();
   });
 
-  it("replaces the effective calendar for a fetched year, leaving other years' static entries untouched", async () => {
-    const { refreshNseHolidayCalendar, getEffectiveHolidaysForYear, NSE_HOLIDAY_CALENDAR } = await loadFreshModule();
-    const fetchFn = fakeFetchWithTradingDates(["01-Jan-2031", "15-Aug-2031"]);
+  it("populates the effective calendar for a fetched year, leaving a previously-fetched year's data intact", async () => {
+    const { refreshNseHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
 
-    const result = await refreshNseHolidayCalendar(fetchFn as unknown as typeof fetch);
+    await refreshNseHolidayCalendar(fakeFetchWithTradingDates(["01-Jan-2025"]) as unknown as typeof fetch, tempCachePath());
+    const result = await refreshNseHolidayCalendar(
+      fakeFetchWithTradingDates(["01-Jan-2031", "15-Aug-2031"]) as unknown as typeof fetch,
+      tempCachePath(),
+    );
 
     expect(result).toBe("refreshed");
     expect(getEffectiveHolidaysForYear("2031")).toEqual(["2031-01-01", "2031-08-15"]);
-    expect(getEffectiveHolidaysForYear("2026")).toEqual(NSE_HOLIDAY_CALENDAR["2026"]);
+    expect(getEffectiveHolidaysForYear("2025")).toEqual(["2025-01-01"]);
   });
 
-  it("leaves the effective calendar exactly as the static calendar on a failed fetch", async () => {
-    const { refreshNseHolidayCalendar, getEffectiveHolidaysForYear, NSE_HOLIDAY_CALENDAR } = await loadFreshModule();
-    const fetchFn = fakeFailingFetch();
+  it("leaves the effective calendar untouched on a failed fetch", async () => {
+    const { refreshNseHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
 
-    const result = await refreshNseHolidayCalendar(fetchFn as unknown as typeof fetch);
+    const result = await refreshNseHolidayCalendar(fakeFailingFetch() as unknown as typeof fetch, tempCachePath());
 
     expect(result).toBe("fallback");
-    expect(getEffectiveHolidaysForYear("2026")).toEqual(NSE_HOLIDAY_CALENDAR["2026"]);
+    expect(getEffectiveHolidaysForYear("2026")).toEqual([]);
     expect(getEffectiveHolidaysForYear("1999")).toEqual([]);
   });
 
-  // The static 2026 calendar was itself corrected to match NSE's live feed
-  // (a prior version was wrong on 12 of 20 entries -- discovered by diffing
-  // against this exact endpoint). That means every real 2026 date this test
-  // could pick is now already in NSE_HOLIDAY_CALENDAR, so it can no longer
-  // demonstrate the override winning over a stale static entry using a real
-  // date. A synthetic, deliberately-not-a-real-holiday date keeps proving the
-  // mechanism itself -- a successful refresh's data wins, regardless of
-  // whether the static list happens to already be correct that year.
-  it("a successful refresh makes the effective calendar include a date the static calendar does not have, even for an already-covered year", async () => {
-    const { refreshNseHolidayCalendar, getEffectiveHolidaysForYear, NSE_HOLIDAY_CALENDAR } = await loadFreshModule();
-    const SYNTHETIC_DATE = "2026-07-04"; // not a real NSE holiday; not in the static list
-    expect(NSE_HOLIDAY_CALENDAR["2026"]).not.toContain(SYNTHETIC_DATE);
+  it("a later successful refresh's data for an already-covered year replaces/extends it", async () => {
+    const { refreshNseHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
+    const SYNTHETIC_DATE = "2026-07-04"; // not a real NSE holiday, chosen only to prove the mechanism
 
-    const fetchFn = fakeFetchWithTradingDates([
-      "04-Jul-2026",
-      ...NSE_HOLIDAY_CALENDAR["2026"].map((iso) => {
-        const [y, m, d] = iso.split("-");
-        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-        return `${d}-${months[Number(m) - 1]}-${y}`;
-      }),
-    ]);
+    await refreshNseHolidayCalendar(
+      fakeFetchWithTradingDates(["26-Jan-2026"]) as unknown as typeof fetch,
+      tempCachePath(),
+    );
+    expect(getEffectiveHolidaysForYear("2026")).not.toContain(SYNTHETIC_DATE);
 
-    const result = await refreshNseHolidayCalendar(fetchFn as unknown as typeof fetch);
+    const result = await refreshNseHolidayCalendar(
+      fakeFetchWithTradingDates(["26-Jan-2026", "04-Jul-2026"]) as unknown as typeof fetch,
+      tempCachePath(),
+    );
 
     expect(result).toBe("refreshed");
     expect(getEffectiveHolidaysForYear("2026")).toContain(SYNTHETIC_DATE);
+    expect(getEffectiveHolidaysForYear("2026")).toContain("2026-01-26");
+  });
+
+  it("persists the complete resulting override map to the cache file on success", async () => {
+    const { refreshNseHolidayCalendar } = await loadFreshModule();
+    const cachePath = tempCachePath();
+
+    await refreshNseHolidayCalendar(
+      fakeFetchWithTradingDates(["01-Jan-2031", "15-Aug-2031"]) as unknown as typeof fetch,
+      cachePath,
+    );
+
+    const written = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    expect(written).toEqual({ "2031": ["2031-01-01", "2031-08-15"] });
+  });
+
+  it("persists cumulative overrides across multiple successful refreshes, not just the latest fetch's years", async () => {
+    const { refreshNseHolidayCalendar } = await loadFreshModule();
+    const cachePath = tempCachePath();
+
+    await refreshNseHolidayCalendar(fakeFetchWithTradingDates(["01-Jan-2025"]) as unknown as typeof fetch, cachePath);
+    await refreshNseHolidayCalendar(fakeFetchWithTradingDates(["01-Jan-2031"]) as unknown as typeof fetch, cachePath);
+
+    const written = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    expect(written).toEqual({ "2025": ["2025-01-01"], "2031": ["2031-01-01"] });
+  });
+
+  it("does not crash and still reports refreshed when the cache write fails", async () => {
+    const { refreshNseHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
+    const unwritablePath = path.join(tempDir, "does-not-exist-dir", "cache.json");
+
+    const result = await refreshNseHolidayCalendar(
+      fakeFetchWithTradingDates(["01-Jan-2031"]) as unknown as typeof fetch,
+      unwritablePath,
+    );
+
+    expect(result).toBe("refreshed");
+    expect(getEffectiveHolidaysForYear("2031")).toEqual(["2031-01-01"]);
+  });
+});
+
+describe("loadCachedHolidayCalendar", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("populates the override map from a valid cache file", async () => {
+    const { loadCachedHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
+    const cachePath = tempCachePath();
+    fs.writeFileSync(cachePath, JSON.stringify({ "2031": ["2031-01-01", "2031-08-15"] }));
+
+    loadCachedHolidayCalendar(cachePath);
+
+    expect(getEffectiveHolidaysForYear("2031")).toEqual(["2031-01-01", "2031-08-15"]);
+  });
+
+  it("leaves the override map empty when the cache file is missing", async () => {
+    const { loadCachedHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
+
+    expect(() => loadCachedHolidayCalendar(tempCachePath("missing.json"))).not.toThrow();
+
+    expect(getEffectiveHolidaysForYear("2031")).toEqual([]);
+  });
+
+  it("leaves the override map empty when the cache file is malformed JSON", async () => {
+    const { loadCachedHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
+    const cachePath = tempCachePath();
+    fs.writeFileSync(cachePath, "{not valid json");
+
+    expect(() => loadCachedHolidayCalendar(cachePath)).not.toThrow();
+
+    expect(getEffectiveHolidaysForYear("2031")).toEqual([]);
+  });
+
+  it("leaves the override map empty when the cache file is a well-formed JSON array instead of an object", async () => {
+    const { loadCachedHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
+    const cachePath = tempCachePath();
+    fs.writeFileSync(cachePath, JSON.stringify(["2031-01-01"]));
+
+    loadCachedHolidayCalendar(cachePath);
+
+    expect(getEffectiveHolidaysForYear("2031")).toEqual([]);
+  });
+
+  it("leaves the override map empty when a year's value is not an array of strings", async () => {
+    const { loadCachedHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
+    const cachePath = tempCachePath();
+    fs.writeFileSync(cachePath, JSON.stringify({ "2031": "2031-01-01" }));
+
+    loadCachedHolidayCalendar(cachePath);
+
+    expect(getEffectiveHolidaysForYear("2031")).toEqual([]);
+  });
+
+  it("leaves the override map empty when a year's array contains non-string entries", async () => {
+    const { loadCachedHolidayCalendar, getEffectiveHolidaysForYear } = await loadFreshModule();
+    const cachePath = tempCachePath();
+    fs.writeFileSync(cachePath, JSON.stringify({ "2031": [1, 2, 3] }));
+
+    loadCachedHolidayCalendar(cachePath);
+
+    expect(getEffectiveHolidaysForYear("2031")).toEqual([]);
   });
 });

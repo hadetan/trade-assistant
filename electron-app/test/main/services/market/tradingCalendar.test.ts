@@ -1,18 +1,42 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   isHolidayCalendarCovered,
   isTradingDay,
   isWithinSessionHours,
   nextSessionOpen,
 } from "../../../../src/main/services/market/tradingCalendar";
+import { refreshNseHolidayCalendar } from "../../../../src/main/services/market/nseHolidays";
 
 // Every fixture is an explicit IST instant. Nothing here reads the wall clock.
 function ist(isoWithoutZone: string): Date {
   return new Date(`${isoWithoutZone}+05:30`);
 }
 
+// tradingCalendar.ts has no holiday data of its own any more: it only ever
+// reads whatever a live refresh has populated in nseHolidays.ts. Seed the
+// two fixed-date 2026 holidays these tests exercise via a fake refresh,
+// exactly the mechanism a real startup would use, rather than any hand-typed
+// module data.
+beforeAll(async () => {
+  const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "trading-calendar-test-")), "cache.json");
+  const fetchFn = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      CM: [
+        { tradingDate: "26-Jan-2026", weekDay: "Monday", description: "Republic Day", morning_session: null, evening_session: null, Sr_no: 1 },
+        { tradingDate: "02-Oct-2026", weekDay: "Friday", description: "Gandhi Jayanti", morning_session: null, evening_session: null, Sr_no: 2 },
+      ],
+    }),
+  });
+  await refreshNseHolidayCalendar(fetchFn as unknown as typeof fetch, cachePath);
+});
+
 describe("isHolidayCalendarCovered", () => {
-  it("reports 2026 covered and a year the bundled calendar has never seen uncovered", () => {
+  it("reports 2026 covered by a live-refreshed calendar, and a year no refresh has ever seen uncovered", () => {
     expect(isHolidayCalendarCovered(2026)).toBe(true);
     expect(isHolidayCalendarCovered(1999)).toBe(false);
   });
@@ -28,7 +52,7 @@ describe("isTradingDay", () => {
     expect(isTradingDay(ist("2026-09-20T11:00:00"))).toBe(false); // Sunday
   });
 
-  it("rejects a bundled-calendar holiday that falls on a weekday", () => {
+  it("rejects a live-refreshed-calendar holiday that falls on a weekday", () => {
     // Republic Day, a fixed-date statutory holiday NSE observes every year.
     expect(isTradingDay(ist("2026-01-26T11:00:00"))).toBe(false); // Monday
     // Gandhi Jayanti, likewise fixed-date.

@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkEngineOnlyReadiness } from "../../../../src/main/services/market/readinessGate";
+import { refreshNseHolidayCalendar } from "../../../../src/main/services/market/nseHolidays";
 import type { CandleWire } from "../../../../src/main/services/sidecar/sidecarProtocol";
 
 const IN_SESSION = new Date("2026-09-17T11:00:00+05:30"); // Thursday, mid-session
@@ -99,7 +103,26 @@ describe("checkEngineOnlyReadiness", () => {
     });
   });
 
-  it("fails with market_closed on a bundled-calendar holiday", async () => {
+  it("fails with market_closed on a holiday sourced from a live-refreshed calendar", async () => {
+    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "readiness-gate-test-")), "cache.json");
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        CM: [
+          {
+            tradingDate: "26-Jan-2026",
+            weekDay: "Monday",
+            description: "Republic Day",
+            morning_session: null,
+            evening_session: null,
+            Sr_no: 1,
+          },
+        ],
+      }),
+    });
+    await refreshNseHolidayCalendar(fetchFn as unknown as typeof fetch, cachePath);
+
     const result = await checkEngineOnlyReadiness(deps() as never, { ...PARAMS, now: HOLIDAY });
     expect(result).toEqual({
       ok: false,
