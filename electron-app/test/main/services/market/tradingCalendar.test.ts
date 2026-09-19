@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   isHolidayCalendarCovered,
   isTradingDay,
@@ -20,8 +20,15 @@ function ist(isoWithoutZone: string): Date {
 // two fixed-date 2026 holidays these tests exercise via a fake refresh,
 // exactly the mechanism a real startup would use, rather than any hand-typed
 // module data.
+let tempDir: string;
+
+afterAll(() => {
+  fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
 beforeAll(async () => {
-  const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "trading-calendar-test-")), "cache.json");
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "trading-calendar-test-"));
+  const cachePath = path.join(tempDir, "cache.json");
   const fetchFn = vi.fn().mockResolvedValue({
     ok: true,
     status: 200,

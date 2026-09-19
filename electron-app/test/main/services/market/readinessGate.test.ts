@@ -104,7 +104,8 @@ describe("checkEngineOnlyReadiness", () => {
   });
 
   it("fails with market_closed on a holiday sourced from a live-refreshed calendar", async () => {
-    const cachePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "readiness-gate-test-")), "cache.json");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "readiness-gate-test-"));
+    const cachePath = path.join(tempDir, "cache.json");
     const fetchFn = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -129,9 +130,10 @@ describe("checkEngineOnlyReadiness", () => {
       reason: "market_closed",
       nextOpenAt: new Date("2026-01-27T09:15:00+05:30").getTime() / 1000,
     });
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("warns once about a year the bundled holiday calendar does not cover instead of silently trusting it", async () => {
+  it("warns once about a year no live refresh or cache has ever covered instead of silently trusting it", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await checkEngineOnlyReadiness(deps() as never, { ...PARAMS, now: new Date("2030-06-18T11:00:00+05:30") });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("2030"));

@@ -1,8 +1,10 @@
 // NSE's holiday-master endpoint is undocumented and unsupported: it can
 // change shape, rate-limit, or vanish without notice. Every function here is
 // best-effort by design -- fetchNseTradingHolidays never throws, it only ever
-// returns the parsed list or null, so a caller can always fall back to the
-// bundled static calendar as if the request had never been attempted.
+// returns the parsed list or null, so a caller can treat a failure exactly as
+// if the request had never been attempted (nseHolidays.ts falls back to its
+// persisted cache of a prior successful fetch, or no holiday data at all if
+// none exists yet -- there is no hand-typed calendar left to fall back to).
 const HOLIDAY_MASTER_URL = "https://www.nseindia.com/api/holiday-master?type=trading";
 
 // NSE's basic bot-blocking rejects requests with no User-Agent outright; a

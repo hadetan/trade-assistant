@@ -33,12 +33,13 @@ function isRecordOfStringArrays(value: unknown): value is Record<string, string[
   );
 }
 
-// Must be called exactly once, synchronously, very early at startup
-// (bootstrap.ts) -- strictly BEFORE refreshNseHolidayCalendar has had any
-// chance to run. It unconditionally assigns holidayOverridesByYear from
-// whatever it reads, so calling it after a successful refresh would discard
-// that refresh's (more current) in-memory data in favor of a possibly-older
-// cached snapshot.
+// Intended to be called exactly once, synchronously, very early at startup
+// (bootstrap.ts) -- before refreshNseHolidayCalendar has had any chance to
+// run. Merges rather than replaces (a cached year only fills in a year not
+// already present in memory) specifically so that calling this late, or out
+// of order, can only ever ADD stale data for a year nothing has populated
+// yet -- it can never discard a live refresh's more current data for a year
+// that refresh already covered.
 //
 // Best-effort, same posture as the live fetch itself: a missing file,
 // unreadable file, malformed JSON, or JSON that doesn't look like
@@ -49,7 +50,7 @@ export function loadCachedHolidayCalendar(cachePath: string = defaultCachePath()
     const raw = fs.readFileSync(cachePath, "utf-8");
     const parsed: unknown = JSON.parse(raw);
     if (!isRecordOfStringArrays(parsed)) return;
-    holidayOverridesByYear = parsed;
+    holidayOverridesByYear = { ...parsed, ...holidayOverridesByYear };
   } catch {
     // Missing file, unreadable file, or malformed JSON: leave whatever was
     // already there (nothing, this early in startup) untouched.
