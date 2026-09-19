@@ -304,6 +304,12 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
                     <TextField
                       type="date"
                       required
+                      // Deliberately the live extent, not firstSeen* (used above for the
+                      // summary line and the default date): backfilled bars are real and
+                      // benchmarkable, so bounding this to firstSeen* would make legitimately
+                      // available history unreachable. The original bug was a *silent* wrong
+                      // default; picking a date outside the first-seen window here is a
+                      // visible, deliberate user action, not a repeat of that bug.
                       min={toDate(selected.fromTs)}
                       max={toDate(selected.toTs)}
                       value={date}

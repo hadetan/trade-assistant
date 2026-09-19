@@ -205,7 +205,23 @@ describe("SidecarSupervisor", () => {
     const pending = supervisor.listLakeSymbols();
     await requestsSeen;
     children[0].stdout.write(
-      `${JSON.stringify({ type: "lake_symbols", id: 1, entries: [{ symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", from_ts: 1, to_ts: 2, candle_count: 3 }] })}\n`,
+      `${JSON.stringify({
+        type: "lake_symbols",
+        id: 1,
+        entries: [
+          {
+            symbol: "NSE:INFY",
+            timeframe: "day",
+            source: "bhavcopy",
+            from_ts: 1,
+            to_ts: 2,
+            candle_count: 3,
+            first_seen_from_ts: 1,
+            first_seen_to_ts: 2,
+            first_seen_candle_count: 3,
+          },
+        ],
+      })}\n`,
     );
     const response = await pending;
     expect(response.type).toBe("lake_symbols");

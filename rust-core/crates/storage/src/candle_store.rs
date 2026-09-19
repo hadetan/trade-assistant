@@ -414,6 +414,28 @@ mod tests {
         assert_eq!(after_backfill[0].first_seen_from_ts, 100, "first_seen_from_ts must remain the creation-time value");
         assert_eq!(after_backfill[0].first_seen_to_ts, 100, "first_seen_to_ts must remain the creation-time value");
         assert_eq!(after_backfill[0].first_seen_candle_count, 1, "first_seen_candle_count must remain the creation-time value");
+
+        // A third, later write must still carry the creation-time values forward
+        // rather than re-deriving them from the second write's manifest line --
+        // the bug this guards against is "first_seen drifts to whatever the most
+        // recent write happened to see", which two writes alone can't distinguish
+        // from "first_seen is correctly frozen forever".
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                "day",
+                "bhavcopy",
+                &[Candle { ts: 7, open: 4.0, high: 4.0, low: 4.0, close: 4.0, volume: 4 }],
+            )
+            .unwrap();
+
+        let after_third_write = store.list_symbols().unwrap();
+        assert_eq!(after_third_write.len(), 1);
+        assert_eq!(after_third_write[0].from_ts, 7, "live from_ts must reflect the third write's extent");
+        assert_eq!(after_third_write[0].candle_count, 4, "live candle_count must reflect the third write's extent");
+        assert_eq!(after_third_write[0].first_seen_from_ts, 100, "first_seen_from_ts must still be the original creation-time value after a third write");
+        assert_eq!(after_third_write[0].first_seen_to_ts, 100, "first_seen_to_ts must still be the original creation-time value after a third write");
+        assert_eq!(after_third_write[0].first_seen_candle_count, 1, "first_seen_candle_count must still be the original creation-time value after a third write");
     }
 
     #[test]
