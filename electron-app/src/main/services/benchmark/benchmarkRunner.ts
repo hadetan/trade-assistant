@@ -229,5 +229,11 @@ export async function runBenchmark(
     }
   }
 
-  return { params, candles: series.slice(firstFrontier), decisionPoints, cancelled };
+  // The chart renders result.candles as-is (BenchmarkView/benchmarkChart do no
+  // filtering of their own), so this must stop at the last bar the scoring
+  // actually uses (`series[firstFrontier + lookaheadBars]`) rather than
+  // running to the end of `series`, which P14's backfill can pad with 80-100+
+  // bars of older context that were never meant to reach the chart.
+  const candleEnd = Math.min(firstFrontier + params.lookaheadBars + 1, series.length);
+  return { params, candles: series.slice(firstFrontier, candleEnd), decisionPoints, cancelled };
 }

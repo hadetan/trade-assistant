@@ -159,7 +159,11 @@ describe("runBenchmark frontier walk", () => {
     const result = await runBenchmark(deps, baseParams({ lookaheadBars: 2 }));
     // N=6, L=2 -> eligible i in 0..3; i=2 has close -5 -> skipped.
     expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([0, 1, 3]);
-    expect(result.candles).toHaveLength(6); // the glitch candle still renders on the chart
+    // Bounded to firstFrontier..firstFrontier+lookaheadBars (0..2), not the
+    // full 6-bar series -- the glitch candle at index 2 still renders on the
+    // chart within that bound.
+    expect(result.candles).toHaveLength(3);
+    expect(result.candles[2].close).toBe(-5);
   });
 
   it("stops at the lookahead boundary with no out-of-range read", async () => {
@@ -319,8 +323,10 @@ describe("runBenchmark frontier walk", () => {
     // Frontiers 37 and 38 are eligible (39 has no bar at i+1); each is handed
     // everything up to and including itself, reaching back before fromTs.
     expect(windows).toEqual([38, 39]);
-    // The chart still shows only the selected window.
-    expect(result.candles).toHaveLength(3);
+    // The chart still shows only the selected window: firstFrontier (37)
+    // through firstFrontier + lookaheadBars (38), i.e. 2 bars -- not the whole
+    // unbounded tail of `series` used above for lookback context.
+    expect(result.candles).toHaveLength(2);
     expect(result.candles[0].ts).toBe(fromTs);
   });
 
@@ -660,5 +666,41 @@ describe("runBenchmark frontier walk", () => {
     };
 
     await expect(runBenchmark(deps, baseParams())).rejects.toThrow(/HTTP 503/);
+  });
+
+  it("bounds result.candles to the selected day plus lookaheadBars, not the entire backfilled partition", async () => {
+    // P14's backfill routinely pads a partition with 80-100+ bars of OLDER
+    // history so the algorithm has enough lookback context (correct, and NOT
+    // under test here). That padding must stay internal: the chart should only
+    // ever see the tested day through the day its outcome is scored against.
+    const dayStart = 1_700_000_000;
+    const before = 50;
+    const after = 50;
+    const lookaheadBars = 3;
+    const total = before + 1 + after;
+    const candles: CandleWire[] = Array.from({ length: total }, (_, i) => ({
+      ts: dayStart + (i - before) * DAY_SECONDS,
+      open: 100 + i,
+      high: 100 + i,
+      low: 100 + i,
+      close: 100 + i,
+      volume: 100,
+    }));
+    const fromTs = candles[before].ts;
+    const toTs = fromTs + DAY_SECONDS;
+    const deps: BenchmarkRunnerDeps = {
+      sidecar: {
+        ensureDayBackfill: backfillOk(),
+        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
+        benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
+        evaluateScanGateStateless: vi.fn(),
+      },
+    };
+
+    const result = await runBenchmark(deps, baseParams({ timeframe: "day", fromTs, toTs, lookaheadBars }));
+
+    expect(result.candles).toHaveLength(lookaheadBars + 1);
+    expect(result.candles[0].ts).toBe(fromTs);
+    expect(result.candles[result.candles.length - 1].ts).toBe(fromTs + lookaheadBars * DAY_SECONDS);
   });
 });
