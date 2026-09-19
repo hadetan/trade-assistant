@@ -22,6 +22,9 @@ pub struct LakeSymbolEntry {
     pub from_ts: i64,
     pub to_ts: i64,
     pub candle_count: usize,
+    pub first_seen_from_ts: i64,
+    pub first_seen_to_ts: i64,
+    pub first_seen_candle_count: usize,
 }
 
 // `Connection` wraps a `RefCell`, so it is `Send` but not `Sync` -- holding
@@ -156,6 +159,23 @@ impl CandleStore {
         let from_ts = ordered.first().map(|c| c.ts).unwrap_or(0);
         let to_ts = ordered.last().map(|c| c.ts).unwrap_or(0);
         let candle_count = ordered.len();
+
+        // "First seen" is captured once, on the write that creates this
+        // partition, and carried forward unchanged by every later write
+        // (including backfill) -- it must never track this write's own bounds
+        // once the partition already exists.
+        let existing = lake_manifest::read_partition_keys(&self.root)?.into_iter().find(|k| {
+            k.symbol == symbol && k.timeframe == timeframe && k.source == source
+        });
+        let (first_seen_from_ts, first_seen_to_ts, first_seen_candle_count) = match existing {
+            Some(key) => (
+                key.first_seen_from_ts.unwrap_or(key.from_ts),
+                key.first_seen_to_ts.unwrap_or(key.to_ts),
+                key.first_seen_candle_count.unwrap_or(key.candle_count),
+            ),
+            None => (from_ts, to_ts, candle_count),
+        };
+
         lake_manifest::append_partition_key(
             &self.root,
             &LakePartitionKey {
@@ -165,6 +185,9 @@ impl CandleStore {
                 from_ts,
                 to_ts,
                 candle_count,
+                first_seen_from_ts: Some(first_seen_from_ts),
+                first_seen_to_ts: Some(first_seen_to_ts),
+                first_seen_candle_count: Some(first_seen_candle_count),
             },
         )?;
         Ok(())
@@ -181,13 +204,29 @@ impl CandleStore {
         let mut entries: Vec<LakeSymbolEntry> = keys
             .into_iter()
             .filter(|key| self.sourced_partition_path(&key.symbol, &key.timeframe, &key.source).exists())
-            .map(|key| LakeSymbolEntry {
-                symbol: key.symbol,
-                timeframe: key.timeframe,
-                source: key.source,
-                from_ts: key.from_ts,
-                to_ts: key.to_ts,
-                candle_count: key.candle_count,
+            .map(|key| {
+                // `key.first_seen_*` is `None` only for a manifest line written
+                // before this field existed. That original first-seen extent is
+                // genuinely unrecoverable for those pre-existing entries, so we
+                // honestly fall back to reporting the live extent instead:
+                // entries already touched by backfill before this change
+                // deployed will keep showing their post-backfill numbers
+                // forever. Only entries created or re-written after this change
+                // ships get a real preserved first-seen snapshot.
+                let first_seen_from_ts = key.first_seen_from_ts.unwrap_or(key.from_ts);
+                let first_seen_to_ts = key.first_seen_to_ts.unwrap_or(key.to_ts);
+                let first_seen_candle_count = key.first_seen_candle_count.unwrap_or(key.candle_count);
+                LakeSymbolEntry {
+                    symbol: key.symbol,
+                    timeframe: key.timeframe,
+                    source: key.source,
+                    from_ts: key.from_ts,
+                    to_ts: key.to_ts,
+                    candle_count: key.candle_count,
+                    first_seen_from_ts,
+                    first_seen_to_ts,
+                    first_seen_candle_count,
+                }
             })
             .collect();
         entries.sort_by(|a, b| (&a.symbol, &a.timeframe, &a.source).cmp(&(&b.symbol, &b.timeframe, &b.source)));
@@ -330,6 +369,51 @@ mod tests {
         assert_eq!(entries[0].from_ts, 100, "bounds must cover the first write's earliest candle");
         assert_eq!(entries[0].to_ts, 200, "bounds must cover the second write's latest candle, not just the first write's");
         assert_eq!(entries[0].candle_count, 2, "count must be cumulative across both writes");
+    }
+
+    #[test]
+    fn first_seen_extent_is_set_on_creation_and_never_changes_on_a_later_disjoint_write() {
+        let dir = tempdir().unwrap();
+        let store = CandleStore::open(dir.path()).unwrap();
+
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                "day",
+                "bhavcopy",
+                &[Candle { ts: 100, open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }],
+            )
+            .unwrap();
+
+        let after_creation = store.list_symbols().unwrap();
+        assert_eq!(after_creation.len(), 1);
+        assert_eq!(after_creation[0].first_seen_from_ts, 100, "first-seen must equal this write's own bounds at creation");
+        assert_eq!(after_creation[0].first_seen_to_ts, 100);
+        assert_eq!(after_creation[0].first_seen_candle_count, 1);
+
+        // A disjoint backfill write that extends the partition far outside the
+        // original bounds -- the whole point of the feature is that this must
+        // NOT move first_seen_*, even though it does move the live from/to/count.
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                "day",
+                "bhavcopy",
+                &[
+                    Candle { ts: 10, open: 2.0, high: 2.0, low: 2.0, close: 2.0, volume: 2 },
+                    Candle { ts: 500, open: 3.0, high: 3.0, low: 3.0, close: 3.0, volume: 3 },
+                ],
+            )
+            .unwrap();
+
+        let after_backfill = store.list_symbols().unwrap();
+        assert_eq!(after_backfill.len(), 1);
+        assert_eq!(after_backfill[0].from_ts, 10, "live from_ts must reflect the backfilled extent");
+        assert_eq!(after_backfill[0].to_ts, 500, "live to_ts must reflect the backfilled extent");
+        assert_eq!(after_backfill[0].candle_count, 3, "live candle_count must reflect the backfilled extent");
+        assert_eq!(after_backfill[0].first_seen_from_ts, 100, "first_seen_from_ts must remain the creation-time value");
+        assert_eq!(after_backfill[0].first_seen_to_ts, 100, "first_seen_to_ts must remain the creation-time value");
+        assert_eq!(after_backfill[0].first_seen_candle_count, 1, "first_seen_candle_count must remain the creation-time value");
     }
 
     #[test]

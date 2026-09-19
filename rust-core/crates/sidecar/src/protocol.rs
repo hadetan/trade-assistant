@@ -252,6 +252,9 @@ pub struct LakeSymbolWire {
     pub from_ts: i64,
     pub to_ts: i64,
     pub candle_count: usize,
+    pub first_seen_from_ts: i64,
+    pub first_seen_to_ts: i64,
+    pub first_seen_candle_count: usize,
 }
 
 #[derive(Debug, Serialize)]

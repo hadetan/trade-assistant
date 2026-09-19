@@ -69,6 +69,9 @@ fn lake_entry_to_wire(e: &LakeSymbolEntry) -> LakeSymbolWire {
         from_ts: e.from_ts,
         to_ts: e.to_ts,
         candle_count: e.candle_count,
+        first_seen_from_ts: e.first_seen_from_ts,
+        first_seen_to_ts: e.first_seen_to_ts,
+        first_seen_candle_count: e.first_seen_candle_count,
     }
 }
 

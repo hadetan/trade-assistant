@@ -263,12 +263,16 @@ fn lake_symbols_response_serializes_its_entries() {
             from_ts: 1_690_000_000,
             to_ts: 1_710_000_000,
             candle_count: 240,
+            first_seen_from_ts: 1_705_000_000,
+            first_seen_to_ts: 1_710_000_000,
+            first_seen_candle_count: 8,
         }],
         error: None,
     })
     .unwrap();
     assert!(json.contains("\"symbol\":\"NSE:INFY\""));
     assert!(json.contains("\"candle_count\":240"));
+    assert!(json.contains("\"first_seen_candle_count\":8"));
     assert!(!json.contains("error"));
 }
 
@@ -362,12 +366,16 @@ fn encodes_a_tagged_lake_symbols_response() {
             from_ts: 1_690_000_000,
             to_ts: 1_710_000_000,
             candle_count: 240,
+            first_seen_from_ts: 1_705_000_000,
+            first_seen_to_ts: 1_710_000_000,
+            first_seen_candle_count: 8,
         }],
         error: None,
     }));
     assert!(!line.contains('\n'));
     assert!(line.contains("\"type\":\"lake_symbols\""));
     assert!(line.contains("\"candle_count\":240"));
+    assert!(line.contains("\"first_seen_candle_count\":8"));
 }
 
 #[test]
