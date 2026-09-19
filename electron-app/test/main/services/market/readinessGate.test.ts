@@ -1,5 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkEngineOnlyReadiness } from "../../../../src/main/services/market/readinessGate";
+import { refreshNseHolidayCalendar } from "../../../../src/main/services/market/nseHolidays";
 import type { CandleWire } from "../../../../src/main/services/sidecar/sidecarProtocol";
 
 const IN_SESSION = new Date("2026-09-17T11:00:00+05:30"); // Thursday, mid-session
@@ -99,16 +103,37 @@ describe("checkEngineOnlyReadiness", () => {
     });
   });
 
-  it("fails with market_closed on a bundled-calendar holiday", async () => {
+  it("fails with market_closed on a holiday sourced from a live-refreshed calendar", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "readiness-gate-test-"));
+    const cachePath = path.join(tempDir, "cache.json");
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        CM: [
+          {
+            tradingDate: "26-Jan-2026",
+            weekDay: "Monday",
+            description: "Republic Day",
+            morning_session: null,
+            evening_session: null,
+            Sr_no: 1,
+          },
+        ],
+      }),
+    });
+    await refreshNseHolidayCalendar(fetchFn as unknown as typeof fetch, cachePath);
+
     const result = await checkEngineOnlyReadiness(deps() as never, { ...PARAMS, now: HOLIDAY });
     expect(result).toEqual({
       ok: false,
       reason: "market_closed",
       nextOpenAt: new Date("2026-01-27T09:15:00+05:30").getTime() / 1000,
     });
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("warns once about a year the bundled holiday calendar does not cover instead of silently trusting it", async () => {
+  it("warns once about a year no live refresh or cache has ever covered instead of silently trusting it", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await checkEngineOnlyReadiness(deps() as never, { ...PARAMS, now: new Date("2030-06-18T11:00:00+05:30") });
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("2030"));

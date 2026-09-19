@@ -1,4 +1,4 @@
-import { NSE_HOLIDAY_CALENDAR } from "./nseHolidays";
+import { getEffectiveHolidaysForYear, isYearCoveredByEffectiveCalendar } from "./nseHolidays";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -32,7 +32,7 @@ export function istYear(at: Date): number {
 }
 
 export function isHolidayCalendarCovered(year: number): boolean {
-  return Object.prototype.hasOwnProperty.call(NSE_HOLIDAY_CALENDAR, String(year));
+  return isYearCoveredByEffectiveCalendar(String(year));
 }
 
 export function isTradingDay(at: Date): boolean {
@@ -41,7 +41,7 @@ export function isTradingDay(at: Date): boolean {
   if (weekday === 0 || weekday === 6) return false;
   // An uncovered year degrades to weekends-only -- exactly what ingest.rs
   // already does -- rather than throwing inside a live readiness check.
-  return !(NSE_HOLIDAY_CALENDAR[String(ist.getUTCFullYear())] ?? []).includes(istDateKey(at));
+  return !getEffectiveHolidaysForYear(String(ist.getUTCFullYear())).includes(istDateKey(at));
 }
 
 export function isWithinSessionHours(at: Date): boolean {
