@@ -227,6 +227,31 @@ pub struct DayBackfillResponse {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ResolveBenchmarkWindowRequest {
+    pub id: u64,
+    pub symbol: String,
+    pub algo_id: String,
+    /// The requesting run's scoring window (its `lookaheadBars`) -- everything
+    /// else about which day to test is resolved server-side (P15§3).
+    pub lookahead: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResolveBenchmarkWindowResponse {
+    pub id: u64,
+    /// The day actually resolved and tested: UTC midnight of that calendar
+    /// day, in the same encoding `EnsureDayBackfillRequest::from_ts` used
+    /// when a caller supplied it directly.
+    pub from_ts: i64,
+    pub have: usize,
+    pub need: usize,
+    pub sufficient: bool,
+    pub archive_exhausted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct AlgorithmWire {
     pub id: String,
@@ -310,7 +335,7 @@ pub enum SidecarRequest {
     BenchmarkCompute(BenchmarkComputeRequest),
     EvaluateScanGateStateless(EvaluateScanGateStatelessRequest),
     ListAlgorithms(ListAlgorithmsRequest),
-    EnsureDayBackfill(EnsureDayBackfillRequest),
+    ResolveBenchmarkWindow(ResolveBenchmarkWindowRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -324,7 +349,7 @@ pub enum SidecarResponse {
     LakeCandles(LakeCandlesResponse),
     BenchmarkCompute(BenchmarkComputeResponse),
     Algorithms(ListAlgorithmsResponse),
-    DayBackfill(DayBackfillResponse),
+    BenchmarkWindow(ResolveBenchmarkWindowResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {
