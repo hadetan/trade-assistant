@@ -408,7 +408,7 @@ describe("runBenchmark frontier walk", () => {
       .mockResolvedValue({ type: "benchmark_window", id: 1, from_ts, have, need, sufficient: true, archive_exhausted: false });
   }
 
-  describe("runBenchmark: resolving the bhavcopy window automatically", () => {
+  describe("runBenchmark", () => {
     it("returns an insufficientHistory result and never computes when the symbol's real history falls short", async () => {
       const benchmarkCompute = vi.fn();
       const readLakeCandles = vi.fn();
@@ -636,6 +636,25 @@ describe("runBenchmark frontier walk", () => {
       expect(result.insufficientHistory).toBeUndefined();
       // Exactly the candle at ts===fromTs is the one frontier inside [fromTs, toTs).
       expect(result.decisionPoints.map((p) => p.ts)).toEqual([fromTs]);
+    });
+
+    it("reports insufficient history for a non-bhavcopy source using only local data, with no fetch attempted", async () => {
+      const resolveBenchmarkWindow = vi.fn();
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow,
+          readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12]) }),
+          benchmarkCompute: vi.fn(),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      const result = await runBenchmark(deps, baseRequest({ timeframe: "minute", source: "kaggle", requiredLookback: 20 }));
+
+      expect(resolveBenchmarkWindow).not.toHaveBeenCalled();
+      // 3 candles, requiredLookback 20 + positional default lookahead 5 = 25 needed.
+      expect(result.insufficientHistory).toEqual({ have: 3, need: 25, reason: "symbol_history" });
+      expect(result.decisionPoints).toEqual([]);
     });
   });
 

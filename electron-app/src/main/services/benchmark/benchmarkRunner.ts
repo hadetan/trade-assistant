@@ -272,5 +272,26 @@ export async function runBenchmark(
     return runFrontierWalk(deps, params, onProgress);
   }
 
-  throw new Error(`unsupported benchmark source: ${request.timeframe}/${request.source}`); // Task 7 replaces this
+  // Non-bhavcopy sources (intraday/community-archive) have no on-demand
+  // backfill (P14§1) -- the whole available partition is the run's window,
+  // and sufficiency is a pure local-data question (P15 scope addendum: no
+  // date field means no reason left to arbitrarily chunk to one day here).
+  const { candles: full } = await deps.sidecar.readLakeCandles(request.symbol, request.timeframe, request.source);
+  const params: BenchmarkRunParams = {
+    ...request,
+    lookaheadBars,
+    fromTs: full[0]?.ts ?? 0,
+    toTs: (full[full.length - 1]?.ts ?? 0) + 1,
+  };
+  const need = request.requiredLookback + lookaheadBars;
+  if (full.length < need) {
+    return {
+      params,
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: full.length, need, reason: "symbol_history" },
+    };
+  }
+  return runFrontierWalk(deps, params, onProgress);
 }
