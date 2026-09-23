@@ -1,10 +1,13 @@
-use crate::protocol::{DayBackfillResponse, EnsureDayBackfillRequest};
+use crate::protocol::{
+    DayBackfillResponse, EnsureDayBackfillRequest, ResolveBenchmarkWindowRequest,
+    ResolveBenchmarkWindowResponse,
+};
 use algo_core::registry;
 use chrono::NaiveDate;
 use ingestion::backfill::{walk_trading_days_backward, DayFetcher, DayOutcome, WalkStop};
 use ingestion::time::ist_date_from_epoch;
 use std::ops::ControlFlow;
-use storage::CandleStore;
+use storage::{Candle, CandleStore};
 
 /// Bhavcopy is the one on-demand day source this app has (P14§1), so a day
 /// backfill only ever reads and writes this one partition.
@@ -222,6 +225,75 @@ pub fn handle_ensure_day_backfill(
     }
 }
 
+/// Picks a day using only rows already on disk, so the run's trailing side
+/// is satisfied without ever needing a fetch (P15§3) -- backfill only ever
+/// walks backward, so trailing can never be grown after the fact. Needs no
+/// calendar/holiday logic: it counts rows, it doesn't walk dates.
+fn pick_candidate_from_ts(existing: &[Candle], lookahead: usize, today: NaiveDate) -> i64 {
+    let start_of_day = |day: NaiveDate| day.and_hms_opt(0, 0, 0).expect("midnight is a valid time").and_utc().timestamp();
+    if existing.is_empty() {
+        return start_of_day(today);
+    }
+    let mut sorted: Vec<&Candle> = existing.iter().collect();
+    sorted.sort_by_key(|c| std::cmp::Reverse(c.ts));
+    // `lookahead.min(sorted.len() - 1)`: when the lake holds no more than
+    // `lookahead` rows total, trailing can never reach `lookahead` from any
+    // candidate -- picking the earliest row here just routes into the
+    // existing, already-tested `trailing < lookahead` refusal below with zero
+    // fetches, rather than needing a second refusal path of its own.
+    let idx = lookahead.min(sorted.len() - 1);
+    start_of_day(ist_date_from_epoch(sorted[idx].ts))
+}
+
+/// Resolves which day to test (P15§3) and delegates to the untouched,
+/// already-tested per-day check above. The caller supplies only the symbol,
+/// algorithm, and this run's scoring window -- not a day.
+pub fn handle_resolve_benchmark_window(
+    store: &CandleStore,
+    request: ResolveBenchmarkWindowRequest,
+    today: NaiveDate,
+    fetch: DayFetcher<'_>,
+    on_progress: &mut dyn FnMut(usize, usize),
+) -> ResolveBenchmarkWindowResponse {
+    let id = request.id;
+    let lookahead = request.lookahead;
+    let lookback = registry::all_for_binary()
+        .iter()
+        .find(|algo| algo.id() == request.algo_id)
+        .map(|algo| algo.required_lookback())
+        .unwrap_or(0);
+    let need = lookback + lookahead;
+
+    let existing = match store.read_sourced_candles(&request.symbol, BACKFILL_TIMEFRAME, BACKFILL_SOURCE) {
+        Ok(candles) => candles,
+        Err(e) => {
+            return ResolveBenchmarkWindowResponse { id, from_ts: 0, have: 0, need, sufficient: false, archive_exhausted: false, error: Some(e.to_string()) };
+        }
+    };
+    let from_ts = pick_candidate_from_ts(&existing, lookahead, today);
+
+    // Delegates to the untouched per-day check; it re-reads `existing` itself
+    // (a small, accepted duplicate local read -- P14/P15 leave that function's
+    // body unmodified on purpose).
+    let checked = handle_ensure_day_backfill(
+        store,
+        EnsureDayBackfillRequest { id, symbol: request.symbol, algo_id: request.algo_id, lookahead, from_ts },
+        today,
+        fetch,
+        on_progress,
+    );
+
+    ResolveBenchmarkWindowResponse {
+        id: checked.id,
+        from_ts,
+        have: checked.have,
+        need: checked.need,
+        sufficient: checked.sufficient,
+        archive_exhausted: checked.archive_exhausted,
+        error: checked.error,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,7 +302,6 @@ mod tests {
     use ingestion::backfill::CLOSED_DAY_LIMIT;
     use ingestion::error::IngestionError;
     use ingestion::time::ist_session_close_epoch;
-    use storage::Candle;
     use tempfile::tempdir;
 
     fn date(y: i32, m: u32, d: u32) -> NaiveDate {
@@ -836,5 +907,111 @@ mod tests {
         assert_eq!(response.have, 0);
         assert!(response.sufficient);
         assert!(attempts.is_empty());
+    }
+
+    #[test]
+    fn resolve_picks_a_day_with_zero_fetches_when_the_lake_already_has_enough_on_both_sides() {
+        // Mirrors an_already_deep_enough_lake_answers_immediately_with_zero_fetches,
+        // but through the new entry point: nothing supplies from_ts, so the
+        // picked day must be the newest candle minus `lookahead` positions.
+        let lookahead = 1;
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        store
+            .write_sourced_candles(
+                "NSE:INFY",
+                BACKFILL_TIMEFRAME,
+                BACKFILL_SOURCE,
+                &[candle_at(date(2024, 1, 15)), candle_at(date(2024, 1, 12)), candle_at(date(2024, 1, 11))],
+            )
+            .unwrap();
+        let mut attempts: Vec<NaiveDate> = Vec::new();
+        let mut fetch = |_e: &str, d: NaiveDate| {
+            attempts.push(d);
+            Ok(bhavcopy_csv(d, &["INFY"]))
+        };
+
+        let response = handle_resolve_benchmark_window(
+            &store,
+            ResolveBenchmarkWindowRequest { id: 7, symbol: "NSE:INFY".to_string(), algo_id: "obv".to_string(), lookahead },
+            date(2024, 1, 15),
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        assert_eq!(response.id, 7);
+        // Newest is Jan 15 (index 0); index `lookahead` = 1 is Jan 12.
+        assert_eq!(response.from_ts, selected_day_ts(date(2024, 1, 12)));
+        assert_eq!(response.need, lookback_of("obv") + lookahead);
+        assert_eq!(response.have, lookback_of("obv") + lookahead);
+        assert!(response.sufficient);
+        assert!(attempts.is_empty(), "a deep-enough lake must never hit the network");
+    }
+
+    #[test]
+    fn resolve_refuses_immediately_when_the_whole_lake_is_thinner_than_the_lookahead_alone() {
+        // Trailing can never reach `lookahead` no matter which day is picked
+        // when the lake holds fewer rows than that in total -- the same
+        // structural refusal a_selected_day_without_enough_trailing_bars_is_answered_without_fetching
+        // exercises, reached here through candidate selection instead of a
+        // caller-supplied from_ts.
+        let lookahead = 5;
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        store
+            .write_sourced_candles("NSE:INFY", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &weekly_candles(date(2024, 1, 15), 3))
+            .unwrap();
+        let mut attempts: Vec<NaiveDate> = Vec::new();
+        let mut fetch = |_e: &str, d: NaiveDate| {
+            attempts.push(d);
+            Ok(bhavcopy_csv(d, &["INFY"]))
+        };
+
+        let response = handle_resolve_benchmark_window(
+            &store,
+            ResolveBenchmarkWindowRequest { id: 7, symbol: "NSE:INFY".to_string(), algo_id: "obv".to_string(), lookahead },
+            date(2024, 1, 15),
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        assert!(!response.sufficient);
+        assert!(attempts.is_empty(), "a lake this thin can never be fixed by fetching, so nothing should be attempted");
+        assert_eq!(response.need, lookback_of("obv") + lookahead);
+    }
+
+    #[test]
+    fn resolve_still_drives_the_leading_side_backfill_walk_when_needed() {
+        // The phase-defining incident, reached through resolve(): a thin lake
+        // and a deep algorithm, with no from_ts supplied at all.
+        let lookback = lookback_of("garch");
+        assert!(lookback > 8, "this fixture needs an algorithm deeper than the lake it starts with");
+        let lookahead = 5;
+        let lake = tempdir().unwrap();
+        let store = CandleStore::open(lake.path()).unwrap();
+        store
+            .write_sourced_candles("NSE:ZYDUSWELL", BACKFILL_TIMEFRAME, BACKFILL_SOURCE, &weekly_candles(date(2024, 1, 15), 8))
+            .unwrap();
+        let mut attempts: Vec<NaiveDate> = Vec::new();
+        let mut fetch = |_e: &str, d: NaiveDate| {
+            attempts.push(d);
+            Ok(bhavcopy_csv(d, &["ZYDUSWELL"]))
+        };
+
+        let response = handle_resolve_benchmark_window(
+            &store,
+            ResolveBenchmarkWindowRequest { id: 7, symbol: "NSE:ZYDUSWELL".to_string(), algo_id: "garch".to_string(), lookahead },
+            date(2024, 1, 15),
+            &mut fetch,
+            &mut |_, _| {},
+        );
+
+        // 8 candles held, lookahead 5 -> candidate is the candle at index 5
+        // (the 6th newest), which is the earliest of the 8 weekly candles is
+        // index 7 -- index 5 lands two weeks in from the earliest.
+        assert!(response.sufficient);
+        assert_eq!(response.need, lookback + lookahead);
+        assert_eq!(response.have, lookback + lookahead);
+        assert!(!attempts.is_empty(), "the leading side was short, so the walk must have run");
     }
 }
