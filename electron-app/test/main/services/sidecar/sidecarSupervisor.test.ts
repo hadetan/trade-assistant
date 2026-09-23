@@ -330,29 +330,25 @@ describe("SidecarSupervisor", () => {
     expect(response.algorithms[0].required_lookback).toBe(20);
   });
 
-  it("sends an ensure_day_backfill request and resolves the matching day_backfill response", async () => {
+  it("sends a resolve_benchmark_window request and resolves the matching benchmark_window response", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", SELECTED_DAY_TS, 5);
+    const pending = supervisor.resolveBenchmarkWindow("NSE:ZYDUSWELL", "kronos", 5);
 
     const [request] = await requestsSeen;
-    // Both sizing inputs ride along: the sidecar counts the bars at-or-before
-    // `from_ts` against required_lookback and the bars after it against
-    // `lookahead`, and it has no other way to learn either (P14 third-pass fix
-    // C2).
     expect(request).toEqual({
-      type: "ensure_day_backfill",
+      type: "resolve_benchmark_window",
       id: 1,
       symbol: "NSE:ZYDUSWELL",
       algo_id: "kronos",
       lookahead: 5,
-      from_ts: SELECTED_DAY_TS,
     });
 
     children[0].stdout.write(
       `${JSON.stringify({
-        type: "day_backfill",
+        type: "benchmark_window",
         id: 1,
+        from_ts: SELECTED_DAY_TS,
         have: 8,
         need: 256,
         sufficient: false,
@@ -360,7 +356,8 @@ describe("SidecarSupervisor", () => {
       })}\n`,
     );
     const response = await pending;
-    expect(response.type).toBe("day_backfill");
+    expect(response.type).toBe("benchmark_window");
+    expect(response.from_ts).toBe(SELECTED_DAY_TS);
     expect(response.have).toBe(8);
     expect(response.need).toBe(256);
     expect(response.sufficient).toBe(false);
@@ -370,13 +367,14 @@ describe("SidecarSupervisor", () => {
   it("carries an archive_exhausted answer through unchanged", async () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
-    const pending = supervisor.ensureDayBackfill("NSE:ZYDUSWELL", "kronos", SELECTED_DAY_TS, 0);
+    const pending = supervisor.resolveBenchmarkWindow("NSE:ZYDUSWELL", "kronos", 0);
     await requestsSeen;
 
     children[0].stdout.write(
       `${JSON.stringify({
-        type: "day_backfill",
+        type: "benchmark_window",
         id: 1,
+        from_ts: SELECTED_DAY_TS,
         have: 41,
         need: 256,
         sufficient: false,
@@ -392,7 +390,7 @@ describe("SidecarSupervisor", () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
     const seen: Array<[number, number]> = [];
-    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0, (index, total) => seen.push([index, total]));
+    const pending = supervisor.resolveBenchmarkWindow("NSE:INFY", "kronos", 0, (index, total) => seen.push([index, total]));
     await requestsSeen;
 
     children[0].stdout.write(
@@ -400,7 +398,7 @@ describe("SidecarSupervisor", () => {
     );
     // The request-level bracket carries no counts and must be ignored here.
     children[0].stdout.write(
-      `${JSON.stringify({ type: "progress", id: 1, step: "ensure_day_backfill", status: "running" })}\n`,
+      `${JSON.stringify({ type: "progress", id: 1, step: "resolve_benchmark_window", status: "running" })}\n`,
     );
     // A counted line belonging to some other in-flight request must not leak in.
     children[0].stdout.write(
@@ -410,7 +408,7 @@ describe("SidecarSupervisor", () => {
       `${JSON.stringify({ type: "progress", id: 1, step: "backfill", status: "running", index: 2, total: 256 })}\n`,
     );
     children[0].stdout.write(
-      `${JSON.stringify({ type: "day_backfill", id: 1, have: 256, need: 256, sufficient: true, archive_exhausted: false })}\n`,
+      `${JSON.stringify({ type: "benchmark_window", id: 1, from_ts: SELECTED_DAY_TS, have: 256, need: 256, sufficient: true, archive_exhausted: false })}\n`,
     );
 
     await pending;
@@ -424,11 +422,11 @@ describe("SidecarSupervisor", () => {
     const { supervisor, children } = makeSupervisor();
     const requestsSeen = readRequests(children[0]);
     const seen: Array<[number, number]> = [];
-    const pending = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0, (index, total) => seen.push([index, total]));
+    const pending = supervisor.resolveBenchmarkWindow("NSE:INFY", "kronos", 0, (index, total) => seen.push([index, total]));
     await requestsSeen;
 
     children[0].stdout.write(
-      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
+      `${JSON.stringify({ type: "benchmark_window", id: 1, from_ts: SELECTED_DAY_TS, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
     );
     await pending;
     children[0].stdout.write(
@@ -439,9 +437,6 @@ describe("SidecarSupervisor", () => {
   });
 
   it("gives a backfill its own long timeout instead of the ordinary per-request one", async () => {
-    // A from-scratch ttm/moirai backfill is ~750 requests at ~200ms apiece
-    // (P14§3) -- minutes, not seconds. Under the shared default it would be
-    // rejected every single time before the sidecar could finish.
     const children: FakeChild[] = [];
     const spawnFn = (_command: string, _args: string[]) => {
       const child = new FakeChild();
@@ -456,12 +451,12 @@ describe("SidecarSupervisor", () => {
     });
     supervisor.start();
 
-    const backfill = supervisor.ensureDayBackfill("NSE:INFY", "kronos", SELECTED_DAY_TS, 0); // id 1
+    const backfill = supervisor.resolveBenchmarkWindow("NSE:INFY", "kronos", 0); // id 1
     const ordinary = supervisor.benchmarkCompute("NSE:INFY", "day", "positional", [], "sma"); // id 2
 
     await expect(ordinary).rejects.toThrow(/timed out after 5ms/);
     children[0].stdout.write(
-      `${JSON.stringify({ type: "day_backfill", id: 1, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
+      `${JSON.stringify({ type: "benchmark_window", id: 1, from_ts: SELECTED_DAY_TS, have: 1, need: 1, sufficient: true, archive_exhausted: false })}\n`,
     );
     await expect(backfill).resolves.toMatchObject({ sufficient: true });
     expect(BACKFILL_REQUEST_TIMEOUT_MS).toBeGreaterThan(5);
