@@ -223,6 +223,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
           onClick={() => {
             setResult(null);
             setSelected(null);
+            setSelectedAlgoId(null);
             setError(null);
             setProgress(null);
           }}

@@ -318,18 +318,46 @@ describe("BenchmarkView", () => {
     await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
 
     fireEvent.click(await screen.findByRole("button", { name: /run another test/i }));
+
+    // The full reset also clears `selectedAlgoId`, so nothing reads as greyed
+    // out until an algorithm is picked again -- reaching the picker no longer
+    // depends on the greyed entry being the one that gets clicked back into.
+    const optionBeforeAlgoPick = await screen.findByRole("button", { name: /NSE:TCS/ });
+    expect(optionBeforeAlgoPick).toHaveProperty("disabled", false);
+    fireEvent.click(optionBeforeAlgoPick);
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
     const option = await screen.findByRole("button", { name: /NSE:INFY/ });
     expect(option).toHaveProperty("disabled", true);
     expect(option.textContent).toMatch(/not enough history/i);
 
-    // The full reset (Fix 3) cleared `selected`, so the greyed entry itself
-    // can no longer be clicked back into to reach the algorithm picker --
-    // any OTHER entry gets there just as well, since the greyed-out state is
-    // keyed by algorithm, not by which entry happens to be selected right now.
-    fireEvent.click(await screen.findByRole("button", { name: /NSE:TCS/ }));
     fireEvent.click(await screen.findByRole("button", { name: /^sma/i }));
     const optionUnderSma = await screen.findByRole("button", { name: /NSE:INFY/ });
     expect(optionUnderSma).toHaveProperty("disabled", false);
+  });
+
+  it("re-enables the sole lake entry after Run another test, so a single-entry lake is never a dead end", async () => {
+    const insufficient: BenchmarkResult = {
+      params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "kronos", lookaheadBars: 5, fromTs: 0, toTs: 0 },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 8, need: 256, reason: "symbol_history" },
+    };
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(insufficient) });
+    render(<BenchmarkView api={deps} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: /run another test/i }));
+
+    const option = await screen.findByRole("button", { name: /NSE:INFY/ });
+    expect(option).toHaveProperty("disabled", false);
+
+    fireEvent.click(option);
+    fireEvent.click(await screen.findByRole("button", { name: /^sma/i }));
+    expect(await screen.findByRole("button", { name: /run benchmark/i })).toHaveProperty("disabled", false);
   });
 
   it("does not grey out a symbol after a transient archive-unreachable result", async () => {
@@ -398,6 +426,11 @@ describe("BenchmarkView", () => {
     await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
 
     fireEvent.click(await screen.findByRole("button", { name: /run another test/i }));
+
+    // The full reset also clears `selectedAlgoId`, so re-pick it before the
+    // greyed-out state (keyed by entry + algorithm) reappears.
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY · day/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
     const dayOptionAfter = await screen.findByRole("button", { name: /NSE:INFY · day/ });
     const minuteOptionAfter = await screen.findByRole("button", { name: /NSE:INFY · minute/ });
     expect(dayOptionAfter).toHaveProperty("disabled", true);
