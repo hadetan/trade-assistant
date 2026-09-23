@@ -90,13 +90,16 @@ export interface BenchmarkComputeResponseWire {
   confluence: ConfluenceWire;
 }
 
-export interface DayBackfillResponseWire {
-  type: "day_backfill";
+export interface ResolveBenchmarkWindowResponseWire {
+  type: "benchmark_window";
   id: number;
-  // Of the `need` bars this run wants, how many it can actually use around the
-  // selected day: bars at-or-before it capped at the lookback, plus bars after
-  // it capped at the lookahead. Capped per side on purpose, so an insufficient
-  // answer can never show have >= need whichever side is short.
+  // The day the sidecar actually resolved and tested: UTC midnight of that
+  // calendar day, Unix epoch seconds.
+  from_ts: number;
+  // Of the `need` bars this run wants, how many it can actually use around
+  // the resolved day: bars at-or-before it capped at the lookback, plus bars
+  // after it capped at the lookahead. Capped per side on purpose, so an
+  // insufficient answer can never show have >= need whichever side is short.
   have: number;
   // The total bars this run needs before it can produce even one result: the
   // algorithm's own required_lookback plus the request's lookahead scoring
@@ -142,7 +145,7 @@ export type SidecarResponseWire =
   | LakeCandlesResponseWire
   | BenchmarkComputeResponseWire
   | ListAlgorithmsResponseWire
-  | DayBackfillResponseWire;
+  | ResolveBenchmarkWindowResponseWire;
 
 export type SidecarRequestWire =
   | { type: "compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[] }
@@ -156,11 +159,9 @@ export type SidecarRequestWire =
   | { type: "benchmark_compute"; id: number; symbol: string; timeframe: string; horizon: string; candles: CandleWire[]; algo_id: string }
   | { type: "evaluate_scan_gate_stateless"; id: number; prev: ConfluenceWire | null; curr: ConfluenceWire }
   | { type: "list_algorithms"; id: number }
-  // `lookahead` is the requesting run's scoring window and `from_ts` the start
-  // of the one day it will test. The sidecar needs both: it sizes against the
-  // bars around THAT day -- required_lookback at-or-before it, lookahead after
-  // it -- and total partition depth answers neither question.
-  | { type: "ensure_day_backfill"; id: number; symbol: string; algo_id: string; lookahead: number; from_ts: number };
+  // The sidecar resolves which day to test itself (P15§3) -- the caller
+  // supplies only this run's scoring window (`lookahead`), not a day.
+  | { type: "resolve_benchmark_window"; id: number; symbol: string; algo_id: string; lookahead: number };
 
 export function encodeRequest(request: SidecarRequestWire): string {
   return `${JSON.stringify(request)}\n`;
