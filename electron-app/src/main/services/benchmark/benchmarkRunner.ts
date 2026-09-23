@@ -45,9 +45,10 @@ export interface BenchmarkRunRequest {
   source: string;
   horizon: Horizon;
   algoId: string;
-  // Needed only by the non-bhavcopy path (Task 7), which has no backend
-  // resolution to lean on and must judge sufficiency from data already in
-  // hand.
+  // Needed only by the non-bhavcopy path
+  // (docs/superpowers/specs/2026-09-23-phase15-benchmark-auto-window-design.md
+  // P15§2 decision 3), which has no backend resolution to lean on and must
+  // judge sufficiency from data already in hand.
   requiredLookback: number;
 }
 
@@ -70,12 +71,22 @@ export const NEUTRAL_BAND = 0.001; // mirrors algo_core::benchmark_classify::DEF
 export const DEFAULT_POSITIONAL_LOOKAHEAD_BARS = 5; // ~1 trading week of day bars
 export const DEFAULT_INTRADAY_LOOKAHEAD_BARS = 30; // ~30 minute bars
 
-// `fromDate` (formerly BenchmarkView.tsx, now unused there -- see Task 9) yields
-// UTC midnight of a calendar day; `day_backfill.rs` derives a resolved day's
-// partition as `[from_ts, from_ts + DAY_SECONDS)`. Changing this without
-// changing that file reopens the boundary bug fix round 3 of this subsystem
-// existed to close.
+// `fromDate` (formerly BenchmarkView.tsx, now unused there -- see
+// docs/superpowers/specs/2026-09-23-phase15-benchmark-auto-window-design.md)
+// yields UTC midnight of a calendar day; `benchmark_window.rs` derives a
+// resolved day's partition as `[from_ts, from_ts + DAY_SECONDS)`. Changing
+// this without changing that file reopens the boundary bug fix round 3 of
+// this subsystem existed to close.
 const DAY_SECONDS = 86_400;
+
+// Bounds a non-bhavcopy run's frontier count on a large multi-year intraday
+// partition. Each frontier's compute call still carries the full history up
+// to that frontier (runFrontierWalk's own documented invariant), so letting
+// every bar in the partition become a candidate frontier multiplies an
+// already O(partition) per-call cost by another O(partition) calls -- this
+// caps total cost to O(partition) instead of O(partition^2), same order as
+// the bhavcopy path's single-frontier cost times a bounded frontier count.
+const MAX_NON_BHAVCOPY_DECISION_POINTS = 500;
 
 export function horizonForTimeframe(timeframe: string): Horizon {
   // Community-archive intraday data is stored under "minute", not "5minute", so
@@ -257,41 +268,50 @@ export async function runBenchmark(
     }
     const params: BenchmarkRunParams = { ...request, lookaheadBars, fromTs: window.from_ts, toTs: window.from_ts + DAY_SECONDS };
     if (!window.sufficient) {
+      const reason = window.archive_exhausted ? "archive_unreachable" : "symbol_history";
+      console.error(
+        `benchmark: insufficient history for ${request.symbol} (have ${window.have}, need ${window.need}, reason ${reason}, from_ts ${window.from_ts})`,
+      );
       return {
         params,
         candles: [],
         decisionPoints: [],
         cancelled: false,
-        insufficientHistory: {
-          have: window.have,
-          need: window.need,
-          reason: window.archive_exhausted ? "archive_unreachable" : "symbol_history",
-        },
+        insufficientHistory: { have: window.have, need: window.need, reason },
       };
     }
     return runFrontierWalk(deps, params, onProgress);
   }
 
   // Non-bhavcopy sources (intraday/community-archive) have no on-demand
-  // backfill (P14§1) -- the whole available partition is the run's window,
-  // and sufficiency is a pure local-data question (P15 scope addendum: no
-  // date field means no reason left to arbitrarily chunk to one day here).
+  // backfill (P14§1), and sufficiency is a pure local-data question (P15
+  // scope addendum: no date field means no reason left to arbitrarily chunk
+  // to one day here). The run's window is bounded to the most recent
+  // MAX_NON_BHAVCOPY_DECISION_POINTS-sized segment of the partition, not the
+  // whole thing -- see the constant's own comment above.
   const { candles: full } = await deps.sidecar.readLakeCandles(request.symbol, request.timeframe, request.source);
-  const params: BenchmarkRunParams = {
-    ...request,
-    lookaheadBars,
-    fromTs: full[0]?.ts ?? 0,
-    toTs: (full[full.length - 1]?.ts ?? 0) + 1,
-  };
   const need = request.requiredLookback + lookaheadBars;
   if (full.length < need) {
+    const fromTs = full[0]?.ts ?? 0;
+    console.error(`benchmark: insufficient history for ${request.symbol} (have ${full.length}, need ${need}, reason symbol_history, from_ts ${fromTs})`);
     return {
-      params,
+      params: { ...request, lookaheadBars, fromTs, toTs: (full[full.length - 1]?.ts ?? 0) + 1 },
       candles: [],
       decisionPoints: [],
       cancelled: false,
       insufficientHistory: { have: full.length, need, reason: "symbol_history" },
     };
   }
+  // Every frontier needs `requiredLookback` real bars before it -- the same
+  // guarantee the bhavcopy path gets from resolveBenchmarkWindow -- so the
+  // window never starts before that index. On a partition smaller than the
+  // cap this reduces to `requiredLookback` exactly, matching today's tests.
+  const startIndex = Math.max(request.requiredLookback, full.length - MAX_NON_BHAVCOPY_DECISION_POINTS - lookaheadBars);
+  const params: BenchmarkRunParams = {
+    ...request,
+    lookaheadBars,
+    fromTs: full[startIndex]?.ts ?? full[0]?.ts ?? 0,
+    toTs: (full[full.length - 1]?.ts ?? 0) + 1,
+  };
   return runFrontierWalk(deps, params, onProgress);
 }

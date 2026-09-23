@@ -656,6 +656,29 @@ describe("runBenchmark frontier walk", () => {
       expect(result.insufficientHistory).toEqual({ have: 3, need: 25, reason: "symbol_history" });
       expect(result.decisionPoints).toEqual([]);
     });
+
+    it("bounds a non-bhavcopy run's window to the most recent segment instead of the whole multi-year partition", async () => {
+      const lookaheadBars = defaultLookaheadForHorizon("positional");
+      const requiredLookback = 20;
+      const total = 10_000;
+      const candles = seriesOf(Array.from({ length: total }, (_, i) => 100 + i));
+      const readLakeCandles = vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles });
+      const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow: vi.fn(),
+          readLakeCandles,
+          benchmarkCompute,
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      const result = await runBenchmark(deps, baseRequest({ timeframe: "day", source: "kite", requiredLookback }));
+
+      const expectedStartIndex = total - 500 - lookaheadBars;
+      expect(result.params.fromTs).toBe(candles[expectedStartIndex].ts);
+      expect(result.decisionPoints.length).toBeLessThan(600);
+    });
   });
 
   it("bounds result.candles past the LAST decision point's lookahead, not just the first, for a multi-decision-point stateless_gate run", async () => {

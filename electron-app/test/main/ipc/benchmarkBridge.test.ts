@@ -144,7 +144,7 @@ describe("registerBenchmarkBridge", () => {
       requiredLookback: 0,
     };
     await handlers.get("benchmark:runBenchmark")!(event, params);
-    // series has 2 bars, positional default lookahead 5 -> no eligible frontier at all.
+    // series has 6 bars, positional default lookahead 5 -> one eligible frontier.
     expect(event.sender.send).toHaveBeenCalledWith("benchmark:progress", { phase: "run", index: 0, total: 1 });
   });
 

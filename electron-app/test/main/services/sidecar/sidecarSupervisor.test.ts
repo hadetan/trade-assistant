@@ -436,6 +436,9 @@ describe("SidecarSupervisor", () => {
     expect(seen).toEqual([]);
   });
 
+  // A from-scratch ttm/moirai backfill is ~750 requests at ~200ms apiece
+  // (P14§3) -- minutes, not seconds. Under the shared default it would be
+  // rejected every single time before the sidecar could finish.
   it("gives a backfill its own long timeout instead of the ordinary per-request one", async () => {
     const children: FakeChild[] = [];
     const spawnFn = (_command: string, _args: string[]) => {

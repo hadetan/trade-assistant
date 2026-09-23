@@ -21,6 +21,10 @@ function toDate(ts: number): string {
   return new Date(ts * 1000).toISOString().slice(0, 10);
 }
 
+function pairKey(entry: LakeSymbolEntry, algoId: string): string {
+  return `${entry.symbol}_${entry.timeframe}_${entry.source}:${algoId}`;
+}
+
 function progressLabel(algoId: string | null, progress: BenchmarkProgress | null): string {
   if (progress?.phase === "backfill") {
     return `Backfilling history — ${progress.index}/${progress.total} days`;
@@ -76,9 +80,15 @@ function ResultsView({ api, result }: { api: BenchmarkApi; result: BenchmarkResu
     return () => handle.dispose();
   }, [result]);
 
+  const testedFrom = toDate(result.params.fromTs);
+  const testedTo = toDate(result.params.toTs - 1);
+
   return (
     <div className="benchmark-results">
-      <p className="benchmark-tested-date">Tested {toDate(result.params.fromTs)}</p>
+      <p className="benchmark-tested-date">
+        Tested {testedFrom}
+        {testedTo !== testedFrom ? ` – ${testedTo}` : ""}
+      </p>
       {result.cancelled && <Banner variant="info">Cancelled — partial results</Banner>}
       <SummaryStrip points={result.decisionPoints} />
       <Button variant="ghost" onClick={() => void api.copyBenchmarkResult(JSON.stringify(result))}>
@@ -161,7 +171,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
         requiredLookback: algo?.requiredLookback ?? 0,
       });
       if (run.insufficientHistory?.reason === "symbol_history") {
-        setInsufficientPairs((prev) => new Set(prev).add(`${selected.symbol}:${selectedAlgoId}`));
+        setInsufficientPairs((prev) => new Set(prev).add(pairKey(selected, selectedAlgoId)));
       }
       setResult(run);
     } catch (e) {
@@ -207,7 +217,16 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
         </Card>
       )}
       {result && (
-        <Button type="button" variant="ghost" onClick={() => setResult(null)}>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            setResult(null);
+            setSelected(null);
+            setError(null);
+            setProgress(null);
+          }}
+        >
           ← Run another test
         </Button>
       )}
@@ -222,7 +241,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
           <h2>Benchmark</h2>
           <ul className="benchmark-picker">
             {entries.map((entry) => {
-              const isKnownInsufficient = selectedAlgoId !== null && insufficientPairs.has(`${entry.symbol}:${selectedAlgoId}`);
+              const isKnownInsufficient = selectedAlgoId !== null && insufficientPairs.has(pairKey(entry, selectedAlgoId));
               return (
                 <li key={`${entry.symbol}_${entry.timeframe}_${entry.source}`}>
                   <button

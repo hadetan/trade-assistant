@@ -47,7 +47,7 @@ fn usable_bars(leading: usize, trailing: usize, lookback: usize, lookahead: usiz
     leading.min(lookback) + trailing.min(lookahead)
 }
 
-pub fn handle_ensure_day_backfill(
+fn handle_ensure_day_backfill(
     store: &CandleStore,
     request: EnsureDayBackfillRequest,
     today: NaiveDate,
@@ -345,17 +345,17 @@ mod tests {
         Candle { ts: ist_session_close_epoch(day), open: 1.0, high: 1.0, low: 1.0, close: 1.0, volume: 1 }
     }
 
-    /// What the Benchmark UI actually puts on the wire as `from_ts`: UTC
-    /// midnight of the selected calendar day (BenchmarkView.tsx's `fromDate`),
-    /// which is 10 hours BEFORE that day's candle is stamped
+    /// The wire encoding of `from_ts`: UTC midnight of the selected calendar
+    /// day, which is 10 hours BEFORE that day's candle is stamped
     /// (`ist_session_close_epoch` = 15:30 IST = 10:00 UTC). Encoding fixtures
     /// the other way is what hid the boundary bug through three rounds.
     fn selected_day_ts(day: NaiveDate) -> i64 {
         day.and_hms_opt(0, 0, 0).expect("midnight is a valid time").and_utc().timestamp()
     }
 
-    // The Benchmark UI's own default: the selected day starts out as the
-    // entry's earliest available bar (BenchmarkView.tsx's `setDate`).
+    // A fixture standing in for a lake partition: `count` candles spaced a
+    // week apart, newest first, so index 0 is the entry's newest available
+    // bar and the last index is its earliest.
     fn weekly_candles(newest: NaiveDate, count: usize) -> Vec<Candle> {
         (0..count).map(|i| candle_at(newest - chrono::Duration::days(i as i64 * 7))).collect()
     }
@@ -1006,10 +1006,11 @@ mod tests {
             &mut |_, _| {},
         );
 
-        // 8 candles held, lookahead 5 -> candidate is the candle at index 5
-        // (the 6th newest), which is the earliest of the 8 weekly candles is
-        // index 7 -- index 5 lands two weeks in from the earliest.
+        // 8 candles held (index 0 = newest, index 7 = earliest), lookahead 5 ->
+        // candidate is the candle at index 5 (the 6th newest) = Dec 11, two weeks
+        // in from the earliest (Nov 27).
         assert!(response.sufficient);
+        assert_eq!(response.from_ts, selected_day_ts(date(2023, 12, 11)));
         assert_eq!(response.need, lookback + lookahead);
         assert_eq!(response.have, lookback + lookahead);
         assert!(!attempts.is_empty(), "the leading side was short, so the walk must have run");
