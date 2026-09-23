@@ -1,7 +1,7 @@
 import { clipboard, type IpcMain } from "electron";
 import type { SidecarSupervisor } from "../services/sidecar/sidecarSupervisor";
 import { runBenchmark, horizonForTimeframe } from "../services/benchmark/benchmarkRunner";
-import type { AlgorithmEntry, BenchmarkRunParams, LakeSymbolEntry } from "./rendererApi";
+import type { AlgorithmEntry, BenchmarkRunRequest, LakeSymbolEntry } from "./rendererApi";
 
 export interface BenchmarkBridgeDeps {
   ipcMain: Pick<IpcMain, "handle">;
@@ -12,7 +12,7 @@ export interface BenchmarkBridgeDeps {
     | "readLakeCandles"
     | "benchmarkCompute"
     | "evaluateScanGateStateless"
-    | "ensureDayBackfill"
+    | "resolveBenchmarkWindow"
     | "cancelCurrent"
   >;
 }
@@ -37,7 +37,7 @@ export function registerBenchmarkBridge(deps: BenchmarkBridgeDeps): void {
     const { algorithms } = await deps.sidecar.listAlgorithms();
     return algorithms.map((a) => ({ id: a.id, cost: a.cost as "fast" | "slow", requiredLookback: a.required_lookback }));
   });
-  deps.ipcMain.handle("benchmark:runBenchmark", (event, params: BenchmarkRunParams) =>
+  deps.ipcMain.handle("benchmark:runBenchmark", (event, params: BenchmarkRunRequest) =>
     runBenchmark({ sidecar: deps.sidecar }, params, (progress) => event.sender.send("benchmark:progress", progress)),
   );
   deps.ipcMain.handle("benchmark:cancelBenchmark", () => {
