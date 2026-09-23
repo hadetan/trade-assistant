@@ -2,7 +2,7 @@ use chrono::{NaiveDate, Utc};
 use ingestion::backfill::POLITENESS_DELAY_MS;
 use ingestion::io::fetch_udiff_bhavcopy;
 use ingestion::time::ist_date_from_epoch;
-use sidecar::day_backfill::handle_ensure_day_backfill;
+use sidecar::benchmark_window::handle_resolve_benchmark_window;
 use sidecar::handlers::{
     handle_add_watchlist_symbol, handle_benchmark_compute, handle_evaluate_scan_gate,
     handle_evaluate_scan_gate_stateless, handle_list_algorithms, handle_list_lake_symbols,
@@ -11,9 +11,9 @@ use sidecar::handlers::{
 };
 use sidecar::protocol::{
     benchmark_empty_response, empty_response, encode_progress, encode_progress_counted,
-    encode_response, parse_request, DayBackfillResponse, LakeCandlesResponse, LakeSymbolsResponse,
-    ListAlgorithmsResponse, PersistCandlesResponse, ScanGateResponse, SidecarRequest,
-    SidecarResponse, WatchlistResponse,
+    encode_response, parse_request, LakeCandlesResponse, LakeSymbolsResponse,
+    ListAlgorithmsResponse, PersistCandlesResponse, ResolveBenchmarkWindowResponse,
+    ScanGateResponse, SidecarRequest, SidecarResponse, WatchlistResponse,
 };
 use std::io::{self, BufRead, Write};
 use std::panic::{self, AssertUnwindSafe};
@@ -47,7 +47,7 @@ fn request_id(request: &SidecarRequest) -> u64 {
         SidecarRequest::BenchmarkCompute(r) => r.id,
         SidecarRequest::EvaluateScanGateStateless(r) => r.id,
         SidecarRequest::ListAlgorithms(r) => r.id,
-        SidecarRequest::EnsureDayBackfill(r) => r.id,
+        SidecarRequest::ResolveBenchmarkWindow(r) => r.id,
     }
 }
 
@@ -64,7 +64,7 @@ fn request_step(request: &SidecarRequest) -> &'static str {
         SidecarRequest::BenchmarkCompute(_) => "benchmark_compute",
         SidecarRequest::EvaluateScanGateStateless(_) => "evaluate_scan_gate_stateless",
         SidecarRequest::ListAlgorithms(_) => "list_algorithms",
-        SidecarRequest::EnsureDayBackfill(_) => "ensure_day_backfill",
+        SidecarRequest::ResolveBenchmarkWindow(_) => "resolve_benchmark_window",
     }
 }
 
@@ -283,7 +283,7 @@ fn main() {
                     }
                 }
             }
-            SidecarRequest::EnsureDayBackfill(request) => {
+            SidecarRequest::ResolveBenchmarkWindow(request) => {
                 let id = request.id;
                 match store.as_ref() {
                     Some(store) => {
@@ -295,21 +295,21 @@ fn main() {
                                 std::thread::sleep(std::time::Duration::from_millis(POLITENESS_DELAY_MS));
                                 fetch_udiff_bhavcopy(date, exchange)
                             };
-                            handle_ensure_day_backfill(store, request, today, &mut fetch, &mut |index, total| {
+                            handle_resolve_benchmark_window(store, request, today, &mut fetch, &mut |index, total| {
                                 writeln!(stdout, "{}", encode_progress_counted(id, "backfill", "running", index, total))
                                     .expect("stdout must be writable");
                                 stdout.flush().expect("stdout must flush");
                             })
                         }));
                         match result {
-                            Ok(response) => SidecarResponse::DayBackfill(response),
+                            Ok(response) => SidecarResponse::BenchmarkWindow(response),
                             Err(_) => {
-                                eprintln!("sidecar: ensure_day_backfill request {id} panicked");
-                                SidecarResponse::DayBackfill(DayBackfillResponse { id, have: 0, need: 0, sufficient: false, archive_exhausted: false, error: Some("ensure_day_backfill panicked".to_string()) })
+                                eprintln!("sidecar: resolve_benchmark_window request {id} panicked");
+                                SidecarResponse::BenchmarkWindow(ResolveBenchmarkWindowResponse { id, from_ts: 0, have: 0, need: 0, sufficient: false, archive_exhausted: false, error: Some("resolve_benchmark_window panicked".to_string()) })
                             }
                         }
                     }
-                    None => SidecarResponse::DayBackfill(DayBackfillResponse { id, have: 0, need: 0, sufficient: false, archive_exhausted: false, error: Some("no --lake-root configured".to_string()) }),
+                    None => SidecarResponse::BenchmarkWindow(ResolveBenchmarkWindowResponse { id, from_ts: 0, have: 0, need: 0, sufficient: false, archive_exhausted: false, error: Some("no --lake-root configured".to_string()) }),
                 }
             }
         };

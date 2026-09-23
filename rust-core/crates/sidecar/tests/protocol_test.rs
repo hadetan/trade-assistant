@@ -10,7 +10,7 @@ use sidecar::protocol::{
     ListLakeSymbolsRequest, ReadLakeCandlesRequest,
 };
 use sidecar::protocol::{AlgorithmWire, ListAlgorithmsRequest, ListAlgorithmsResponse};
-use sidecar::protocol::{DayBackfillResponse, EnsureDayBackfillRequest};
+use sidecar::protocol::{ResolveBenchmarkWindowResponse, ResolveBenchmarkWindowRequest};
 
 #[test]
 fn request_round_trips_from_json_line() {
@@ -441,31 +441,27 @@ fn encodes_a_tagged_algorithms_response() {
 }
 
 #[test]
-fn parses_a_tagged_ensure_day_backfill_request() {
-    // 1705276800 is 2024-01-15 00:00 UTC -- the selected day's START, which is
-    // what BenchmarkView.tsx puts on the wire. NOT that day's candle stamp
-    // (15:30 IST = 1705312800); the two differ by 36000 and confusing them is
-    // what made the leading/trailing split off by one bar.
-    let line = r#"{"type":"ensure_day_backfill","id":41,"symbol":"NSE:ZYDUSWELL","algo_id":"kronos","lookahead":5,"from_ts":1705276800}"#;
+fn parses_a_tagged_resolve_benchmark_window_request() {
+    // The resolve_benchmark_window request no longer requires from_ts on the wire --
+    // the day is resolved server-side per P15§3. The run's lookaheadBars is the only
+    // relevant parameter from the client.
+    let line = r#"{"type":"resolve_benchmark_window","id":41,"symbol":"NSE:ZYDUSWELL","algo_id":"kronos","lookahead":5}"#;
     match parse_request(line).unwrap() {
-        SidecarRequest::EnsureDayBackfill(request) => {
+        SidecarRequest::ResolveBenchmarkWindow(request) => {
             assert_eq!(request.id, 41);
             assert_eq!(request.symbol, "NSE:ZYDUSWELL");
             assert_eq!(request.algo_id, "kronos");
             assert_eq!(request.lookahead, 5, "sizing is per-run, so the run's scoring window must cross the wire");
-            assert_eq!(
-                request.from_ts, 1_705_276_800,
-                "sizing is per-selected-day, so the day the run tests must cross the wire too"
-            );
         }
-        _ => panic!("expected an ensure_day_backfill request"),
+        _ => panic!("expected a resolve_benchmark_window request"),
     }
 }
 
 #[test]
-fn encodes_a_tagged_day_backfill_response_and_omits_the_error_field_when_none() {
-    let line = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+fn encodes_a_tagged_benchmark_window_response_and_omits_the_error_field_when_none() {
+    let line = encode_response(&SidecarResponse::BenchmarkWindow(ResolveBenchmarkWindowResponse {
         id: 41,
+        from_ts: 0,
         have: 8,
         need: 256,
         sufficient: false,
@@ -473,7 +469,7 @@ fn encodes_a_tagged_day_backfill_response_and_omits_the_error_field_when_none() 
         error: None,
     }));
     assert!(!line.contains('\n'));
-    assert!(line.contains("\"type\":\"day_backfill\""));
+    assert!(line.contains("\"type\":\"benchmark_window\""));
     assert!(line.contains("\"id\":41"));
     assert!(line.contains("\"have\":8"));
     assert!(line.contains("\"need\":256"));
@@ -484,9 +480,10 @@ fn encodes_a_tagged_day_backfill_response_and_omits_the_error_field_when_none() 
 }
 
 #[test]
-fn a_day_backfill_response_carries_its_error_when_one_occurred() {
-    let line = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+fn a_benchmark_window_response_carries_its_error_when_one_occurred() {
+    let line = encode_response(&SidecarResponse::BenchmarkWindow(ResolveBenchmarkWindowResponse {
         id: 41,
+        from_ts: 0,
         have: 0,
         need: 256,
         sufficient: false,
@@ -498,16 +495,18 @@ fn a_day_backfill_response_carries_its_error_when_one_occurred() {
 
 #[test]
 fn an_exhausted_archive_is_a_distinct_wire_outcome_from_a_merely_short_history() {
-    let short_history = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+    let short_history = encode_response(&SidecarResponse::BenchmarkWindow(ResolveBenchmarkWindowResponse {
         id: 41,
+        from_ts: 0,
         have: 8,
         need: 256,
         sufficient: false,
         archive_exhausted: false,
         error: None,
     }));
-    let exhausted = encode_response(&SidecarResponse::DayBackfill(DayBackfillResponse {
+    let exhausted = encode_response(&SidecarResponse::BenchmarkWindow(ResolveBenchmarkWindowResponse {
         id: 41,
+        from_ts: 0,
         have: 8,
         need: 256,
         sufficient: false,
@@ -519,16 +518,14 @@ fn an_exhausted_archive_is_a_distinct_wire_outcome_from_a_merely_short_history()
 }
 
 #[test]
-fn an_ensure_day_backfill_request_is_constructible_for_a_round_trip() {
+fn a_resolve_benchmark_window_request_is_constructible_for_a_round_trip() {
     // Guards the field names the Electron mirror writes onto the wire.
-    let request = EnsureDayBackfillRequest {
+    let request = ResolveBenchmarkWindowRequest {
         id: 1,
         symbol: "NSE:INFY".to_string(),
         algo_id: "obv".to_string(),
         lookahead: 5,
-        from_ts: 1_705_329_000,
     };
     assert_eq!(request.algo_id, "obv");
     assert_eq!(request.lookahead, 5);
-    assert_eq!(request.from_ts, 1_705_329_000);
 }
