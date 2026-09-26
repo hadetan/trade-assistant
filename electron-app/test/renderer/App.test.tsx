@@ -187,6 +187,170 @@ describe("App", () => {
     expect(screen.queryByText(/overall read: bullish/i)).toBeNull();
   });
 
+  it("does not crash when reopening a pre-existing engine_only session whose stored result has no initialCandles field (Finding 1)", async () => {
+    installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "old-2", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "old-2",
+        response_mode: "engine_only",
+        messages: [
+          {
+            role: "user",
+            rendered_text: "NSE:INFY · 5minute · buying",
+            structured_payload: {
+              mode: "engine_only",
+              sessionId: "old-2",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+              interval: "5minute",
+              intent_lens: "buying",
+            },
+          },
+          {
+            id: "assistant-old-2",
+            role: "assistant",
+            rendered_text: "Overall read: bullish.",
+            structured_payload: {
+              mode: "engine_only",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              response: {
+                direction: "bullish",
+                conviction: "high",
+                text: "Overall read: bullish.",
+                confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
+              },
+              algo_results: [],
+              // No `initialCandles` field at all -- a session stored before this
+              // field existed (Finding 1 of the Task 8 review).
+            },
+          },
+        ],
+      }),
+      checkReadiness: vi.fn().mockResolvedValue({ ok: true }),
+    });
+    const { container } = render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+
+    await waitFor(() => expect(container.querySelector(".live-session-chart")).toBeTruthy());
+  });
+
+  it("remounts LiveSessionView and starts a fresh live session when a second Analyze targets a new instrument (Finding 3)", async () => {
+    const runAnalysis = vi
+      .fn()
+      .mockResolvedValueOnce({
+        mode: "engine_only",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+        interval: "5minute",
+        response: {
+          direction: "bullish",
+          conviction: "high",
+          text: "INFY read",
+          confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
+        },
+        algo_results: [],
+        initialCandles: [],
+      })
+      .mockResolvedValueOnce({
+        mode: "engine_only",
+        instrument: { symbol: "NSE:TCS", exchange: "NSE", segment: "NSE", kite_token_asof: "500410" },
+        interval: "5minute",
+        response: {
+          direction: "bearish",
+          conviction: "high",
+          text: "TCS read",
+          confluence: { bullish_count: 0, bearish_count: 1, neutral_count: 0, weighted_vote: -1 },
+        },
+        algo_results: [],
+        initialCandles: [],
+      });
+
+    const getSession = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: "session-1",
+        response_mode: "engine_only",
+        messages: [
+          {
+            id: "assistant-msg-1",
+            role: "assistant",
+            rendered_text: "INFY read",
+            structured_payload: {
+              mode: "engine_only",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              response: { direction: "bullish", conviction: "high", text: "INFY read", confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 } },
+              algo_results: [],
+              initialCandles: [],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: "session-1",
+        response_mode: "engine_only",
+        messages: [
+          {
+            id: "assistant-msg-2",
+            role: "assistant",
+            rendered_text: "TCS read",
+            structured_payload: {
+              mode: "engine_only",
+              instrument: { symbol: "NSE:TCS", exchange: "NSE", segment: "NSE", kite_token_asof: "500410" },
+              interval: "5minute",
+              response: { direction: "bearish", conviction: "high", text: "TCS read", confluence: { bullish_count: 0, bearish_count: 1, neutral_count: 0, weighted_vote: -1 } },
+              algo_results: [],
+              initialCandles: [],
+            },
+          },
+        ],
+      });
+
+    const bridge = installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
+      searchInstruments: vi
+        .fn()
+        .mockResolvedValueOnce({ data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }] })
+        .mockResolvedValueOnce({ data: [{ tradingsymbol: "TCS", exchange: "NSE", segment: "NSE", instrument_token: 500410 }] }),
+      runAnalysis,
+      getSession,
+    });
+    render(<App />);
+    await startEngineOnlyChat();
+
+    fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    await waitFor(() =>
+      expect(bridge.startLiveSession).toHaveBeenNthCalledWith(1, {
+        sessionId: "session-1",
+        assistantMessageId: "assistant-msg-1",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        interval: "5minute",
+      }),
+    );
+
+    fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "tcs" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:TCS" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    await waitFor(() =>
+      expect(bridge.startLiveSession).toHaveBeenNthCalledWith(2, {
+        sessionId: "session-1",
+        assistantMessageId: "assistant-msg-2",
+        instrument: { symbol: "NSE:TCS", exchange: "NSE", segment: "NSE", instrumentToken: "500410" },
+        interval: "5minute",
+      }),
+    );
+    // The remount (new `key`) tore down the old LiveSessionView instance before
+    // mounting the new one -- proof the old chart's live session was stopped.
+    expect(bridge.stopLiveSession).toHaveBeenCalledTimes(1);
+  });
+
   it("shows an error message when analysis fails instead of failing silently", async () => {
     installBridge({
       getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),

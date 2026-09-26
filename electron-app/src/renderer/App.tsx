@@ -246,11 +246,17 @@ export function App(): JSX.Element {
                 !(suppressStaleBlocked && result.mode === "engine_only_blocked") &&
                 (result.mode === "engine_only" ? (
                   <LiveSessionView
+                    // Forces a full unmount+remount on every new analyze (a fresh
+                    // resultMessageId each time) rather than reusing the previous
+                    // instrument's live session -- see Finding 3 of the Task 8 review.
+                    key={resultMessageId}
                     sessionId={activeSession.id}
                     assistantMessageId={resultMessageId}
                     instrument={instrumentRefToSelection(result.instrument)}
                     interval={result.interval}
-                    initialCandles={result.initialCandles}
+                    // A session stored before this PR's initialCandles addition has no
+                    // such field at all; fall back rather than send undefined on.
+                    initialCandles={result.initialCandles ?? []}
                     initialConfluence={result.response.confluence}
                     bridge={bridge()}
                   />

@@ -2,6 +2,7 @@
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LiveSessionView } from "../../src/renderer/LiveSessionView";
+import { createLiveChart } from "../../src/renderer/liveChart";
 
 vi.mock("../../src/renderer/liveChart", () => ({
   createLiveChart: vi.fn(() => ({ applyTick: vi.fn(), applyClosedCandle: vi.fn(), dispose: vi.fn() })),
@@ -84,5 +85,52 @@ describe("LiveSessionView", () => {
 
     const fillAfter = container.querySelector(".verdict-meter-fill") as HTMLElement;
     expect(fillAfter.style.width).toBe("40%");
+  });
+
+  it("does not let a stale tick/candleClose/status handler from a torn-down session touch the new chart (Finding 2)", () => {
+    const tickHandlers: Array<(tick: unknown) => void> = [];
+    const candleCloseHandlers: Array<(payload: unknown) => void> = [];
+    const statusHandlers: Array<(status: unknown) => void> = [];
+    const bridge = fakeBridge({
+      onLiveTick: vi.fn((handler) => tickHandlers.push(handler)),
+      onLiveCandleClose: vi.fn((handler) => candleCloseHandlers.push(handler)),
+      onLiveStatus: vi.fn((handler) => statusHandlers.push(handler)),
+    });
+
+    const { rerender } = render(<LiveSessionView {...SESSION_PROPS} sessionId="s1" bridge={bridge} />);
+    const firstChart = vi.mocked(createLiveChart).mock.results[0].value as {
+      applyTick: ReturnType<typeof vi.fn>;
+      applyClosedCandle: ReturnType<typeof vi.fn>;
+      dispose: ReturnType<typeof vi.fn>;
+    };
+
+    // Switching sessionId re-runs the mount effect: cleanup tears down chart A
+    // (registering its `disposed` flag) before chart B's handlers are registered.
+    rerender(<LiveSessionView {...SESSION_PROPS} sessionId="s2" bridge={bridge} />);
+    const secondChart = vi.mocked(createLiveChart).mock.results[1].value as {
+      applyTick: ReturnType<typeof vi.fn>;
+      applyClosedCandle: ReturnType<typeof vi.fn>;
+      dispose: ReturnType<typeof vi.fn>;
+    };
+
+    expect(firstChart.dispose).toHaveBeenCalledTimes(1);
+    expect(tickHandlers).toHaveLength(2);
+    expect(candleCloseHandlers).toHaveLength(2);
+    expect(statusHandlers).toHaveLength(2);
+
+    const [staleTick, staleCandleClose, staleStatus] = [tickHandlers[0], candleCloseHandlers[0], statusHandlers[0]];
+
+    expect(() => {
+      staleTick({ ts: 1, price: 100 });
+      staleCandleClose({ candle: { ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }, confluence: { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: -0.5 } });
+      staleStatus("connected");
+    }).not.toThrow();
+
+    // The stale handlers must be permanent no-ops -- neither the disposed chart A
+    // nor the live chart B should have been touched by them.
+    expect(firstChart.applyTick).not.toHaveBeenCalled();
+    expect(firstChart.applyClosedCandle).not.toHaveBeenCalled();
+    expect(secondChart.applyTick).not.toHaveBeenCalled();
+    expect(secondChart.applyClosedCandle).not.toHaveBeenCalled();
   });
 });
