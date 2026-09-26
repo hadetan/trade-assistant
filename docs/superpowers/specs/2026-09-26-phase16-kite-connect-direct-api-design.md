@@ -24,7 +24,7 @@ A load-bearing finding that keeps this phase's risk to AI-Assisted mode low: `Ki
 5. `kiteLogin.ts` — `runKiteLogin` swaps its MCP connect step for constructing the new REST caller + ticker; the OAuth token exchange itself (`kiteOAuth.ts`) is unchanged (P16§8).
 6. `kiteClient.ts` — drop the `login()` method and its `KITE_READ_TOOL_NAMES.login` entry (nothing calls it once the MCP-only anonymous-login flow is gone); the other 10 read methods are unchanged (P16§3).
 7. **Drift-warning removal, all the way to the renderer.** With no more MCP `tools/list` to diff against, the whole added-in-Phase-3 drift concept has nothing left to check. `rendererApi.ts`'s `AppStatus.driftWarning` field and `"mcpDrift"` from `BannerKind` are removed; `bootstrap.ts`'s `driftWarning`/`dispatchBanner({kind:"mcpDrift",...})` wiring in the `login()` closure is removed; `SettingsWindow.tsx:133`'s `{status?.driftWarning && <Banner variant="warning">...}` line is removed. This is the one place this phase actually touches the renderer (P16§9).
-8. **Deleted entirely:** `mcpConnection.ts`, `kiteMcpLoginFlow.ts`, `mcpDriftMonitor.ts`, `mcpClientAdapter.ts`, `runKiteMcpOnlyLogin`, `KiteMcpOnlyConfig`, the `@modelcontextprotocol/sdk` dependency. Also deleted: everything Phase 8 added (`kiteMcpOAuthProvider.ts`, `kiteMcpOAuthCallback.ts` and their tests) — MCP-only mode's entire purpose was avoiding the paid subscription, which this phase now requires unconditionally, so it has no remaining reason to exist.
+8. **Deleted entirely:** `mcpConnection.ts`, `kiteMcpLoginFlow.ts`, `mcpDriftMonitor.ts`, `mcpClientAdapter.ts`, `runKiteMcpOnlyLogin`, `KiteMcpOnlyConfig`, the `@modelcontextprotocol/sdk` dependency, and all their tests. (Correction from an earlier draft of this doc: Phase 8's own design doc proposed an SDK-native `OAuthClientProvider`/`kiteMcpOAuthProvider.ts`/`kiteMcpOAuthCallback.ts` implementation, but the codebase as it actually stands today never built that — the shipped MCP-only mode is the simpler anonymous-connect-plus-`login`-tool-plus-poll flow in `kiteMcpLoginFlow.ts`/`mcpConnection.ts`'s `connectKiteMcpAnonymous`. There is nothing named `kiteMcpOAuthProvider.ts`/`kiteMcpOAuthCallback.ts` in the tree to delete.) MCP-only mode's entire purpose was avoiding the paid subscription, which this phase now requires unconditionally, so it has no remaining reason to exist.
 9. `bootstrap.ts` — the `config.mode === "full" ? ... : ...` branch (P8§9) collapses back to a single unconditional call, mirroring the shape from before Phase 8 existed.
 10. New dependency: `kiteconnect` (npm, official Zerodha package) — used only for its `KiteTicker` class, per the user's explicit choice (hand-rolled REST, official package for the WebSocket).
 
@@ -290,7 +290,7 @@ Matches this codebase's existing convention (Vitest, injected fakes via `vi.fn()
 - `kiteTicker.test.ts` (new) — wraps a fake `KiteTicker`-shaped object (constructor-injected), asserts `connect`/`subscribe`/`onTick`/`onConnectionChange`/`disconnect` delegate correctly and that the library's `error`/`noreconnect`/`reconnect` events map to the three `onConnectionChange` states.
 - `kiteLogin.test.ts` — updated: `runKiteLogin` now asserts a `KiteSession` shaped `{ kite, ticker, close }` (no more `connection`/`drift`); `runKiteMcpOnlyLogin`'s tests are deleted along with the function.
 - `kiteClient.test.ts` — the exact-method-count safety allowlist test updates from 11 to 10 (P16§3); otherwise unchanged, still proving no write-tool method exists.
-- **Deleted test files:** `mcpConnection.test.ts`, `kiteMcpLoginFlow.test.ts`, `mcpDriftMonitor.test.ts`, `mcpClientAdapter.test.ts`, `kiteMcpOAuthProvider.test.ts`, `kiteMcpOAuthCallback.test.ts`.
+- **Deleted test files:** `mcpConnection.test.ts`, `kiteMcpLoginFlow.test.ts`, `mcpDriftMonitor.test.ts`, `mcpClientAdapter.test.ts`.
 
 ## P16§12 Manual verification checklist
 
@@ -330,9 +330,7 @@ The only real proof this works — Kite Connect's live REST/WS behavior can't be
 - `electron-app/src/main/services/kite/kiteMcpLoginFlow.ts`
 - `electron-app/src/main/services/kite/mcpDriftMonitor.ts`
 - `electron-app/src/main/services/kite/mcpClientAdapter.ts`
-- `electron-app/src/main/services/kite/kiteMcpOAuthProvider.ts`
-- `electron-app/src/main/services/kite/kiteMcpOAuthCallback.ts`
-- All corresponding `*.test.ts` files for the above.
+- All corresponding `*.test.ts` files for the above (`kiteMcpLoginFlow.test.ts`, `mcpConnection.test.ts`, `mcpDriftMonitor.test.ts`, `mcpClientAdapter.test.ts`).
 
 **Exact `KiteConfig`/`KiteSession` shapes:**
 ```typescript
