@@ -23,9 +23,10 @@ A load-bearing finding that keeps this phase's risk to AI-Assisted mode low: `Ki
 4. `kiteTicker.ts` (new) — a thin wrapper around the official `kiteconnect` npm package's `KiteTicker`, connected and exposed on `KiteSession`, with reconnect-with-backoff. **Not consumed by anything in this phase** — Phase 17 is the first consumer (P16§7).
 5. `kiteLogin.ts` — `runKiteLogin` swaps its MCP connect step for constructing the new REST caller + ticker; the OAuth token exchange itself (`kiteOAuth.ts`) is unchanged (P16§8).
 6. `kiteClient.ts` — drop the `login()` method and its `KITE_READ_TOOL_NAMES.login` entry (nothing calls it once the MCP-only anonymous-login flow is gone); the other 10 read methods are unchanged (P16§3).
-7. **Deleted entirely:** `mcpConnection.ts`, `kiteMcpLoginFlow.ts`, `mcpDriftMonitor.ts`, `mcpClientAdapter.ts`, `runKiteMcpOnlyLogin`, `KiteMcpOnlyConfig`, the `@modelcontextprotocol/sdk` dependency. Also deleted: everything Phase 8 added (`kiteMcpOAuthProvider.ts`, `kiteMcpOAuthCallback.ts` and their tests) — MCP-only mode's entire purpose was avoiding the paid subscription, which this phase now requires unconditionally, so it has no remaining reason to exist.
-8. `bootstrap.ts` — the `config.mode === "full" ? ... : ...` branch (P8§9) collapses back to a single unconditional call, mirroring the shape from before Phase 8 existed.
-9. New dependency: `kiteconnect` (npm, official Zerodha package) — used only for its `KiteTicker` class, per the user's explicit choice (hand-rolled REST, official package for the WebSocket).
+7. **Drift-warning removal, all the way to the renderer.** With no more MCP `tools/list` to diff against, the whole added-in-Phase-3 drift concept has nothing left to check. `rendererApi.ts`'s `AppStatus.driftWarning` field and `"mcpDrift"` from `BannerKind` are removed; `bootstrap.ts`'s `driftWarning`/`dispatchBanner({kind:"mcpDrift",...})` wiring in the `login()` closure is removed; `SettingsWindow.tsx:133`'s `{status?.driftWarning && <Banner variant="warning">...}` line is removed. This is the one place this phase actually touches the renderer (P16§9).
+8. **Deleted entirely:** `mcpConnection.ts`, `kiteMcpLoginFlow.ts`, `mcpDriftMonitor.ts`, `mcpClientAdapter.ts`, `runKiteMcpOnlyLogin`, `KiteMcpOnlyConfig`, the `@modelcontextprotocol/sdk` dependency. Also deleted: everything Phase 8 added (`kiteMcpOAuthProvider.ts`, `kiteMcpOAuthCallback.ts` and their tests) — MCP-only mode's entire purpose was avoiding the paid subscription, which this phase now requires unconditionally, so it has no remaining reason to exist.
+9. `bootstrap.ts` — the `config.mode === "full" ? ... : ...` branch (P8§9) collapses back to a single unconditional call, mirroring the shape from before Phase 8 existed.
+10. New dependency: `kiteconnect` (npm, official Zerodha package) — used only for its `KiteTicker` class, per the user's explicit choice (hand-rolled REST, official package for the WebSocket).
 
 **Not in scope (deferred to Phase 17, or permanently out of scope):**
 
@@ -269,7 +270,7 @@ export async function runKiteLogin(deps: KiteLoginDeps): Promise<KiteSession> {
 - `kiteSessionState.ts` (`classifyKiteResponse`, `looksLikeSessionExpiry`) — unchanged; `kiteRestCaller.ts`'s thrown error messages are constructed specifically to keep matching its existing regexes (P16§5).
 - `instrumentParsing.ts` — unchanged; already tolerates the flat-array shape `kiteInstrumentMaster.search()` produces.
 - `historicalDataArchive.ts`, `candleWarmup.ts`, `readinessGate.ts`, `analysisBridge.ts`, the Claude persona pipeline — unchanged; all consume `KiteClient`'s existing method surface, which is unchanged (minus `login()`, which none of them call).
-- The renderer (`App.tsx`, `InstrumentSearch.tsx`, `AppShell.tsx`'s status dot) — unchanged; none of it knows or cares how `KiteClient` is transported.
+- The renderer, **except one line**: `App.tsx`, `InstrumentSearch.tsx`, `AppShell.tsx`'s status dot — unchanged; none of it knows or cares how `KiteClient` is transported. `SettingsWindow.tsx` loses its one drift-warning banner line (P16§2 item 7) since there is no more MCP `tools/list` to diff against.
 
 ## P16§10 Error handling / edge cases
 
@@ -317,7 +318,9 @@ The only real proof this works — Kite Connect's live REST/WS behavior can't be
 - `electron-app/src/main/services/kite/kiteConfig.ts` — single required shape, no union (P16§4).
 - `electron-app/src/main/services/kite/kiteClient.ts` — drop `login()` + its `KITE_READ_TOOL_NAMES` entry; 10 methods remain (P16§3).
 - `electron-app/src/main/services/kite/kiteLogin.ts` — `runKiteLogin` builds the REST caller + ticker instead of connecting MCP; `KiteSession` becomes `{ kite, ticker, close }`; `runKiteMcpOnlyLogin` deleted (P16§8).
-- `electron-app/src/main/bootstrap.ts` — collapse the mode ternary back to one unconditional `runKiteLogin` call (P16§8).
+- `electron-app/src/main/bootstrap.ts` — collapse the mode ternary back to one unconditional `runKiteLogin` call; remove the `driftWarning`/`dispatchBanner({kind:"mcpDrift",...})` wiring from the `login()` closure and `driftWarning` from `currentStatus()` (P16§8, P16§2 item 7).
+- `electron-app/src/main/ipc/rendererApi.ts` — remove `AppStatus.driftWarning` and `"mcpDrift"` from `BannerKind` (P16§2 item 7).
+- `electron-app/src/renderer/SettingsWindow.tsx` — remove the `{status?.driftWarning && <Banner variant="warning">...}` line (P16§2 item 7).
 - `electron-app/package.json` — remove `@modelcontextprotocol/sdk`; add `kiteconnect`.
 - `electron-app/.env.example` — remove MCP-only-mode language; both credentials required (P16§4).
 - `electron-app/test/main/services/kite/kiteConfig.test.ts`, `kiteClient.test.ts`, `kiteLogin.test.ts` — updated cases (P16§11).
@@ -343,7 +346,7 @@ export interface KiteSession { kite: KiteClient; ticker: KiteTickerClient; close
 - (c) No token/session persistence of any kind — matches every prior phase (P16§2).
 - (d) No Settings UI added — `.env` only (P16§2).
 - (e) Nothing in this phase subscribes to or consumes ticks — `kiteTicker.ts` is connected and tested in isolation only; Phase 17 is the first real consumer (P16§7).
-- (f) `kiteSessionState.ts`, `instrumentParsing.ts`, `historicalDataArchive.ts`, `candleWarmup.ts`, `readinessGate.ts`, `analysisBridge.ts`, the Claude persona pipeline, and the entire renderer are not modified by this phase (P16§9).
+- (f) `kiteSessionState.ts`, `instrumentParsing.ts`, `historicalDataArchive.ts`, `candleWarmup.ts`, `readinessGate.ts`, `analysisBridge.ts`, and the Claude persona pipeline are not modified by this phase. The renderer is modified in exactly one place — `SettingsWindow.tsx`'s drift-warning banner line — and nowhere else (P16§9).
 
 ## P16§14 Out of scope for this phase
 
