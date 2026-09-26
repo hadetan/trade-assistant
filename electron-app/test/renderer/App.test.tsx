@@ -6,6 +6,7 @@ vi.mock("../../src/renderer/liveChart", () => ({
   createLiveChart: vi.fn(() => ({ applyTick: vi.fn(), applyClosedCandle: vi.fn(), dispose: vi.fn() })),
 }));
 
+import { createLiveChart } from "../../src/renderer/liveChart";
 import { App } from "../../src/renderer/App";
 import { installBridge } from "./testBridge";
 
@@ -236,6 +237,7 @@ describe("App", () => {
     fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
 
     await waitFor(() => expect(container.querySelector(".live-session-chart")).toBeTruthy());
+    expect(vi.mocked(createLiveChart)).toHaveBeenCalledWith(expect.anything(), []);
   });
 
   it("remounts LiveSessionView and starts a fresh live session when a second Analyze targets a new instrument (Finding 3)", async () => {
