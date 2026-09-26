@@ -151,10 +151,10 @@ export interface RendererApi {
   copyBenchmarkResult(text: string): Promise<void>;
   startLiveSession(params: StartLiveSessionParams): Promise<void>;
   stopLiveSession(): Promise<void>;
-  // These three return an unsubscribe function, unlike the subscriptions above
-  // it: LiveSessionView remounts on every Analyze click, so without one each
-  // mount would leave three more listeners on the same IPC channels for the
-  // lifetime of the renderer process.
+  // Unlike the app-lifetime subscriptions above, these three return an
+  // unsubscribe function: LiveSessionView remounts on every Analyze click, so
+  // without one each mount would leave three more listeners on the same IPC
+  // channels for the rest of the renderer process's life.
   onLiveTick(handler: (tick: LiveTickWire) => void): () => void;
   onLiveCandleClose(handler: (payload: LiveCandleClosePayload) => void): () => void;
   onLiveStatus(handler: (status: TickerConnectionStatus) => void): () => void;
