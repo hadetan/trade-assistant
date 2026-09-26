@@ -13,7 +13,7 @@ function installSettingsBridge(overrides: Partial<SettingsApi> = {}): SettingsAp
     listWatchlist: vi.fn().mockResolvedValue([]),
     addWatchlistSymbol: vi.fn().mockResolvedValue(["NSE:INFY"]),
     removeWatchlistSymbol: vi.fn().mockResolvedValue([]),
-    getAccountStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+    getAccountStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
     searchInstruments: vi.fn().mockResolvedValue({ data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }] }),
     ...overrides,
   };

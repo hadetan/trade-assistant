@@ -39,6 +39,19 @@ export interface BenchmarkProgress {
   total: number;
 }
 
+export interface BenchmarkRunRequest {
+  symbol: string;
+  timeframe: string;
+  source: string;
+  horizon: Horizon;
+  algoId: string;
+  // Needed only by the non-bhavcopy path
+  // (docs/superpowers/specs/2026-09-23-phase15-benchmark-auto-window-design.md
+  // P15§2 decision 3), which has no backend resolution to lean on and must
+  // judge sufficiency from data already in hand.
+  requiredLookback: number;
+}
+
 export interface BenchmarkResult {
   params: BenchmarkRunParams;
   candles: CandleWire[];
@@ -57,6 +70,23 @@ export interface BenchmarkResult {
 export const NEUTRAL_BAND = 0.001; // mirrors algo_core::benchmark_classify::DEFAULT_NEUTRAL_BAND
 export const DEFAULT_POSITIONAL_LOOKAHEAD_BARS = 5; // ~1 trading week of day bars
 export const DEFAULT_INTRADAY_LOOKAHEAD_BARS = 30; // ~30 minute bars
+
+// `fromDate` (formerly BenchmarkView.tsx, now unused there -- see
+// docs/superpowers/specs/2026-09-23-phase15-benchmark-auto-window-design.md)
+// yields UTC midnight of a calendar day; `benchmark_window.rs` derives a
+// resolved day's partition as `[from_ts, from_ts + DAY_SECONDS)`. Changing
+// this without changing that file reopens the boundary bug fix round 3 of
+// this subsystem existed to close.
+const DAY_SECONDS = 86_400;
+
+// Bounds a non-bhavcopy run's frontier count on a large multi-year intraday
+// partition. Each frontier's compute call still carries the full history up
+// to that frontier (runFrontierWalk's own documented invariant), so letting
+// every bar in the partition become a candidate frontier multiplies an
+// already O(partition) per-call cost by another O(partition) calls -- this
+// caps total cost to O(partition) instead of O(partition^2), same order as
+// the bhavcopy path's single-frontier cost times a bounded frontier count.
+const MAX_NON_BHAVCOPY_DECISION_POINTS = 500;
 
 export function horizonForTimeframe(timeframe: string): Horizon {
   // Community-archive intraday data is stored under "minute", not "5minute", so
@@ -90,51 +120,17 @@ export function summarize(points: DecisionPoint[]): { correct: number; incorrect
 export interface BenchmarkRunnerDeps {
   sidecar: Pick<
     SidecarSupervisor,
-    "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless" | "ensureDayBackfill"
+    "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless" | "resolveBenchmarkWindow"
   >;
 }
 
-export async function runBenchmark(
-  deps: BenchmarkRunnerDeps,
+export type FrontierWalkDeps = { sidecar: Pick<SidecarSupervisor, "readLakeCandles" | "benchmarkCompute" | "evaluateScanGateStateless"> };
+
+export async function runFrontierWalk(
+  deps: FrontierWalkDeps,
   params: BenchmarkRunParams,
   onProgress?: (progress: BenchmarkProgress) => void,
 ): Promise<BenchmarkResult> {
-  // Bhavcopy is the one on-demand source this app has, and it is day-only
-  // (P14§1). The source check is not redundant with the timeframe check: the
-  // live warm-up path writes ("day", "kite") partitions into the same lake, and
-  // backfilling would top up ("day", "bhavcopy") while the run below reads the
-  // partition this entry actually names (decision (viii)).
-  if (params.timeframe === "day" && params.source === "bhavcopy") {
-    let backfill;
-    try {
-      backfill = await deps.sidecar.ensureDayBackfill(params.symbol, params.algoId, params.fromTs, params.lookaheadBars, (index, total) =>
-        onProgress?.({ phase: "backfill", index, total }),
-      );
-    } catch (error) {
-      if ((error as { cancelled?: boolean }).cancelled !== true) throw error;
-      return { params, candles: [], decisionPoints: [], cancelled: true };
-    }
-    if (backfill.error && !backfill.sufficient) {
-      throw new Error(`backfill failed for ${params.symbol}: ${backfill.error}`);
-    }
-    if (backfill.error) {
-      console.error(`benchmark: backfill for ${params.symbol} reported: ${backfill.error}`);
-    }
-    if (!backfill.sufficient) {
-      return {
-        params,
-        candles: [],
-        decisionPoints: [],
-        cancelled: false,
-        insufficientHistory: {
-          have: backfill.have,
-          need: backfill.need,
-          reason: backfill.archive_exhausted ? "archive_unreachable" : "symbol_history",
-        },
-      };
-    }
-  }
-
   const { candles } = await deps.sidecar.readLakeCandles(params.symbol, params.timeframe, params.source);
   // The FULL lake partition is the compute window: each frontier's
   // series.slice(0, i + 1) must legitimately reach back before fromTs, or
@@ -243,4 +239,79 @@ export async function runBenchmark(
   const lastFrontierIndex = decisionPoints.length > 0 ? decisionPoints[decisionPoints.length - 1].frontierIndex : firstFrontier;
   const candleEnd = Math.min(lastFrontierIndex + params.lookaheadBars + 1, series.length);
   return { params, candles: series.slice(firstFrontier, candleEnd), decisionPoints, cancelled };
+}
+
+export async function runBenchmark(
+  deps: BenchmarkRunnerDeps,
+  request: BenchmarkRunRequest,
+  onProgress?: (progress: BenchmarkProgress) => void,
+): Promise<BenchmarkResult> {
+  const lookaheadBars = defaultLookaheadForHorizon(request.horizon);
+
+  // Bhavcopy is the one on-demand source this app has, and it is day-only
+  // (P14§1) -- only this path has a backend that can resolve a day for it.
+  if (request.timeframe === "day" && request.source === "bhavcopy") {
+    let window;
+    try {
+      window = await deps.sidecar.resolveBenchmarkWindow(request.symbol, request.algoId, lookaheadBars, (index, total) =>
+        onProgress?.({ phase: "backfill", index, total }),
+      );
+    } catch (error) {
+      if ((error as { cancelled?: boolean }).cancelled !== true) throw error;
+      return { params: { ...request, lookaheadBars, fromTs: 0, toTs: 0 }, candles: [], decisionPoints: [], cancelled: true };
+    }
+    if (window.error && !window.sufficient) {
+      throw new Error(`backfill failed for ${request.symbol}: ${window.error}`);
+    }
+    if (window.error) {
+      console.error(`benchmark: backfill for ${request.symbol} reported: ${window.error}`);
+    }
+    const params: BenchmarkRunParams = { ...request, lookaheadBars, fromTs: window.from_ts, toTs: window.from_ts + DAY_SECONDS };
+    if (!window.sufficient) {
+      const reason = window.archive_exhausted ? "archive_unreachable" : "symbol_history";
+      console.error(
+        `benchmark: insufficient history for ${request.symbol} (have ${window.have}, need ${window.need}, reason ${reason}, from_ts ${window.from_ts})`,
+      );
+      return {
+        params,
+        candles: [],
+        decisionPoints: [],
+        cancelled: false,
+        insufficientHistory: { have: window.have, need: window.need, reason },
+      };
+    }
+    return runFrontierWalk(deps, params, onProgress);
+  }
+
+  // Non-bhavcopy sources (intraday/community-archive) have no on-demand
+  // backfill (P14§1), and sufficiency is a pure local-data question (P15
+  // scope addendum: no date field means no reason left to arbitrarily chunk
+  // to one day here). The run's window is bounded to the most recent
+  // MAX_NON_BHAVCOPY_DECISION_POINTS-sized segment of the partition, not the
+  // whole thing -- see the constant's own comment above.
+  const { candles: full } = await deps.sidecar.readLakeCandles(request.symbol, request.timeframe, request.source);
+  const need = request.requiredLookback + lookaheadBars;
+  if (full.length < need) {
+    const fromTs = full[0]?.ts ?? 0;
+    console.error(`benchmark: insufficient history for ${request.symbol} (have ${full.length}, need ${need}, reason symbol_history, from_ts ${fromTs})`);
+    return {
+      params: { ...request, lookaheadBars, fromTs, toTs: (full[full.length - 1]?.ts ?? 0) + 1 },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: full.length, need, reason: "symbol_history" },
+    };
+  }
+  // Every frontier needs `requiredLookback` real bars before it -- the same
+  // guarantee the bhavcopy path gets from resolveBenchmarkWindow -- so the
+  // window never starts before that index. On a partition smaller than the
+  // cap this reduces to `requiredLookback` exactly, matching today's tests.
+  const startIndex = Math.max(request.requiredLookback, full.length - MAX_NON_BHAVCOPY_DECISION_POINTS - lookaheadBars);
+  const params: BenchmarkRunParams = {
+    ...request,
+    lookaheadBars,
+    fromTs: full[startIndex]?.ts ?? full[0]?.ts ?? 0,
+    toTs: (full[full.length - 1]?.ts ?? 0) + 1,
+  };
+  return runFrontierWalk(deps, params, onProgress);
 }

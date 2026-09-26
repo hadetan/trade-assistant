@@ -5,10 +5,11 @@ import {
   defaultLookaheadForHorizon,
   horizonForTimeframe,
   runBenchmark,
+  runFrontierWalk,
   summarize,
   NEUTRAL_BAND,
 } from "../../../../src/main/services/benchmark/benchmarkRunner";
-import type { BenchmarkRunnerDeps, DecisionPoint } from "../../../../src/main/services/benchmark/benchmarkRunner";
+import type { BenchmarkRunnerDeps, DecisionPoint, FrontierWalkDeps } from "../../../../src/main/services/benchmark/benchmarkRunner";
 import type { CandleWire, ConfluenceWire } from "../../../../src/main/services/sidecar/sidecarProtocol";
 
 function point(outcome: DecisionPoint["outcome"]): DecisionPoint {
@@ -79,12 +80,6 @@ describe("summarize", () => {
 const BULLISH: ConfluenceWire = { bullish_count: 8, bearish_count: 1, neutral_count: 1, weighted_vote: 0.5 };
 const DAY_SECONDS = 86_400;
 
-function backfillOk(have = 10_000, need = 0) {
-  return vi
-    .fn()
-    .mockResolvedValue({ type: "day_backfill", id: 1, have, need, sufficient: true, archive_exhausted: false });
-}
-
 function seriesOf(closes: number[]): CandleWire[] {
   return closes.map((close, i) => ({ ts: 1_000 + i, open: close, high: close, low: close, close, volume: 100 }));
 }
@@ -106,15 +101,14 @@ function baseParams(overrides: Partial<import("../../../../src/main/services/ben
 describe("runBenchmark frontier walk", () => {
   it("positional session_close produces one decision point per eligible bar", async () => {
     const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17]) }),
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ lookaheadBars: 3 }));
+    const result = await runFrontierWalk(deps, baseParams({ lookaheadBars: 3 }));
     // N=8, L=3, break when i+3>=8 -> i in 0..4 -> 5 decision points.
     expect(result.decisionPoints).toHaveLength(5);
     expect(benchmarkCompute).toHaveBeenCalledTimes(5);
@@ -126,9 +120,8 @@ describe("runBenchmark frontier walk", () => {
     const decisions = ["WorthLook", "NoChange", "WorthAiCall", "NoChange"];
     let gateCall = 0;
     const gateArgs: Array<{ prev: ConfluenceWire | null; curr: ConfluenceWire }> = [];
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf(closes) }),
         benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[], _algoId: string) =>
           Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: perFrontier[window.length - 1] }),
@@ -139,7 +132,7 @@ describe("runBenchmark frontier walk", () => {
         }),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ horizon: "intraday", lookaheadBars: 2 }));
+    const result = await runFrontierWalk(deps, baseParams({ horizon: "intraday", lookaheadBars: 2 }));
     expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([0, 2]);
     expect(gateArgs[0].prev).toBeNull();
     expect(gateArgs[1].prev).toEqual(gateArgs[0].curr);
@@ -148,15 +141,14 @@ describe("runBenchmark frontier walk", () => {
 
   it("skips a zero/negative frontier close without a marker but keeps walking", async () => {
     const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, -5, 13, 14, 15]) }),
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ lookaheadBars: 2 }));
+    const result = await runFrontierWalk(deps, baseParams({ lookaheadBars: 2 }));
     // N=6, L=2 -> eligible i in 0..3; i=2 has close -5 -> skipped.
     expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([0, 1, 3]);
     // Bounded past the LAST decision point's (frontierIndex 3) own lookahead
@@ -168,30 +160,28 @@ describe("runBenchmark frontier walk", () => {
 
   it("stops at the lookahead boundary with no out-of-range read", async () => {
     const benchmarkCompute = vi.fn();
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12]) }),
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ lookaheadBars: 5 }));
+    const result = await runFrontierWalk(deps, baseParams({ lookaheadBars: 5 }));
     expect(result.decisionPoints).toHaveLength(0);
     expect(benchmarkCompute).not.toHaveBeenCalled();
   });
 
   it("wires classification exactly against the realized future close", async () => {
     async function outcomeFor(closes: number[]): Promise<string> {
-      const deps: BenchmarkRunnerDeps = {
+      const deps: FrontierWalkDeps = {
         sidecar: {
-          ensureDayBackfill: backfillOk(),
           readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf(closes) }),
           benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
           evaluateScanGateStateless: vi.fn(),
         },
       };
-      const result = await runBenchmark(deps, baseParams({ lookaheadBars: 1 }));
+      const result = await runFrontierWalk(deps, baseParams({ lookaheadBars: 1 }));
       return result.decisionPoints[0].outcome;
     }
     expect(await outcomeFor([100, 110])).toBe("correct"); // bullish + +10% future move
@@ -207,15 +197,14 @@ describe("runBenchmark frontier walk", () => {
       if (call === 3) return Promise.reject(new Error("sidecar request 3 timed out"));
       return Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
     });
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17]) }),
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ lookaheadBars: 1 }));
+    const result = await runFrontierWalk(deps, baseParams({ lookaheadBars: 1 }));
     expect(result.decisionPoints).toHaveLength(2); // the first two frontiers survived
     expect(result.cancelled).toBe(false);
     consoleError.mockRestore();
@@ -224,31 +213,29 @@ describe("runBenchmark frontier walk", () => {
   it("propagates an initial readLakeCandles rejection instead of resolving empty", async () => {
     const benchmarkCompute = vi.fn();
     const evaluateScanGateStateless = vi.fn();
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockRejectedValue(new Error("lake read failed")),
         benchmarkCompute,
         evaluateScanGateStateless,
       },
     };
-    await expect(runBenchmark(deps, baseParams())).rejects.toThrow("lake read failed");
+    await expect(runFrontierWalk(deps, baseParams())).rejects.toThrow("lake read failed");
     expect(benchmarkCompute).not.toHaveBeenCalled();
     expect(evaluateScanGateStateless).not.toHaveBeenCalled();
   });
 
   it("invokes onProgress once per surviving loop iteration with the correct (index, total) pairs", async () => {
     const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17]) }),
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
       },
     };
     const progress: Array<[string, number, number]> = [];
-    const result = await runBenchmark(deps, baseParams({ lookaheadBars: 3 }), (p) => progress.push([p.phase, p.index, p.total]));
+    const result = await runFrontierWalk(deps, baseParams({ lookaheadBars: 3 }), (p) => progress.push([p.phase, p.index, p.total]));
     // N=8, L=3 -> eligible i in 0..4 (5 iterations), each reported against that same
     // eligible-frontier count (toTs is unbounded here, so the lookahead bound wins).
     expect(progress).toEqual([
@@ -278,16 +265,15 @@ describe("runBenchmark frontier walk", () => {
       volume: 100,
     }));
     const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
       },
     };
     const progress: Array<[string, number, number]> = [];
-    await runBenchmark(deps, baseParams({ timeframe: "day", fromTs: dayStart, toTs, lookaheadBars: 2 }), (p) =>
+    await runFrontierWalk(deps, baseParams({ timeframe: "day", fromTs: dayStart, toTs, lookaheadBars: 2 }), (p) =>
       progress.push([p.phase, p.index, p.total]),
     );
     expect(progress).toEqual([["run", 0, 1]]);
@@ -308,9 +294,8 @@ describe("runBenchmark frontier walk", () => {
     }));
     const fromTs = candles[37].ts;
     const windows: number[] = [];
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
         benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[]) => {
           windows.push(window.length);
@@ -319,7 +304,7 @@ describe("runBenchmark frontier walk", () => {
         evaluateScanGateStateless: vi.fn(),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ fromTs, toTs: 1e12, lookaheadBars: 1 }));
+    const result = await runFrontierWalk(deps, baseParams({ fromTs, toTs: 1e12, lookaheadBars: 1 }));
     // Frontiers 37 and 38 are eligible (39 has no bar at i+1); each is handed
     // everything up to and including itself, reaching back before fromTs.
     expect(windows).toEqual([38, 39]);
@@ -341,16 +326,15 @@ describe("runBenchmark frontier walk", () => {
       close: 100 + i,
       volume: 100,
     }));
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
         benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
         evaluateScanGateStateless: vi.fn(),
       },
     };
     const progress: Array<[string, number, number]> = [];
-    await runBenchmark(deps, baseParams({ fromTs: candles[37].ts, toTs: 1e12, lookaheadBars: 1 }), (p) =>
+    await runFrontierWalk(deps, baseParams({ fromTs: candles[37].ts, toTs: 1e12, lookaheadBars: 1 }), (p) =>
       progress.push([p.phase, p.index, p.total]),
     );
     expect(progress).toEqual([
@@ -376,15 +360,14 @@ describe("runBenchmark frontier walk", () => {
       volume: 100,
     }));
     const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ timeframe: "day", fromTs: dayStart, toTs, lookaheadBars: 5 }));
+    const result = await runFrontierWalk(deps, baseParams({ timeframe: "day", fromTs: dayStart, toTs, lookaheadBars: 5 }));
     expect(result.decisionPoints.length).toBeGreaterThanOrEqual(1);
   });
 
@@ -395,278 +378,307 @@ describe("runBenchmark frontier walk", () => {
       if (call === 3) return Promise.reject(Object.assign(new Error("sidecar run cancelled"), { cancelled: true }));
       return Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
     });
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17]) }),
         benchmarkCompute,
         evaluateScanGateStateless: vi.fn(),
       },
     };
-    const result = await runBenchmark(deps, baseParams({ lookaheadBars: 1 }));
+    const result = await runFrontierWalk(deps, baseParams({ lookaheadBars: 1 }));
     expect(result.cancelled).toBe(true);
     expect(result.decisionPoints).toHaveLength(2);
   });
 
-  it("returns an insufficientHistory result and never computes when the symbol's real history falls short", async () => {
-    const benchmarkCompute = vi.fn();
-    const readLakeCandles = vi.fn();
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill: vi.fn().mockResolvedValue({
-          type: "day_backfill",
-          id: 1,
-          have: 8,
-          need: 256,
-          sufficient: false,
-          archive_exhausted: false,
-        }),
-        readLakeCandles,
-        benchmarkCompute,
-        evaluateScanGateStateless: vi.fn(),
-      },
+  function baseRequest(overrides: Partial<import("../../../../src/main/services/benchmark/benchmarkRunner").BenchmarkRunRequest> = {}) {
+    return {
+      symbol: "NSE:INFY",
+      timeframe: "day",
+      source: "bhavcopy",
+      horizon: "positional" as const,
+      algoId: "sma",
+      requiredLookback: 20,
+      ...overrides,
     };
+  }
 
-    const result = await runBenchmark(deps, baseParams({ algoId: "kronos" }));
-
-    expect(result.insufficientHistory).toEqual({ have: 8, need: 256, reason: "symbol_history" });
-    expect(result.decisionPoints).toEqual([]);
-    expect(result.candles).toEqual([]);
-    expect(result.cancelled).toBe(false);
-    // Nothing downstream of the pre-flight runs -- not even the lake read.
-    expect(readLakeCandles).not.toHaveBeenCalled();
-    expect(benchmarkCompute).not.toHaveBeenCalled();
-  });
-
-  it("sizes the pre-flight against the one selected algorithm and leaves a sufficient run untouched", async () => {
-    const ensureDayBackfill = backfillOk(400);
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill,
-        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13]) }),
-        benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
-
-    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", lookaheadBars: 1, fromTs: 1_000 }));
-
-    expect(ensureDayBackfill).toHaveBeenCalledTimes(1);
-    expect(ensureDayBackfill.mock.calls[0][0]).toBe("NSE:INFY");
-    expect(ensureDayBackfill.mock.calls[0][1]).toBe("kronos");
-    // This run's own selected day and scoring window, not defaults: the sidecar
-    // sizes against the bars surrounding that one day and cannot infer either.
-    expect(ensureDayBackfill.mock.calls[0][2]).toBe(1_000);
-    expect(ensureDayBackfill.mock.calls[0][3]).toBe(1);
-    expect(result.insufficientHistory).toBeUndefined();
-    expect(result.decisionPoints).toHaveLength(3);
-  });
-
-  it("skips the pre-flight entirely for a non-day timeframe, which has no bhavcopy source", async () => {
-    const ensureDayBackfill = backfillOk();
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill,
-        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13]) }),
-        benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
-
-    await runBenchmark(deps, baseParams({ timeframe: "minute", source: "kaggle", horizon: "positional", lookaheadBars: 1 }));
-
-    expect(ensureDayBackfill).not.toHaveBeenCalled();
-  });
-
-  it("skips the pre-flight for a day entry that is not bhavcopy-sourced, so it cannot verdict the wrong partition", async () => {
-    // The live warm-up path writes ("day", "kite") partitions
-    // (candleWarmup.ts's WARMUP_SOURCE, historicalDataArchive.ts's `day`
-    // lookback hint) and they appear in the same picker. Backfilling would
-    // check ("day", "bhavcopy") while the run reads ("day", "kite") --
-    // wasted fetches at best, a bogus insufficient-history verdict at worst.
-    const ensureDayBackfill = backfillOk();
-    const readLakeCandles = vi
+  function resolveOk(from_ts = 0, have = 10_000, need = 0) {
+    return vi
       .fn()
-      .mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13]) });
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill,
-        readLakeCandles,
-        benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
+      .mockResolvedValue({ type: "benchmark_window", id: 1, from_ts, have, need, sufficient: true, archive_exhausted: false });
+  }
 
-    const result = await runBenchmark(deps, baseParams({ timeframe: "day", source: "kite", lookaheadBars: 1 }));
+  describe("runBenchmark", () => {
+    it("returns an insufficientHistory result and never computes when the symbol's real history falls short", async () => {
+      const benchmarkCompute = vi.fn();
+      const readLakeCandles = vi.fn();
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow: vi.fn().mockResolvedValue({
+            type: "benchmark_window",
+            id: 1,
+            from_ts: 1_000,
+            have: 8,
+            need: 256,
+            sufficient: false,
+            archive_exhausted: false,
+          }),
+          readLakeCandles,
+          benchmarkCompute,
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
 
-    expect(ensureDayBackfill).not.toHaveBeenCalled();
-    // And the run is otherwise exactly what it was before this phase.
-    expect(readLakeCandles).toHaveBeenCalledWith("NSE:INFY", "day", "kite");
-    expect(result.insufficientHistory).toBeUndefined();
-    expect(result.decisionPoints).toHaveLength(3);
-  });
+      const result = await runBenchmark(deps, baseRequest({ algoId: "kronos" }));
 
-  it("reports an exhausted archive as its own reason instead of blaming the symbol's history", async () => {
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill: vi.fn().mockResolvedValue({
-          type: "day_backfill",
-          id: 1,
-          have: 41,
-          need: 256,
-          sufficient: false,
-          archive_exhausted: true,
-        }),
-        readLakeCandles: vi.fn(),
-        benchmarkCompute: vi.fn(),
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
-
-    const result = await runBenchmark(deps, baseParams({ algoId: "kronos" }));
-
-    expect(result.insufficientHistory).toEqual({ have: 41, need: 256, reason: "archive_unreachable" });
-    expect(result.cancelled).toBe(false);
-  });
-
-  it("reports backfill progress as its own phase before the frontier walk's", async () => {
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill: vi.fn().mockImplementation((_symbol: string, _algoId: string, _fromTs: number, _lookahead: number, onDay?: (i: number, t: number) => void) => {
-          onDay?.(1, 2);
-          onDay?.(2, 2);
-          return Promise.resolve({ type: "day_backfill", id: 1, have: 2, need: 2, sufficient: true, archive_exhausted: false });
-        }),
-        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12]) }),
-        benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
-    const progress: Array<[string, number, number]> = [];
-
-    await runBenchmark(deps, baseParams({ lookaheadBars: 1 }), (p) => progress.push([p.phase, p.index, p.total]));
-
-    // N=3, L=1 -> eligible frontiers i in {0, 1}.
-    expect(progress).toEqual([
-      ["backfill", 1, 2],
-      ["backfill", 2, 2],
-      ["run", 0, 2],
-      ["run", 1, 2],
-    ]);
-  });
-
-  it("a thin lake backfilled around the UI's default selected day yields a real decision point for THAT day", async () => {
-    // The bug this guards, in the shape a real invocation has: the Benchmark UI
-    // tests exactly ONE candle (fromTs = the start of the selected day, toTs one
-    // day later) and defaults that day to the entry's EARLIEST bar. A backfill
-    // sized so that *some* frontier somewhere in the series is usable is not
-    // enough -- the one the UI selects has to be the usable one. Here the lake
-    // started with 8 bars and the walk added the 19 older ones the earliest of
-    // those 8 was missing, so that bar itself carries a full lookback.
-    const lookback = 20;
-    const lookahead = 5;
-    const originalBars = 8;
-    const backfilled = lookback - 1; // the earliest original bar already counts as one
-    const total = backfilled + originalBars; // 27
-    // Production encoding, exactly: each day's candle is stamped at that day's
-    // 15:30 IST close (10:00 UTC), while the UI sends the day's UTC MIDNIGHT as
-    // `fromTs`. A fixture that collapses the two hides the off-by-one this test
-    // exists to pin.
-    const firstDayStart = Date.UTC(2023, 10, 13) / 1000;
-    const SESSION_CLOSE_OFFSET = 36_000;
-    const candles: CandleWire[] = Array.from({ length: total }, (_, i) => ({
-      ts: firstDayStart + i * DAY_SECONDS + SESSION_CLOSE_OFFSET,
-      open: 100 + i,
-      high: 100 + i,
-      low: 100 + i,
-      close: 100 + i,
-      volume: 100,
-    }));
-    // The UI's default: the earliest bar the entry had before the backfill.
-    // Every backfilled bar is strictly older, so it sits at index `backfilled`.
-    const selectedIndex = backfilled;
-    const fromTs = firstDayStart + selectedIndex * DAY_SECONDS;
-    const toTs = fromTs + DAY_SECONDS;
-    expect(candles[selectedIndex].ts).toBe(fromTs + SESSION_CLOSE_OFFSET);
-    // Both gates, for the ONE frontier the loop will actually reach:
-    expect(candles.slice(0, selectedIndex + 1)).toHaveLength(lookback); // leading context
-    expect(selectedIndex + lookahead).toBeLessThan(total); // a real bar to score against
-    const windows: number[] = [];
-    const ensureDayBackfill = vi.fn().mockResolvedValue({
-      type: "day_backfill",
-      id: 1,
-      // What the real Rust handler answers for this exact lake, recomputed
-      // against the frontier-boundary split: with to_ts = fromTs + 86400,
-      // leading = 20 bars ending with the selected day's own (capped at the
-      // lookback) and trailing = 7 bars after it (capped at the lookahead), so
-      // have = 20 + 5 = need and sufficient holds.
-      have: lookback + lookahead,
-      need: lookback + lookahead,
-      sufficient: true,
-      archive_exhausted: false,
+      expect(result.insufficientHistory).toEqual({ have: 8, need: 256, reason: "symbol_history" });
+      expect(result.decisionPoints).toEqual([]);
+      expect(result.candles).toEqual([]);
+      expect(result.cancelled).toBe(false);
+      // Nothing downstream of the pre-flight runs -- not even the lake read.
+      expect(readLakeCandles).not.toHaveBeenCalled();
+      expect(benchmarkCompute).not.toHaveBeenCalled();
     });
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill,
-        readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
-        benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[]) => {
-          windows.push(window.length);
-          return Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
-        }),
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
 
-    const result = await runBenchmark(deps, baseParams({ algoId: "kronos", fromTs, toTs, lookaheadBars: lookahead }));
+    it("sizes the pre-flight against the one selected algorithm and the horizon's default lookahead, and runs against the resolved day", async () => {
+      const resolveBenchmarkWindow = resolveOk(1_000, 400);
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow,
+          readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15]) }),
+          benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
 
-    // The selected day is what the sidecar was sized against.
-    expect(ensureDayBackfill.mock.calls[0][2]).toBe(fromTs);
-    expect(result.insufficientHistory).toBeUndefined();
-    expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([selectedIndex]);
-    expect(result.decisionPoints[0].ts).toBe(candles[selectedIndex].ts);
-    // One compute, over a window that is exactly the algorithm's lookback.
-    expect(windows).toEqual([lookback]);
-  });
+      const result = await runBenchmark(deps, baseRequest({ algoId: "kronos" }));
 
-  it("tags a cancellation during the pre-flight as cancelled rather than throwing", async () => {
-    const readLakeCandles = vi.fn();
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill: vi
-          .fn()
-          .mockRejectedValue(Object.assign(new Error("sidecar run cancelled"), { cancelled: true })),
-        readLakeCandles,
-        benchmarkCompute: vi.fn(),
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
+      expect(resolveBenchmarkWindow).toHaveBeenCalledTimes(1);
+      expect(resolveBenchmarkWindow.mock.calls[0][0]).toBe("NSE:INFY");
+      expect(resolveBenchmarkWindow.mock.calls[0][1]).toBe("kronos");
+      // positional -> DEFAULT_POSITIONAL_LOOKAHEAD_BARS (5), never caller-supplied.
+      expect(resolveBenchmarkWindow.mock.calls[0][2]).toBe(5);
+      expect(result.insufficientHistory).toBeUndefined();
+      expect(result.params.fromTs).toBe(1_000);
+      expect(result.params.toTs).toBe(1_000 + DAY_SECONDS);
+      expect(result.params.lookaheadBars).toBe(5);
+      // N=6, L=5 -> eligible i in {0} only.
+      expect(result.decisionPoints).toHaveLength(1);
+    });
 
-    const result = await runBenchmark(deps, baseParams());
+    it("skips the pre-flight entirely for a non-day timeframe, which has no bhavcopy source", async () => {
+      const resolveBenchmarkWindow = resolveOk();
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow,
+          readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17]) }),
+          benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
 
-    expect(result.cancelled).toBe(true);
-    expect(result.insufficientHistory).toBeUndefined();
-    expect(readLakeCandles).not.toHaveBeenCalled();
-  });
+      const result = await runBenchmark(deps, baseRequest({ timeframe: "minute", source: "kaggle", horizon: "positional", requiredLookback: 0 }));
 
-  it("surfaces a backfill that failed outright as an error instead of a misleading history banner", async () => {
-    const deps: BenchmarkRunnerDeps = {
-      sidecar: {
-        ensureDayBackfill: vi.fn().mockResolvedValue({
-          type: "day_backfill",
-          id: 1,
-          have: 40,
-          need: 256,
-          sufficient: false,
-          archive_exhausted: false,
-          error: "fetch error: HTTP 503 for https://nsearchives.nseindia.com/x.zip",
-        }),
-        readLakeCandles: vi.fn(),
-        benchmarkCompute: vi.fn(),
-        evaluateScanGateStateless: vi.fn(),
-      },
-    };
+      expect(resolveBenchmarkWindow).not.toHaveBeenCalled();
+      // 8 candles, positional default lookahead 5 -> eligible i in {0,1,2}.
+      expect(result.decisionPoints).toHaveLength(3);
+    });
 
-    await expect(runBenchmark(deps, baseParams())).rejects.toThrow(/HTTP 503/);
+    it("skips the pre-flight for a day entry that is not bhavcopy-sourced, so it cannot verdict the wrong partition", async () => {
+      // The live warm-up path writes ("day", "kite") partitions
+      // (candleWarmup.ts's WARMUP_SOURCE, historicalDataArchive.ts's `day`
+      // lookback hint) and they appear in the same picker. Resolving would
+      // check ("day", "bhavcopy") while the run reads ("day", "kite") --
+      // wasted fetches at best, a bogus insufficient-history verdict at worst.
+      const resolveBenchmarkWindow = resolveOk();
+      const readLakeCandles = vi
+        .fn()
+        .mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15, 16, 17]) });
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow,
+          readLakeCandles,
+          benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      const result = await runBenchmark(deps, baseRequest({ timeframe: "day", source: "kite", requiredLookback: 0 }));
+
+      expect(resolveBenchmarkWindow).not.toHaveBeenCalled();
+      expect(readLakeCandles).toHaveBeenCalledWith("NSE:INFY", "day", "kite");
+      expect(result.insufficientHistory).toBeUndefined();
+      expect(result.decisionPoints).toHaveLength(3);
+    });
+
+    it("reports an exhausted archive as its own reason instead of blaming the symbol's history", async () => {
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow: vi.fn().mockResolvedValue({
+            type: "benchmark_window",
+            id: 1,
+            from_ts: 1_000,
+            have: 41,
+            need: 256,
+            sufficient: false,
+            archive_exhausted: true,
+          }),
+          readLakeCandles: vi.fn(),
+          benchmarkCompute: vi.fn(),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      const result = await runBenchmark(deps, baseRequest({ algoId: "kronos" }));
+
+      expect(result.insufficientHistory).toEqual({ have: 41, need: 256, reason: "archive_unreachable" });
+      expect(result.cancelled).toBe(false);
+    });
+
+    it("reports backfill progress as its own phase before the frontier walk's", async () => {
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow: vi.fn().mockImplementation((_symbol: string, _algoId: string, _lookahead: number, onDay?: (i: number, t: number) => void) => {
+            onDay?.(1, 2);
+            onDay?.(2, 2);
+            return Promise.resolve({ type: "benchmark_window", id: 1, from_ts: 1_000, have: 2, need: 2, sufficient: true, archive_exhausted: false });
+          }),
+          readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12, 13, 14, 15]) }),
+          benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+      const progress: Array<[string, number, number]> = [];
+
+      await runBenchmark(deps, baseRequest(), (p) => progress.push([p.phase, p.index, p.total]));
+
+      // N=6, L=5 (positional default) -> eligible frontiers i in {0}.
+      expect(progress).toEqual([
+        ["backfill", 1, 2],
+        ["backfill", 2, 2],
+        ["run", 0, 1],
+      ]);
+    });
+
+    it("tags a cancellation during the pre-flight as cancelled rather than throwing", async () => {
+      const readLakeCandles = vi.fn();
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow: vi
+            .fn()
+            .mockRejectedValue(Object.assign(new Error("sidecar run cancelled"), { cancelled: true })),
+          readLakeCandles,
+          benchmarkCompute: vi.fn(),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      const result = await runBenchmark(deps, baseRequest());
+
+      expect(result.cancelled).toBe(true);
+      expect(result.insufficientHistory).toBeUndefined();
+      expect(readLakeCandles).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a backfill that failed outright as an error instead of a misleading history banner", async () => {
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow: vi.fn().mockResolvedValue({
+            type: "benchmark_window",
+            id: 1,
+            from_ts: 1_000,
+            have: 40,
+            need: 256,
+            sufficient: false,
+            archive_exhausted: false,
+            error: "fetch error: HTTP 503 for https://nsearchives.nseindia.com/x.zip",
+          }),
+          readLakeCandles: vi.fn(),
+          benchmarkCompute: vi.fn(),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      await expect(runBenchmark(deps, baseRequest())).rejects.toThrow(/HTTP 503/);
+    });
+
+    it("a thin lake backfilled around the resolved day yields a real decision point for that day", async () => {
+      // The reported incident, to scale, reached with no caller-supplied day at
+      // all: a thin lake, a deep algorithm, and the sidecar resolving its own
+      // candidate. This test only needs to confirm runBenchmark plumbs the
+      // resolved from_ts/toTs into the frontier walk correctly -- benchmark_window.rs's
+      // own Rust tests (Task 2) cover the candidate-picking arithmetic itself.
+      const lookahead = 5;
+      const fromTs = 1_700_000_000;
+      const toTs = fromTs + DAY_SECONDS;
+      const candles = seriesOf([10, 11, 12, 13, 14, 15, 16]).map((c, i) => ({ ...c, ts: fromTs + (i - 1) * DAY_SECONDS }));
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow: vi.fn().mockResolvedValue({
+            type: "benchmark_window",
+            id: 1,
+            from_ts: fromTs,
+            have: 20 + lookahead,
+            need: 20 + lookahead,
+            sufficient: true,
+            archive_exhausted: false,
+          }),
+          readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
+          benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      const result = await runBenchmark(deps, baseRequest({ algoId: "kronos", requiredLookback: 20 }));
+
+      expect(result.params.fromTs).toBe(fromTs);
+      expect(result.params.toTs).toBe(toTs);
+      expect(result.insufficientHistory).toBeUndefined();
+      // Exactly the candle at ts===fromTs is the one frontier inside [fromTs, toTs).
+      expect(result.decisionPoints.map((p) => p.ts)).toEqual([fromTs]);
+    });
+
+    it("reports insufficient history for a non-bhavcopy source using only local data, with no fetch attempted", async () => {
+      const resolveBenchmarkWindow = vi.fn();
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow,
+          readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: seriesOf([10, 11, 12]) }),
+          benchmarkCompute: vi.fn(),
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      const result = await runBenchmark(deps, baseRequest({ timeframe: "minute", source: "kaggle", requiredLookback: 20 }));
+
+      expect(resolveBenchmarkWindow).not.toHaveBeenCalled();
+      // 3 candles, requiredLookback 20 + positional default lookahead 5 = 25 needed.
+      expect(result.insufficientHistory).toEqual({ have: 3, need: 25, reason: "symbol_history" });
+      expect(result.decisionPoints).toEqual([]);
+    });
+
+    it("bounds a non-bhavcopy run's window to the most recent segment instead of the whole multi-year partition", async () => {
+      const lookaheadBars = defaultLookaheadForHorizon("positional");
+      const requiredLookback = 20;
+      const total = 10_000;
+      const candles = seriesOf(Array.from({ length: total }, (_, i) => 100 + i));
+      const readLakeCandles = vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles });
+      const benchmarkCompute = vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH });
+      const deps: BenchmarkRunnerDeps = {
+        sidecar: {
+          resolveBenchmarkWindow: vi.fn(),
+          readLakeCandles,
+          benchmarkCompute,
+          evaluateScanGateStateless: vi.fn(),
+        },
+      };
+
+      const result = await runBenchmark(deps, baseRequest({ timeframe: "day", source: "kite", requiredLookback }));
+
+      const expectedStartIndex = total - 500 - lookaheadBars;
+      expect(result.params.fromTs).toBe(candles[expectedStartIndex].ts);
+      expect(result.decisionPoints.length).toBeLessThan(600);
+    });
   });
 
   it("bounds result.candles past the LAST decision point's lookahead, not just the first, for a multi-decision-point stateless_gate run", async () => {
@@ -682,9 +694,8 @@ describe("runBenchmark frontier walk", () => {
     // Decision points at i=1 and i=6 -- far apart within the same window.
     const decisions = ["NoChange", "WorthLook", "NoChange", "NoChange", "NoChange", "NoChange", "WorthAiCall", "NoChange"];
     let gateCall = 0;
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles: series }),
         benchmarkCompute: vi.fn().mockImplementation((_s, _t, _h, window: CandleWire[]) =>
           Promise.resolve({ type: "benchmark_compute", id: 1, algo_results: [], confluence: perFrontier[window.length - 1] }),
@@ -695,7 +706,7 @@ describe("runBenchmark frontier walk", () => {
       },
     };
 
-    const result = await runBenchmark(deps, baseParams({ horizon: "intraday", lookaheadBars: 2 }));
+    const result = await runFrontierWalk(deps, baseParams({ horizon: "intraday", lookaheadBars: 2 }));
 
     expect(result.decisionPoints.map((p) => p.frontierIndex)).toEqual([1, 6]);
     const lastPoint = result.decisionPoints[result.decisionPoints.length - 1];
@@ -726,16 +737,15 @@ describe("runBenchmark frontier walk", () => {
     }));
     const fromTs = candles[before].ts;
     const toTs = fromTs + DAY_SECONDS;
-    const deps: BenchmarkRunnerDeps = {
+    const deps: FrontierWalkDeps = {
       sidecar: {
-        ensureDayBackfill: backfillOk(),
         readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 1, candles }),
         benchmarkCompute: vi.fn().mockResolvedValue({ type: "benchmark_compute", id: 1, algo_results: [], confluence: BULLISH }),
         evaluateScanGateStateless: vi.fn(),
       },
     };
 
-    const result = await runBenchmark(deps, baseParams({ timeframe: "day", fromTs, toTs, lookaheadBars }));
+    const result = await runFrontierWalk(deps, baseParams({ timeframe: "day", fromTs, toTs, lookaheadBars }));
 
     expect(result.candles).toHaveLength(lookaheadBars + 1);
     expect(result.candles[0].ts).toBe(fromTs);

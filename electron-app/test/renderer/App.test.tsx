@@ -52,8 +52,8 @@ describe("App", () => {
     const bridge = installBridge({
       getStatus: vi
         .fn()
-        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null })
-        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin" })
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "authenticated" }),
     });
     render(<App />);
     expect(screen.queryByRole("button", { name: /login to kite/i })).toBeNull();
@@ -68,9 +68,9 @@ describe("App", () => {
     const bridge = installBridge({
       getStatus: vi
         .fn()
-        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null })
-        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null })
-        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin" })
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "needsLogin" })
+        .mockResolvedValueOnce({ sidecar: "up", kiteSession: "authenticated" }),
       onBanner: vi.fn((handler) => {
         bannerHandler = handler;
       }),
@@ -90,7 +90,7 @@ describe("App", () => {
 
   it("runs an Engine-Only analysis with the session id and chosen intent lens", async () => {
     const bridge = installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       searchInstruments: vi.fn().mockResolvedValue({
         data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
       }),
@@ -122,7 +122,7 @@ describe("App", () => {
 
   it("shows an error message when analysis fails instead of failing silently", async () => {
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       searchInstruments: vi.fn().mockResolvedValue({
         data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
       }),
@@ -139,7 +139,7 @@ describe("App", () => {
 
   it("clears a prior analysis error when New session is chosen so it doesn't bleed into the next session", async () => {
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       searchInstruments: vi.fn().mockResolvedValue({
         data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
       }),
@@ -158,7 +158,7 @@ describe("App", () => {
 
   it("clears a prior session's login error when another history row is opened", async () => {
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "needsLogin" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "s7", response_mode: "ai_assisted", created_at: "t", last_active_at: "t", preview: "prior ask" },
       ]),
@@ -175,7 +175,7 @@ describe("App", () => {
 
   it("reopens an ai_assisted session, replays its transcript, and seeds the last-used lens", async () => {
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "s7", response_mode: "ai_assisted", created_at: "t", last_active_at: "t", preview: "prior ask" },
       ]),
@@ -206,7 +206,7 @@ describe("App", () => {
       confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
     });
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       runAnalysis,
       listSessions: vi.fn().mockResolvedValue([{ id: "s7", response_mode: "ai_assisted", created_at: "t", last_active_at: "t", preview: "prior ask" }]),
       getSession: vi.fn().mockResolvedValue({ id: "s7", response_mode: "ai_assisted", messages: [] }),
@@ -221,7 +221,7 @@ describe("App", () => {
 
   it("shows the AI-Assisted chat input after New session + AI-Assisted + login", async () => {
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
     });
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /new session/i }));
@@ -231,7 +231,7 @@ describe("App", () => {
 
   it("renders the blocked reason and no analysis result when a run is gated", async () => {
     const bridge = installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       searchInstruments: vi.fn(async () => ({
         data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
       })),
@@ -271,7 +271,7 @@ describe("App", () => {
 
   it("re-runs the readiness gate fresh when an existing engine_only session is reopened", async () => {
     const bridge = installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "s7", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
       ]),
@@ -309,7 +309,7 @@ describe("App", () => {
 
   it("shows a visible error instead of failing silently when checkReadiness rejects on reopen", async () => {
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "s7", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
       ]),
@@ -341,7 +341,7 @@ describe("App", () => {
 
   it("does not replay a stale blocked message once a reopened session's fresh readiness check passes", async () => {
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "s8", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
       ]),
@@ -433,7 +433,7 @@ describe("App", () => {
       });
 
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "s9", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY (reopen)" },
       ]),
@@ -465,7 +465,7 @@ describe("App", () => {
 
   it("does not call checkReadiness or crash when reopening a scan-originated session (no mode field on its stored payload)", async () => {
     const bridge = installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "scan-1", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY (scan)" },
       ]),
@@ -492,7 +492,7 @@ describe("App", () => {
 
   it("falls back to the default interval when reopening a pre-migration engine_only session whose stored payload has no interval field", async () => {
     const bridge = installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "old-1", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
       ]),
@@ -528,7 +528,7 @@ describe("App", () => {
 
   it("does not show a stale blocked readiness banner when New session is chosen after a prior session was blocked", async () => {
     installBridge({
-      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated", driftWarning: null }),
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
       listSessions: vi.fn().mockResolvedValue([
         { id: "s10", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY" },
       ]),

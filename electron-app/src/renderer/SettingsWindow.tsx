@@ -9,7 +9,6 @@ import { Button } from "./ui/Button";
 import { Badge } from "./ui/Badge";
 import { StatusDot } from "./ui/StatusDot";
 import type { StatusDotTone } from "./ui/StatusDot";
-import { Banner } from "./ui/Banner";
 import "./SettingsWindow.css";
 
 const INTERVAL_OPTIONS: ScanIntervalMinutes[] = [5, 15, 30, 60];
@@ -130,7 +129,6 @@ export function SettingsWindow(): JSX.Element {
         <h3>Account status</h3>
         <StatusDot tone={sidecarTone(status?.sidecar)} label={`Sidecar: ${status?.sidecar ?? "…"}`} />
         <StatusDot tone={kiteTone(status?.kiteSession)} label={`Kite session: ${status?.kiteSession ?? "…"}`} />
-        {status?.driftWarning && <Banner variant="warning">{status.driftWarning}</Banner>}
       </Card>
     </section>
   );

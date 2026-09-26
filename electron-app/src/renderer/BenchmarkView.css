@@ -84,6 +84,12 @@
   opacity: 0.8;
 }
 
+.benchmark-tested-date {
+  margin: 0;
+  font-size: var(--text-sm);
+  opacity: 0.8;
+}
+
 .benchmark-chart {
   height: 360px;
 }

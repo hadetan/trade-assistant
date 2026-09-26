@@ -3,7 +3,7 @@ import type { RendererApi } from "../../src/main/ipc/rendererApi";
 
 export function installBridge(overrides: Partial<RendererApi> = {}): RendererApi {
   const bridge: RendererApi = {
-    getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "needsLogin", driftWarning: null }),
+    getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "needsLogin" }),
     onBanner: vi.fn(),
     onTrace: vi.fn(),
     login: vi.fn().mockResolvedValue({ status: "authenticated" }),

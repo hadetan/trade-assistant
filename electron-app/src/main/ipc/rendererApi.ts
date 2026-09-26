@@ -20,10 +20,9 @@ export type KiteSessionStatus = "authenticated" | "needsLogin" | "unknown";
 export interface AppStatus {
   sidecar: SidecarStatus;
   kiteSession: KiteSessionStatus;
-  driftWarning: string | null;
 }
 
-export type BannerKind = "kiteLogin" | "mcpDrift" | "sidecarDown";
+export type BannerKind = "kiteLogin" | "sidecarDown";
 
 export interface BannerEvent {
   kind: BannerKind;
@@ -32,8 +31,8 @@ export interface BannerEvent {
 
 export type Horizon = "intraday" | "positional";
 
-export type { BenchmarkCadence, Outcome, DecisionPoint, BenchmarkRunParams, BenchmarkResult, BenchmarkProgress } from "../services/benchmark/benchmarkRunner";
-import type { BenchmarkProgress, BenchmarkRunParams, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
+export type { BenchmarkCadence, Outcome, DecisionPoint, BenchmarkRunRequest, BenchmarkRunParams, BenchmarkResult, BenchmarkProgress } from "../services/benchmark/benchmarkRunner";
+import type { BenchmarkProgress, BenchmarkRunRequest, BenchmarkResult } from "../services/benchmark/benchmarkRunner";
 
 export interface LakeSymbolEntry {
   symbol: string;
@@ -129,7 +128,7 @@ export interface RendererApi {
   getSession(id: string): Promise<SessionDetail>;
   listLakeSymbols(): Promise<LakeSymbolEntry[]>;
   listAlgorithms(): Promise<AlgorithmEntry[]>;
-  runBenchmark(params: BenchmarkRunParams): Promise<BenchmarkResult>;
+  runBenchmark(params: BenchmarkRunRequest): Promise<BenchmarkResult>;
   cancelBenchmark(): Promise<void>;
   onBenchmarkProgress(handler: (progress: BenchmarkProgress) => void): void;
   copyBenchmarkResult(text: string): Promise<void>;

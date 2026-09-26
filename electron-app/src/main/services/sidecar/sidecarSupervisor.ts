@@ -6,7 +6,7 @@ import {
   CandleWire,
   ComputeResponseWire,
   ConfluenceWire,
-  DayBackfillResponseWire,
+  ResolveBenchmarkWindowResponseWire,
   LakeCandlesResponseWire,
   LakeSymbolsResponseWire,
   ListAlgorithmsResponseWire,
@@ -156,24 +156,23 @@ export class SidecarSupervisor extends EventEmitter {
     return this.send({ type: "list_algorithms", id: this.nextId }) as Promise<ListAlgorithmsResponseWire>;
   }
 
-  // `fromTs` and `lookahead` are both required rather than defaulted: the
-  // sidecar sizes the fetch against the bars surrounding the ONE day the run
-  // will test, and a caller that silently got 0 for either would be back to a
-  // backfill that reports success over a day the run cannot use.
-  ensureDayBackfill(
+  // `lookahead` is required rather than defaulted: the sidecar sizes the
+  // fetch against the bars surrounding whichever day it resolves, and a
+  // caller that silently got 0 would be back to a backfill that reports
+  // success over a day the run cannot use.
+  resolveBenchmarkWindow(
     symbol: string,
     algoId: string,
-    fromTs: number,
     lookahead: number,
     onDayProgress?: (index: number, total: number) => void,
-  ): Promise<DayBackfillResponseWire> {
+  ): Promise<ResolveBenchmarkWindowResponseWire> {
     return this.send(
-      { type: "ensure_day_backfill", id: this.nextId, symbol, algo_id: algoId, lookahead, from_ts: fromTs },
+      { type: "resolve_benchmark_window", id: this.nextId, symbol, algo_id: algoId, lookahead },
       (id) => {
         if (onDayProgress) this.dayProgress.set(id, onDayProgress);
       },
       BACKFILL_REQUEST_TIMEOUT_MS,
-    ) as Promise<DayBackfillResponseWire>;
+    ) as Promise<ResolveBenchmarkWindowResponseWire>;
   }
 
   evaluateScanGateStateless(prev: ConfluenceWire | null, curr: ConfluenceWire): Promise<ScanGateResponseWire> {

@@ -7,7 +7,7 @@ import { SidecarSupervisor } from "./services/sidecar/sidecarSupervisor";
 import { resolveSidecarBinaryPath } from "./services/sidecar/sidecarBinaryPath";
 import { KiteSessionState, classifyKiteResponse } from "./services/kite/kiteSessionState";
 import { loadKiteConfig } from "./services/kite/kiteConfig";
-import { runKiteLogin, runKiteMcpOnlyLogin } from "./services/kite/kiteLogin";
+import { runKiteLogin } from "./services/kite/kiteLogin";
 import type { KiteSession } from "./services/kite/kiteLogin";
 import { captureRequestToken, exchangeAccessToken } from "./services/kite/kiteOAuth";
 import { ClaudeCliProvider } from "./services/claude/claudeCliProvider";
@@ -88,7 +88,6 @@ export function createApp(): AppRuntime {
   });
 
   let sidecarStatus: SidecarStatus = "down";
-  let driftWarning: string | null = null;
   let session: KiteSession | null = null;
   let loginInFlight: Promise<LoginResult> | null = null;
   let mainWindow: BrowserWindow | null = null;
@@ -119,7 +118,7 @@ export function createApp(): AppRuntime {
     }
   });
 
-  const currentStatus = (): AppStatus => ({ sidecar: sidecarStatus, kiteSession: sessionState.status, driftWarning });
+  const currentStatus = (): AppStatus => ({ sidecar: sidecarStatus, kiteSession: sessionState.status });
 
   const login = (): Promise<LoginResult> => {
     if (loginInFlight) return loginInFlight;
@@ -128,10 +127,15 @@ export function createApp(): AppRuntime {
         const previousSession = session;
         const openExternal = (url: string) => shell.openExternal(url);
         const onKiteResponse = (response: unknown) => handleKiteResponse(sessionState, response);
-        const newSession =
-          config.mode === "full"
-            ? await runKiteLogin({ config, captureRequestToken, exchangeAccessToken, postForm, openExternal, onKiteResponse })
-            : await runKiteMcpOnlyLogin({ config, openExternal, onKiteResponse });
+        const newSession = await runKiteLogin({
+          config,
+          cacheDir: app.getPath("userData"),
+          captureRequestToken,
+          exchangeAccessToken,
+          postForm,
+          openExternal,
+          onKiteResponse,
+        });
         // Defense in depth: the "change" listener above already closes a
         // session as soon as it goes stale, but close whatever is still
         // referenced here too so a redundant login() call can never leak it.
@@ -139,12 +143,6 @@ export function createApp(): AppRuntime {
           void previousSession.close().catch(() => {});
         }
         session = newSession;
-        driftWarning = newSession.drift.hasDrift
-          ? `MCP tools changed: added [${newSession.drift.added.join(", ")}], removed [${newSession.drift.removed.join(", ")}]`
-          : null;
-        if (newSession.drift.hasDrift) {
-          dispatchBanner({ kind: "mcpDrift", message: driftWarning as string });
-        }
         sessionState.markAuthenticated();
         return { status: "authenticated" };
       } catch (error) {

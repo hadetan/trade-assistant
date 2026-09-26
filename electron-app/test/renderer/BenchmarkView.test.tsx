@@ -24,8 +24,8 @@ const DAY_ENTRY: LakeSymbolEntry = {
 
 // A backfilled entry: live fromTs/toTs/candleCount have moved far beyond what
 // the user originally saw. Any test using this fixture would fail if the
-// picker's display or the default-date seeding were wired to the live fields
-// instead of the first_seen_* ones.
+// picker's display were wired to the live fields instead of the
+// first_seen_* ones.
 const BACKFILLED_ENTRY: LakeSymbolEntry = {
   symbol: "NSE:20MICRONS",
   timeframe: "day",
@@ -60,7 +60,10 @@ function api(
 
 function resultWith(outcomes: Array<BenchmarkResult["decisionPoints"][number]["outcome"]>, cancelled = false): BenchmarkResult {
   return {
-    params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "sma", lookaheadBars: 5, fromTs: 0, toTs: 0 },
+    // UTC-midnight-aligned, mirroring how the bhavcopy path always sends
+    // fromTs -- a non-midnight ts here would make Fix 4's date-range caption
+    // report a bogus two-day span for what is really a single resolved day.
+    params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "sma", lookaheadBars: 5, fromTs: 1_699_920_000, toTs: 1_700_006_400 },
     candles: [{ ts: 1, open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 }],
     decisionPoints: outcomes.map((outcome, i) => ({
       frontierIndex: i,
@@ -107,28 +110,11 @@ describe("BenchmarkView", () => {
     expect(option.textContent).not.toContain(new Date(BACKFILLED_ENTRY.fromTs * 1000).toISOString().slice(0, 10));
   });
 
-  it("seeds the default benchmark date from the first-seen extent, not the live backfilled extent, on selection", async () => {
-    render(<BenchmarkView api={api({ listLakeSymbols: vi.fn().mockResolvedValue([BACKFILLED_ENTRY]) })} />);
-    fireEvent.click(await screen.findByRole("button", { name: /NSE:20MICRONS/ }));
-    const date = (await screen.findByLabelText(/^date$/i)) as HTMLInputElement;
-    expect(date.value).toBe(new Date(BACKFILLED_ENTRY.firstSeenFromTs * 1000).toISOString().slice(0, 10));
-    expect(date.value).not.toBe(new Date(BACKFILLED_ENTRY.fromTs * 1000).toISOString().slice(0, 10));
-  });
-
   it("renders the algorithm picker tagged fast/slow and tags a forecaster as an ML forecaster", async () => {
     render(<BenchmarkView api={api()} />);
     fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
     expect(await screen.findByText(/kronos/i)).toBeTruthy();
     expect(screen.getByText(/slow \(ml forecaster\)/i)).toBeTruthy();
-  });
-
-  it("prefills the lookahead default and the single date field on selection", async () => {
-    render(<BenchmarkView api={api()} />);
-    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
-    const lookahead = (await screen.findByLabelText(/lookahead bars/i)) as HTMLInputElement;
-    expect(lookahead.value).toBe("5"); // positional default
-    const date = (await screen.findByLabelText(/^date$/i)) as HTMLInputElement;
-    expect(date.value).toBe(new Date(DAY_ENTRY.fromTs * 1000).toISOString().slice(0, 10));
   });
 
   it("keeps the Run button disabled until an algorithm is selected", async () => {
@@ -140,22 +126,19 @@ describe("BenchmarkView", () => {
     expect(runButton).toHaveProperty("disabled", false);
   });
 
-  it("runs the benchmark with the assembled params including the selected algorithm and single-day window", async () => {
+  it("runs the benchmark with the selected symbol and algorithm, no date or lookahead supplied", async () => {
     const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith([])) });
     render(<BenchmarkView api={deps} />);
     await selectEntryAndAlgo();
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
     await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
-    const dayStart = Math.floor(new Date(`${new Date(DAY_ENTRY.fromTs * 1000).toISOString().slice(0, 10)}T00:00:00Z`).getTime() / 1000);
     expect(deps.runBenchmark.mock.calls[0][0]).toEqual({
       symbol: "NSE:INFY",
       timeframe: "day",
       source: "bhavcopy",
       horizon: "positional",
       algoId: "sma",
-      lookaheadBars: 5,
-      fromTs: dayStart,
-      toTs: dayStart + 86_400,
+      requiredLookback: 20,
     });
   });
 
@@ -199,22 +182,6 @@ describe("BenchmarkView", () => {
     await selectEntryAndAlgo();
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
     expect(await screen.findByText(/cancelled — partial results/i)).toBeTruthy();
-  });
-
-  it("shows a validation error instead of calling runBenchmark when the date field is cleared", async () => {
-    const deps = api();
-    const { container } = render(<BenchmarkView api={deps} />);
-    await selectEntryAndAlgo();
-    const dateField = (await screen.findByLabelText(/^date$/i)) as HTMLInputElement;
-    fireEvent.change(dateField, { target: { value: "" } });
-    // fireEvent.submit dispatches the submit event directly, bypassing the
-    // native `required` constraint-validation gate a real button click would
-    // hit first -- this exercises the app-level guard in onRun on its own.
-    const form = container.querySelector("form");
-    if (!form) throw new Error("expected a form element");
-    fireEvent.submit(form);
-    expect(await screen.findByText(/pick a date before running/i)).toBeTruthy();
-    expect(deps.runBenchmark).not.toHaveBeenCalled();
   });
 
   it("shows a loading spinner while the lake list is in flight", () => {
@@ -291,19 +258,8 @@ describe("BenchmarkView", () => {
   });
 
   it("renders one insufficient-history banner in place of the summary strip and chart", async () => {
-    // The exact incident this phase exists for: a thin symbol used to come back
-    // as an empty `algos:` list with zeroed confluence and no explanation.
     const insufficient: BenchmarkResult = {
-      params: {
-        symbol: "NSE:ZYDUSWELL",
-        timeframe: "day",
-        source: "bhavcopy",
-        horizon: "positional",
-        algoId: "kronos",
-        lookaheadBars: 5,
-        fromTs: 0,
-        toTs: 0,
-      },
+      params: { symbol: "NSE:ZYDUSWELL", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "kronos", lookaheadBars: 5, fromTs: 0, toTs: 0 },
       candles: [],
       decisionPoints: [],
       cancelled: false,
@@ -314,35 +270,17 @@ describe("BenchmarkView", () => {
     await selectEntryAndAlgo();
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
 
-    await waitFor(() =>
-      expect(container.textContent).toContain(
-        "NSE:ZYDUSWELL has 8 of the 256 days this run needs around the selected day",
-      ),
-    );
-    // Actionable, and silent about the archive: this same banner is shown for a
-    // trailing-side shortfall, which is answered with ZERO fetches, so it must
-    // not imply the archive was explored and came up empty.
-    expect(container.textContent).toContain("Try an earlier date");
+    await waitFor(() => expect(container.textContent).toContain("NSE:ZYDUSWELL doesn't have enough trading history for this test."));
+    expect(container.textContent).toContain("Try a different stock.");
     expect(container.textContent).not.toMatch(/archive/i);
-    // The confusing empty result is gone, not merely accompanied by a banner.
+    expect(container.textContent).not.toContain("256");
     expect(screen.queryByText(/0 decision points/i)).toBeNull();
     expect(screen.queryByText(/copy raw result/i)).toBeNull();
   });
 
   it("says the archive could not be reached, not that the symbol is young, when the walk hit the closed-day cap", async () => {
-    // Same shortfall shape, different cause: the walker cannot see past a
-    // silent archive, so the banner must not assert anything about the symbol.
     const unreachable: BenchmarkResult = {
-      params: {
-        symbol: "NSE:ZYDUSWELL",
-        timeframe: "day",
-        source: "bhavcopy",
-        horizon: "positional",
-        algoId: "kronos",
-        lookaheadBars: 5,
-        fromTs: 0,
-        toTs: 0,
-      },
+      params: { symbol: "NSE:ZYDUSWELL", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "kronos", lookaheadBars: 5, fromTs: 0, toTs: 0 },
       candles: [],
       decisionPoints: [],
       cancelled: false,
@@ -353,14 +291,170 @@ describe("BenchmarkView", () => {
     await selectEntryAndAlgo();
     fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
 
-    await waitFor(() => expect(container.textContent).toMatch(/could not reach far enough back into the NSE archive/i));
-    expect(container.textContent).toContain("41");
-    expect(container.textContent).toContain("256");
-    // The two banners must stay lexically distinguishable: this one names the
-    // archive and never offers the symbol_history remedy, which would be
-    // misleading advice when the walk simply could not see far enough back.
-    expect(container.textContent).not.toContain("Try an earlier date");
-    expect(container.textContent).not.toContain("days this run needs around the selected day");
+    await waitFor(() => expect(container.textContent).toContain("Couldn't reach far enough back for NSE:ZYDUSWELL right now."));
+    expect(container.textContent).toContain("Try again in a bit.");
+    expect(container.textContent).not.toContain("doesn't have enough trading history");
+    expect(container.textContent).not.toContain("41");
     expect(screen.queryByText(/copy raw result/i)).toBeNull();
+  });
+
+  it("greys out a symbol for the current algorithm after it is proven to lack enough history, and re-enables it under a different algorithm", async () => {
+    const otherEntry: LakeSymbolEntry = { ...DAY_ENTRY, symbol: "NSE:TCS" };
+    const insufficient: BenchmarkResult = {
+      params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "kronos", lookaheadBars: 5, fromTs: 0, toTs: 0 },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 8, need: 256, reason: "symbol_history" },
+    };
+    const deps = api({
+      listLakeSymbols: vi.fn().mockResolvedValue([DAY_ENTRY, otherEntry]),
+      runBenchmark: vi.fn().mockResolvedValue(insufficient),
+    });
+    render(<BenchmarkView api={deps} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: /run another test/i }));
+
+    // The full reset also clears `selectedAlgoId`, so nothing reads as greyed
+    // out until an algorithm is picked again -- reaching the picker no longer
+    // depends on the greyed entry being the one that gets clicked back into.
+    const optionBeforeAlgoPick = await screen.findByRole("button", { name: /NSE:TCS/ });
+    expect(optionBeforeAlgoPick).toHaveProperty("disabled", false);
+    fireEvent.click(optionBeforeAlgoPick);
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
+    const option = await screen.findByRole("button", { name: /NSE:INFY/ });
+    expect(option).toHaveProperty("disabled", true);
+    expect(option.textContent).toMatch(/not enough history/i);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^sma/i }));
+    const optionUnderSma = await screen.findByRole("button", { name: /NSE:INFY/ });
+    expect(optionUnderSma).toHaveProperty("disabled", false);
+  });
+
+  it("re-enables the sole lake entry after Run another test, so a single-entry lake is never a dead end", async () => {
+    const insufficient: BenchmarkResult = {
+      params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "kronos", lookaheadBars: 5, fromTs: 0, toTs: 0 },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 8, need: 256, reason: "symbol_history" },
+    };
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(insufficient) });
+    render(<BenchmarkView api={deps} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: /run another test/i }));
+
+    const option = await screen.findByRole("button", { name: /NSE:INFY/ });
+    expect(option).toHaveProperty("disabled", false);
+
+    fireEvent.click(option);
+    fireEvent.click(await screen.findByRole("button", { name: /^sma/i }));
+    expect(await screen.findByRole("button", { name: /run benchmark/i })).toHaveProperty("disabled", false);
+  });
+
+  it("does not grey out a symbol after a transient archive-unreachable result", async () => {
+    const unreachable: BenchmarkResult = {
+      params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "kronos", lookaheadBars: 5, fromTs: 0, toTs: 0 },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 41, need: 256, reason: "archive_unreachable" },
+    };
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(unreachable) });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: /run another test/i }));
+    const option = await screen.findByRole("button", { name: /NSE:INFY/ });
+    expect(option).toHaveProperty("disabled", false);
+  });
+
+  it("shows the resolved test date after a successful run", async () => {
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(resultWith([])) });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    const caption = await screen.findByText(/^tested /i);
+    expect(caption.textContent).toMatch(/tested 2023-11-14$/i);
+  });
+
+  it("shows a date range, not a single misleading date, for a multi-day non-bhavcopy window", async () => {
+    const fromTs = 1_700_000_000;
+    const multiDay: BenchmarkResult = {
+      ...resultWith([]),
+      params: { ...resultWith([]).params, timeframe: "minute", source: "kaggle", fromTs, toTs: fromTs + 3 * 86_400 },
+    };
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(multiDay) });
+    render(<BenchmarkView api={deps} />);
+    await selectEntryAndAlgo();
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    const caption = await screen.findByText(/^tested /i);
+    expect(caption.textContent).toContain("–");
+    expect(caption.textContent).toContain(new Date(1_700_000_000 * 1000).toISOString().slice(0, 10));
+    expect(caption.textContent).toContain(new Date((1_700_000_000 + 3 * 86_400 - 1) * 1000).toISOString().slice(0, 10));
+  });
+
+  it("does not cross-contaminate the greyed-out state between two lake entries that share a symbol but differ in timeframe/source", async () => {
+    const dayEntry: LakeSymbolEntry = { ...DAY_ENTRY };
+    const minuteEntry: LakeSymbolEntry = { ...DAY_ENTRY, timeframe: "minute", source: "kaggle", horizon: "intraday" };
+    const insufficient: BenchmarkResult = {
+      params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "kronos", lookaheadBars: 5, fromTs: 0, toTs: 0 },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 8, need: 256, reason: "symbol_history" },
+    };
+    const deps = api({
+      listLakeSymbols: vi.fn().mockResolvedValue([dayEntry, minuteEntry]),
+      runBenchmark: vi.fn().mockResolvedValue(insufficient),
+    });
+    render(<BenchmarkView api={deps} />);
+    const dayOption = await screen.findByRole("button", { name: /NSE:INFY · day/ });
+    fireEvent.click(dayOption);
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: /run another test/i }));
+
+    // The full reset also clears `selectedAlgoId`, so re-pick it before the
+    // greyed-out state (keyed by entry + algorithm) reappears.
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY · day/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
+    const dayOptionAfter = await screen.findByRole("button", { name: /NSE:INFY · day/ });
+    const minuteOptionAfter = await screen.findByRole("button", { name: /NSE:INFY · minute/ });
+    expect(dayOptionAfter).toHaveProperty("disabled", true);
+    expect(minuteOptionAfter).toHaveProperty("disabled", false);
+  });
+
+  it("fully resets the setup form when clicking Run another test, so the failed combination is not one click away", async () => {
+    const insufficient: BenchmarkResult = {
+      params: { symbol: "NSE:INFY", timeframe: "day", source: "bhavcopy", horizon: "positional", algoId: "kronos", lookaheadBars: 5, fromTs: 0, toTs: 0 },
+      candles: [],
+      decisionPoints: [],
+      cancelled: false,
+      insufficientHistory: { have: 8, need: 256, reason: "symbol_history" },
+    };
+    const deps = api({ runBenchmark: vi.fn().mockResolvedValue(insufficient) });
+    render(<BenchmarkView api={deps} />);
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^kronos/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /run benchmark/i }));
+    await waitFor(() => expect(deps.runBenchmark).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: /run another test/i }));
+
+    expect(screen.queryByRole("button", { name: /run benchmark/i })).toBeNull();
+    expect(screen.queryByRole("group", { name: /algorithm/i })).toBeNull();
   });
 });

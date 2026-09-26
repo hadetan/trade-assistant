@@ -180,13 +180,15 @@ pub struct EnsureDayBackfillRequest {
     /// lookback alone never leaves room to score anything.
     pub lookahead: usize,
     /// START of the single day the run will actually test (its `fromTs`): UTC
-    /// midnight of the selected calendar day, Unix epoch seconds, exactly as
-    /// BenchmarkView.tsx builds it. NOT that day's candle stamp -- a bhavcopy
-    /// day candle carries `ist_session_close_epoch` (15:30 IST = 10:00 UTC), so
-    /// the selection's own bar sits 36000s AFTER this value. Since this source
-    /// is day-only, the selected partition is implicitly
-    /// `[from_ts, from_ts + 86_400)`, and that upper edge -- not `from_ts` --
-    /// is where `day_backfill` splits leading from trailing context.
+    /// midnight of the selected calendar day, Unix epoch seconds. No caller
+    /// builds this directly anymore -- `pick_candidate_from_ts` in
+    /// `benchmark_window.rs` computes it server-side from the lake's own rows
+    /// (P15§3). NOT that day's candle stamp -- a bhavcopy day candle carries
+    /// `ist_session_close_epoch` (15:30 IST = 10:00 UTC), so the selection's
+    /// own bar sits 36000s AFTER this value. Since this source is day-only,
+    /// the selected partition is implicitly `[from_ts, from_ts + 86_400)`, and
+    /// that upper edge -- not `from_ts` -- is where `benchmark_window` splits
+    /// leading from trailing context.
     ///
     /// Sizing is meaningless without it: the Benchmark UI tests exactly one
     /// candle per run, so what matters is that *that* candle has enough bars
@@ -207,7 +209,7 @@ pub struct DayBackfillResponse {
     /// implies `have < need` whichever side is short -- reporting a raw row
     /// count let an insufficient answer render as "has 22 days; needs 20",
     /// which reads as a contradiction. The cap can undersell a deep symbol
-    /// whose *trailing* side is the blocker; see `day_backfill`.
+    /// whose *trailing* side is the blocker; see `benchmark_window`.
     pub have: usize,
     /// The total bars this run needs before it can produce even one result: the
     /// algorithm's own required_lookback plus the run's lookahead scoring
@@ -222,6 +224,31 @@ pub struct DayBackfillResponse {
     /// at all. Always serialized (like `sufficient`) rather than skipped when
     /// false: this is a third outcome, and a consumer must never have to infer
     /// it from an absent key (decision (xviii)).
+    pub archive_exhausted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResolveBenchmarkWindowRequest {
+    pub id: u64,
+    pub symbol: String,
+    pub algo_id: String,
+    /// The requesting run's scoring window (its `lookaheadBars`) -- everything
+    /// else about which day to test is resolved server-side (P15§3).
+    pub lookahead: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResolveBenchmarkWindowResponse {
+    pub id: u64,
+    /// The day actually resolved and tested: UTC midnight of that calendar
+    /// day, in the same encoding `EnsureDayBackfillRequest::from_ts` used
+    /// when a caller supplied it directly.
+    pub from_ts: i64,
+    pub have: usize,
+    pub need: usize,
+    pub sufficient: bool,
     pub archive_exhausted: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
@@ -310,7 +337,7 @@ pub enum SidecarRequest {
     BenchmarkCompute(BenchmarkComputeRequest),
     EvaluateScanGateStateless(EvaluateScanGateStatelessRequest),
     ListAlgorithms(ListAlgorithmsRequest),
-    EnsureDayBackfill(EnsureDayBackfillRequest),
+    ResolveBenchmarkWindow(ResolveBenchmarkWindowRequest),
 }
 
 #[derive(Debug, Serialize)]
@@ -324,7 +351,7 @@ pub enum SidecarResponse {
     LakeCandles(LakeCandlesResponse),
     BenchmarkCompute(BenchmarkComputeResponse),
     Algorithms(ListAlgorithmsResponse),
-    DayBackfill(DayBackfillResponse),
+    BenchmarkWindow(ResolveBenchmarkWindowResponse),
 }
 
 pub fn parse_request(line: &str) -> serde_json::Result<SidecarRequest> {

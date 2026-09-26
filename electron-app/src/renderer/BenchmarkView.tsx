@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { MessageMarkdown } from "./MessageMarkdown";
 import { createBenchmarkChart } from "./benchmarkChart";
-import { defaultLookaheadForHorizon, summarize } from "../main/services/benchmark/benchmarkRunner";
+import { summarize } from "../main/services/benchmark/benchmarkRunner";
 import { Card } from "./ui/Card";
 import { Badge } from "./ui/Badge";
 import { Button } from "./ui/Button";
-import { TextField } from "./ui/TextField";
 import { EmptyState } from "./ui/EmptyState";
 import { Banner } from "./ui/Banner";
 import { Spinner } from "./ui/Spinner";
@@ -22,16 +21,9 @@ function toDate(ts: number): string {
   return new Date(ts * 1000).toISOString().slice(0, 10);
 }
 
-function fromDate(value: string): number {
-  return Math.floor(new Date(`${value}T00:00:00Z`).getTime() / 1000);
+function pairKey(entry: LakeSymbolEntry, algoId: string): string {
+  return `${entry.symbol}_${entry.timeframe}_${entry.source}:${algoId}`;
 }
-
-// `fromDate` yields UTC midnight of the selected day; `ensureDayBackfill`'s
-// `fromTs` argument is exactly this value. `day_backfill.rs` derives that
-// run's partition as `[from_ts, from_ts + DAY_SECONDS)` and splits leading
-// (before) from trailing (at-or-after) history at that upper edge — changing
-// this encoding or the day length here requires changing that file too.
-const DAY_SECONDS = 86_400;
 
 function progressLabel(algoId: string | null, progress: BenchmarkProgress | null): string {
   if (progress?.phase === "backfill") {
@@ -41,37 +33,17 @@ function progressLabel(algoId: string | null, progress: BenchmarkProgress | null
 }
 
 function InsufficientHistory({ result }: { result: BenchmarkResult }): JSX.Element {
-  const { have, need, reason } = result.insufficientHistory ?? { have: 0, need: 0, reason: "symbol_history" as const };
-  // Two different facts, two different sentences: the walk can tell "this
-  // symbol has no rows this far back" from "the archive answered nothing at
-  // all", and saying the first when the second happened is a lie about the
-  // user's symbol (decision (xviii)).
+  const reason = result.insufficientHistory?.reason ?? "symbol_history";
   if (reason === "archive_unreachable") {
     return (
       <Banner variant="warning">
-        Could not reach far enough back into the NSE archive for {result.params.symbol} — collected {have} of the{" "}
-        {need} days this run needs before the archive stopped answering. It may not cover this far back.
+        Couldn't reach far enough back for {result.params.symbol} right now. Try again in a bit.
       </Banner>
     );
   }
   return (
     <Banner variant="info">
-      {/* "this run", not "{algoId}": `need` is the algorithm's lookback plus
-          this run's lookahead scoring window, so crediting it to the algorithm
-          alone would overstate what the model itself requires. And "around the
-          selected day", not "of history": `have` counts the bars on each side
-          of the one day this run tests, capped at what each side can use, so
-          it is not a claim about the symbol's total depth.
-
-          Deliberately silent about the archive. The wire carries only
-          have/need/reason, not which SIDE fell short, and the shortfall is
-          often on the trailing side -- too few days AFTER the selection, which
-          a backward walk can never fix and so answers with zero fetches. Saying
-          "that is all the archive has" there would assert something nothing
-          asked. Pointing at an earlier date covers the trailing case and costs
-          the leading case nothing. */}
-      {result.params.symbol} has {have} of the {need} days this run needs around the selected day. Try an earlier
-      date, or a symbol with more history.
+      {result.params.symbol} doesn't have enough trading history for this test. Try a different stock.
     </Banner>
   );
 }
@@ -108,8 +80,15 @@ function ResultsView({ api, result }: { api: BenchmarkApi; result: BenchmarkResu
     return () => handle.dispose();
   }, [result]);
 
+  const testedFrom = toDate(result.params.fromTs);
+  const testedTo = toDate(result.params.toTs - 1);
+
   return (
     <div className="benchmark-results">
+      <p className="benchmark-tested-date">
+        Tested {testedFrom}
+        {testedTo !== testedFrom ? ` – ${testedTo}` : ""}
+      </p>
       {result.cancelled && <Banner variant="info">Cancelled — partial results</Banner>}
       <SummaryStrip points={result.decisionPoints} />
       <Button variant="ghost" onClick={() => void api.copyBenchmarkResult(JSON.stringify(result))}>
@@ -140,8 +119,7 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
   const [algorithms, setAlgorithms] = useState<AlgorithmEntry[] | null>(null);
   const [selected, setSelected] = useState<LakeSymbolEntry | null>(null);
   const [selectedAlgoId, setSelectedAlgoId] = useState<string | null>(null);
-  const [lookaheadBars, setLookaheadBars] = useState(5);
-  const [date, setDate] = useState("");
+  const [insufficientPairs, setInsufficientPairs] = useState<Set<string>>(new Set());
   const [result, setResult] = useState<BenchmarkResult | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,18 +152,12 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
 
   const onSelectEntry = (entry: LakeSymbolEntry): void => {
     setSelected(entry);
-    setLookaheadBars(defaultLookaheadForHorizon(entry.horizon));
-    setDate(toDate(entry.firstSeenFromTs));
     setResult(null);
   };
 
   const onRun = async (): Promise<void> => {
     if (!selected || !selectedAlgoId) return;
-    const dayStart = fromDate(date);
-    if (!date || Number.isNaN(dayStart)) {
-      setError("Pick a date before running.");
-      return;
-    }
+    const algo = algorithms?.find((a) => a.id === selectedAlgoId);
     setRunning(true);
     setError(null);
     setProgress(null);
@@ -196,10 +168,11 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
         source: selected.source,
         horizon: selected.horizon,
         algoId: selectedAlgoId,
-        lookaheadBars,
-        fromTs: dayStart,
-        toTs: dayStart + DAY_SECONDS,
+        requiredLookback: algo?.requiredLookback ?? 0,
       });
+      if (run.insufficientHistory?.reason === "symbol_history") {
+        setInsufficientPairs((prev) => new Set(prev).add(pairKey(selected, selectedAlgoId)));
+      }
       setResult(run);
     } catch (e) {
       setError((e as Error).message);
@@ -243,6 +216,21 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
           </Button>
         </Card>
       )}
+      {result && (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => {
+            setResult(null);
+            setSelected(null);
+            setSelectedAlgoId(null);
+            setError(null);
+            setProgress(null);
+          }}
+        >
+          ← Run another test
+        </Button>
+      )}
       {result ? (
         result.insufficientHistory ? (
           <InsufficientHistory result={result} />
@@ -253,18 +241,23 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
         <>
           <h2>Benchmark</h2>
           <ul className="benchmark-picker">
-            {entries.map((entry) => (
-              <li key={`${entry.symbol}_${entry.timeframe}_${entry.source}`}>
-                <button
-                  type="button"
-                  className={`benchmark-picker-item${selected === entry ? " benchmark-picker-item-selected" : ""}`}
-                  aria-pressed={selected === entry}
-                  onClick={() => onSelectEntry(entry)}
-                >
-                  {entry.symbol} · {entry.timeframe} · {entry.source} · {entry.horizon} · {toDate(entry.firstSeenFromTs)}–{toDate(entry.firstSeenToTs)} · {entry.firstSeenCandleCount} bars
-                </button>
-              </li>
-            ))}
+            {entries.map((entry) => {
+              const isKnownInsufficient = selectedAlgoId !== null && insufficientPairs.has(pairKey(entry, selectedAlgoId));
+              return (
+                <li key={`${entry.symbol}_${entry.timeframe}_${entry.source}`}>
+                  <button
+                    type="button"
+                    className={`benchmark-picker-item${selected === entry ? " benchmark-picker-item-selected" : ""}`}
+                    aria-pressed={selected === entry}
+                    disabled={isKnownInsufficient}
+                    onClick={() => onSelectEntry(entry)}
+                  >
+                    {entry.symbol} · {entry.timeframe} · {entry.source} · {entry.horizon} · {toDate(entry.firstSeenFromTs)}–{toDate(entry.firstSeenToTs)} · {entry.firstSeenCandleCount} bars
+                    {isKnownInsufficient && " · not enough history for this test"}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
 
           {selected && (
@@ -295,27 +288,6 @@ export function BenchmarkView({ api }: { api: BenchmarkApi }): JSX.Element {
                       </Button>
                     ))}
                   </fieldset>
-                  <label className="benchmark-field">
-                    Lookahead bars
-                    <TextField type="number" min={1} value={lookaheadBars} onChange={(e) => setLookaheadBars(Number(e.target.value))} />
-                  </label>
-                  <label className="benchmark-field">
-                    Date
-                    <TextField
-                      type="date"
-                      required
-                      // Deliberately the live extent, not firstSeen* (used above for the
-                      // summary line and the default date): backfilled bars are real and
-                      // benchmarkable, so bounding this to firstSeen* would make legitimately
-                      // available history unreachable. The original bug was a *silent* wrong
-                      // default; picking a date outside the first-seen window here is a
-                      // visible, deliberate user action, not a repeat of that bug.
-                      min={toDate(selected.fromTs)}
-                      max={toDate(selected.toTs)}
-                      value={date}
-                      onChange={(e) => setDate(e.target.value)}
-                    />
-                  </label>
                   <Button type="submit" disabled={running || !selectedAlgoId}>
                     {running && <Spinner size={14} />} {running ? "Running…" : "Run benchmark"}
                   </Button>

@@ -491,10 +491,12 @@ fn list_algorithms_answers_even_with_no_lake_root() {
 }
 
 #[test]
-fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
+fn resolve_benchmark_window_answers_over_stdio_without_touching_the_network() {
     // An algo id no registry knows needs zero bars, so the handler returns
     // before it can ever reach walk_trading_days_backward -- which makes this a
     // pure wiring smoke test for the new request/response pair.
+    // Per P15§3, the day is now resolved server-side, so from_ts is no longer
+    // on the wire; the client only sends the run's lookaheadBars.
     let dir = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_sidecar"))
         .arg("--lake-root")
@@ -504,12 +506,7 @@ fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
         .spawn()
         .expect("sidecar binary must start");
 
-    // 2024-01-15 00:00 UTC: the START of the selected calendar day, which is
-    // exactly what the Electron mirror sends (BenchmarkView.tsx builds it as
-    // `Date("YYYY-MM-DDT00:00:00Z")`). The day's own candle is stamped ten hours
-    // later at 15:30 IST, so the handler's partition runs [from_ts,
-    // from_ts + 86400) for this day-only source.
-    let request = r#"{"type":"ensure_day_backfill","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__","lookahead":0,"from_ts":1705276800}"#;
+    let request = r#"{"type":"resolve_benchmark_window","id":1,"symbol":"NSE:INFY","algo_id":"__not_an_algorithm__","lookahead":0}"#;
     {
         let stdin = child.stdin.as_mut().unwrap();
         writeln!(stdin, "{request}").unwrap();
@@ -521,7 +518,7 @@ fn ensure_day_backfill_answers_over_stdio_without_touching_the_network() {
     let response = read_next_response(&mut reader);
     child.wait().ok();
 
-    assert_eq!(response["type"], "day_backfill");
+    assert_eq!(response["type"], "benchmark_window");
     assert_eq!(response["id"], 1);
     assert_eq!(response["need"], 0);
     assert_eq!(response["have"], 0);

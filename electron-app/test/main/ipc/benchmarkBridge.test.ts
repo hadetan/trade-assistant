@@ -10,7 +10,7 @@ function harness(sidecar: {
   readLakeCandles: ReturnType<typeof vi.fn>;
   benchmarkCompute: ReturnType<typeof vi.fn>;
   evaluateScanGateStateless: ReturnType<typeof vi.fn>;
-  ensureDayBackfill: ReturnType<typeof vi.fn>;
+  resolveBenchmarkWindow: ReturnType<typeof vi.fn>;
   cancelCurrent: ReturnType<typeof vi.fn>;
 }) {
   const handlers = new Map<string, (event: unknown, arg: unknown) => unknown>();
@@ -31,9 +31,10 @@ function idleSidecar() {
     // Every fixture in this file uses timeframe "day" with source "bhavcopy",
     // so the pre-flight runs; a lake that already has plenty means the run
     // proceeds unchanged.
-    ensureDayBackfill: vi.fn().mockResolvedValue({
-      type: "day_backfill",
+    resolveBenchmarkWindow: vi.fn().mockResolvedValue({
+      type: "benchmark_window",
       id: 1,
+      from_ts: 0,
       have: 10_000,
       need: 0,
       sufficient: true,
@@ -104,13 +105,11 @@ describe("registerBenchmarkBridge", () => {
       source: "bhavcopy",
       horizon: "positional",
       algoId: "sma",
-      lookaheadBars: 5,
-      fromTs: 0,
-      toTs: 1e12,
+      requiredLookback: 20,
     };
     const result = (await handlers.get("benchmark:runBenchmark")!(fakeEvent(), params)) as { params: unknown; decisionPoints: unknown[] };
     expect(sidecar.readLakeCandles).toHaveBeenCalledWith("NSE:INFY", "day", "bhavcopy");
-    expect(result.params).toEqual(params);
+    expect(result.params).toEqual({ ...params, lookaheadBars: 5, fromTs: 0, toTs: 86_400 });
     expect(result.decisionPoints).toHaveLength(0);
   });
 
@@ -122,6 +121,10 @@ describe("registerBenchmarkBridge", () => {
       candles: [
         { ts: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 },
         { ts: 2, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+        { ts: 3, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+        { ts: 4, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+        { ts: 5, open: 1, high: 1, low: 1, close: 1, volume: 1 },
+        { ts: 6, open: 1, high: 1, low: 1, close: 1, volume: 1 },
       ],
     });
     sidecar.benchmarkCompute.mockResolvedValue({
@@ -138,13 +141,11 @@ describe("registerBenchmarkBridge", () => {
       source: "bhavcopy",
       horizon: "positional",
       algoId: "sma",
-      lookaheadBars: 0,
-      fromTs: 0,
-      toTs: 1e12,
+      requiredLookback: 0,
     };
     await handlers.get("benchmark:runBenchmark")!(event, params);
-    // series has 2 bars, lookaheadBars=0 -> eligible i in {0} only.
-    expect(event.sender.send).toHaveBeenCalledWith("benchmark:progress", { phase: "run", index: 0, total: 2 });
+    // series has 6 bars, positional default lookahead 5 -> one eligible frontier.
+    expect(event.sender.send).toHaveBeenCalledWith("benchmark:progress", { phase: "run", index: 0, total: 1 });
   });
 
   it("calls cancelCurrent on the sidecar", async () => {
