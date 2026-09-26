@@ -62,7 +62,7 @@ function parseCsvLine(line: string): string[] {
 }
 
 export function parseInstrumentCsv(csv: string): KiteInstrumentRow[] {
-  const lines = csv.split("\n").filter((line) => line.trim().length > 0);
+  const lines = csv.split(/\r?\n/).filter((line) => line.trim().length > 0);
   if (lines.length <= 1) return [];
   const header = parseCsvLine(lines[0]);
   const col = (name: string): number => header.indexOf(name);
@@ -83,9 +83,21 @@ export function parseInstrumentCsv(csv: string): KiteInstrumentRow[] {
   });
 }
 
+// Ranks an already-substring-filtered row so an exact tradingsymbol match
+// (e.g. "NSE:INFY") sorts ahead of the far more numerous F&O contract rows
+// that also substring-match a liquid underlying's name (e.g. "INFY26SEPFUT"),
+// which would otherwise crowd the exact match out of the MAX_RESULTS cap.
+function matchRank(row: KiteInstrumentRow, needle: string): number {
+  const symbol = row.tradingsymbol.toLowerCase();
+  if (symbol === needle) return 0;
+  if (symbol.startsWith(needle)) return 1;
+  return 2;
+}
+
 export class KiteInstrumentMaster {
   private readonly deps: KiteInstrumentMasterDeps;
   private cache: CacheFile | null = null;
+  private refreshPromise: Promise<void> | null = null;
 
   constructor(deps: KiteInstrumentMasterDeps) {
     this.deps = deps;
@@ -116,6 +128,15 @@ export class KiteInstrumentMaster {
       }
     }
 
+    if (this.refreshPromise) return this.refreshPromise;
+
+    this.refreshPromise = this.downloadAndCache(today).finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
+  }
+
+  private async downloadAndCache(today: string): Promise<void> {
     const fetchFn = this.deps.fetchFn ?? fetch;
     const response = await fetchFn("https://api.kite.trade/instruments", {
       headers: { Authorization: `token ${this.deps.apiKey}:${this.deps.accessToken}`, "X-Kite-Version": "3" },
@@ -136,6 +157,7 @@ export class KiteInstrumentMaster {
     await this.ensureFresh();
     return (this.cache?.rows ?? [])
       .filter((row) => row.tradingsymbol.toLowerCase().includes(needle) || row.name.toLowerCase().includes(needle))
+      .sort((a, b) => matchRank(a, needle) - matchRank(b, needle))
       .slice(0, MAX_RESULTS);
   }
 }

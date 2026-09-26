@@ -44,6 +44,15 @@ describe("parseInstrumentCsv", () => {
     expect(parseInstrumentCsv("")).toEqual([]);
     expect(parseInstrumentCsv("instrument_token,tradingsymbol,name,segment,exchange\n")).toEqual([]);
   });
+
+  it("handles CRLF line endings without leaving a trailing \\r on the last field", () => {
+    const crlfCsv = SAMPLE_CSV.replace(/\n/g, "\r\n");
+    const rows = parseInstrumentCsv(crlfCsv);
+    expect(rows[0].exchange).toBe("NSE");
+    expect(rows[0].exchange).not.toContain("\r");
+    expect(rows[1].exchange).toBe("NSE");
+    expect(rows[1].exchange).not.toContain("\r");
+  });
 });
 
 describe("KiteInstrumentMaster", () => {
@@ -82,6 +91,34 @@ describe("KiteInstrumentMaster", () => {
     const master = new KiteInstrumentMaster({ apiKey: "k", accessToken: "a", cacheDir: tempCacheDir(), fetchFn });
 
     expect(await master.search("sym")).toHaveLength(25);
+  });
+
+  it("ranks an exact tradingsymbol match ahead of decoy substring matches so it survives the 25-result cap", async () => {
+    const header =
+      "instrument_token,exchange_token,tradingsymbol,name,last_price,expiry,strike,tick_size,lot_size,instrument_type,segment,exchange";
+    const decoyRows = Array.from(
+      { length: 30 },
+      (_, i) => `${1000 + i},1,INFY26SEP${1000 + i * 10}CE,"INFOSYS LIMITED",0,,0,0.05,1,CE,NFO-OPT,NFO`,
+    );
+    const exactRow = '408065,1594,infy,"INFOSYS LIMITED",0,,0,0.05,1,EQ,NSE,NSE';
+    const csv = [header, ...decoyRows, exactRow].join("\n");
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true, status: 200, text: async () => csv });
+    const master = new KiteInstrumentMaster({ apiKey: "k", accessToken: "a", cacheDir: tempCacheDir(), fetchFn });
+
+    const results = await master.search("infy");
+    expect(results).toHaveLength(25);
+    expect(results.some((row) => row.tradingsymbol === "infy")).toBe(true);
+  });
+
+  it("dedupes concurrent search() calls into a single in-flight download", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(fakeResponse());
+    const master = new KiteInstrumentMaster({ apiKey: "k", accessToken: "a", cacheDir: tempCacheDir(), fetchFn });
+
+    const [a, b] = await Promise.all([master.search("infy"), master.search("infy")]);
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
   });
 
   it("reuses a same-day on-disk cache across instances without re-downloading", async () => {
