@@ -731,6 +731,57 @@ describe("App", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("keeps the prose result view (and starts no live session) for a proactive-scan alert's engine_only turn", async () => {
+    const bridge = installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
+      listSessions: vi.fn().mockResolvedValue([
+        { id: "scan-2", response_mode: "engine_only", created_at: "x", last_active_at: "x", preview: "NSE:INFY (scan)" },
+      ]),
+      getSession: vi.fn().mockResolvedValue({
+        id: "scan-2",
+        response_mode: "engine_only",
+        messages: [
+          {
+            id: "scan-user-1",
+            role: "user",
+            rendered_text: "Proactive scan: NSE:INFY · intraday · buying",
+            structured_payload: { trigger: "proactive_scan", symbol: "NSE:INFY", horizon: "intraday", intent_lens: "buying" },
+          },
+          {
+            id: "scan-assistant-1",
+            role: "assistant",
+            rendered_text: "Overall read: bullish.",
+            // ScanScheduler.recordWorthLook stores a *valid* engine_only
+            // AnalysisResult, so mode alone cannot distinguish it from an
+            // analyze -- but it never passed the readiness gate and has no
+            // warmed candles, so it must not open a live subscription.
+            structured_payload: {
+              mode: "engine_only",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              response: {
+                direction: "bullish",
+                conviction: "high",
+                text: "Overall read: bullish.",
+                confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
+              },
+              algo_results: [],
+              initialCandles: [],
+            },
+          },
+        ],
+      }),
+    });
+    vi.mocked(createLiveChart).mockClear(); // module-level mock, shared across this file's tests
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /NSE:INFY \(scan\)/ }));
+
+    expect(await screen.findByText(/overall read: bullish/i)).toBeTruthy();
+    expect(bridge.startLiveSession).not.toHaveBeenCalled();
+    expect(vi.mocked(createLiveChart)).not.toHaveBeenCalled();
+  });
+
   it("falls back to the default interval when reopening a pre-migration engine_only session whose stored payload has no interval field", async () => {
     const bridge = installBridge({
       getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),

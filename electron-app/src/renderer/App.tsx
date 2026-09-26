@@ -79,6 +79,13 @@ export function App(): JSX.Element {
   // must not be replayed (P13§2 decision 4 applies to a leftover failure banner
   // exactly as much as a fresh one). Reset on every new analysis and every reopen.
   const [suppressStaleBlocked, setSuppressStaleBlocked] = useState(false);
+  // ScanScheduler.recordWorthLook also stores engine_only turns, so
+  // `result.mode` alone cannot tell a proactive-scan alert apart from a real
+  // analyze. A scan turn never went through the readiness gate and carries no
+  // warmed candles, so starting a live subscription off it would open an
+  // ungated websocket (possibly outside market hours) onto an empty chart.
+  // Those keep the original prose view; only analyze-originated turns go live.
+  const [scanOriginated, setScanOriginated] = useState(false);
 
   useEffect(() => {
     void bridge().getStatus().then(setStatus);
@@ -109,6 +116,7 @@ export function App(): JSX.Element {
     // stale blocked/closed banner would otherwise render on the new one too.
     setReadiness(null);
     setSuppressStaleBlocked(false);
+    setScanOriginated(false);
     void bridge().listSessions().then(setSessions);
   };
 
@@ -125,6 +133,7 @@ export function App(): JSX.Element {
     setSessionDetail(null);
     setActiveSession({ id: session.id, mode });
     setShowModePicker(false);
+    setScanOriginated(false);
   };
 
   const onOpenSession = async (id: string): Promise<void> => {
@@ -137,6 +146,7 @@ export function App(): JSX.Element {
     setAnalysisError(null);
     setReadiness(null);
     setSuppressStaleBlocked(false);
+    setScanOriginated(false);
     const detail = await bridge().getSession(id);
     setSessionDetail(detail);
     setActiveSession({ id: detail.id, mode: detail.response_mode });
@@ -150,7 +160,10 @@ export function App(): JSX.Element {
       // `payload.mode === "engine_only"` to false via `undefined`; checked here
       // explicitly instead so that can never look like an intentional skip by luck.
       // Building a scan-appropriate readiness recheck is out of scope (P13 design).
-      if ("trigger" in rawPayload) return;
+      if ("trigger" in rawPayload) {
+        setScanOriginated(true);
+        return;
+      }
       const payload = lastUserMessage.structured_payload as AnalysisRunParams;
       // The gate is re-evaluated as of right now, not replayed from whenever this
       // session was last open: data and market state both move (P13§2 decision 5).
@@ -190,6 +203,7 @@ export function App(): JSX.Element {
     setAnalysisError(null);
     setReadiness(null);
     setSuppressStaleBlocked(false);
+    setScanOriginated(false);
     try {
       await bridge().runAnalysis({ mode: "engine_only", sessionId: activeSession.id, instrument, interval, intent_lens: intentLens });
       setSessionDetail(await bridge().getSession(activeSession.id));
@@ -244,7 +258,7 @@ export function App(): JSX.Element {
               {!readiness &&
                 result &&
                 !(suppressStaleBlocked && result.mode === "engine_only_blocked") &&
-                (result.mode === "engine_only" ? (
+                (result.mode === "engine_only" && !scanOriginated ? (
                   <LiveSessionView
                     // Forces a full unmount+remount on every new analyze (a fresh
                     // resultMessageId each time) rather than reusing the previous
