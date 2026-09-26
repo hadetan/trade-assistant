@@ -17,8 +17,11 @@ import { registerAnalysisBridge } from "./ipc/analysisBridge";
 import { registerHistoryBridge } from "./ipc/historyBridge";
 import { registerSettingsBridge } from "./ipc/settingsBridge";
 import { registerBenchmarkBridge } from "./ipc/benchmarkBridge";
+import { registerLiveBridge } from "./ipc/liveBridge";
 import { makeTraceSender } from "./ipc/traceBridge";
 import { HistoryStore } from "./services/history/historyStore";
+import { createLiveSessionRunner } from "./services/market/liveSessionRunner";
+import type { LiveSessionRunner } from "./services/market/liveSessionRunner";
 import { loadCachedHolidayCalendar, refreshNseHolidayCalendar } from "./services/market/nseHolidays";
 import { ScanScheduler } from "./scanScheduler";
 import { createTray } from "./tray";
@@ -91,6 +94,7 @@ export function createApp(): AppRuntime {
   let sidecarStatus: SidecarStatus = "down";
   let session: KiteSession | null = null;
   let ticker: KiteTickerClient | null = null;
+  let liveSessionRunner: LiveSessionRunner | null = null;
   let loginInFlight: Promise<LoginResult> | null = null;
   let mainWindow: BrowserWindow | null = null;
   let settingsWindow: BrowserWindow | null = null;
@@ -141,6 +145,22 @@ export function createApp(): AppRuntime {
         });
         ticker = newSession.ticker;
         session = newSession;
+        // Constructed once, on the first successful login, and reused across
+        // every re-login thereafter: session.ticker is the only thing
+        // liveSessionRunner needs that doesn't exist before a login, but
+        // replacing the runner on a later re-login would drop any live
+        // session already in progress.
+        if (!liveSessionRunner) {
+          liveSessionRunner = createLiveSessionRunner({
+            ticker: session.ticker,
+            sidecar: supervisor,
+            history,
+            sendTick: (tick) => sendToRenderer("live:tick", tick),
+            sendCandleClose: (payload) => sendToRenderer("live:candleClose", payload),
+            sendStatus: (status) => sendToRenderer("live:status", status),
+          });
+          registerLiveBridge({ ipcMain, runner: liveSessionRunner });
+        }
         sessionState.markAuthenticated();
         return { status: "authenticated" };
       } catch (error) {
