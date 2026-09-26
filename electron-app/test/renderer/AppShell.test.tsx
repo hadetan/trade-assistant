@@ -8,7 +8,7 @@ import type { AppStatus, BannerEvent, SessionSummary } from "../../src/main/ipc/
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
-const STATUS: AppStatus = { sidecar: "up", kiteSession: "needsLogin", driftWarning: null };
+const STATUS: AppStatus = { sidecar: "up", kiteSession: "needsLogin" };
 const SESSIONS: SessionSummary[] = [
   { id: "s1", response_mode: "ai_assisted", created_at: "t", last_active_at: new Date().toISOString(), preview: "how is infy" },
 ];
@@ -62,20 +62,20 @@ describe("AppShell", () => {
     expect(screen.getByRole("alert")).toBeTruthy();
   });
 
-  it("renders a warning Banner for kiteLogin/mcpDrift banners", () => {
+  it("renders a warning Banner for a kiteLogin banner", () => {
     const banners: BannerEvent[] = [{ kind: "kiteLogin", message: "please log in" }];
     renderShell({ banners });
     expect(screen.getByRole("status")).toBeTruthy();
   });
 
   it("maps sidecar/Kite status to StatusDot labels in the footer", () => {
-    renderShell({ status: { sidecar: "down", kiteSession: "authenticated", driftWarning: null } });
+    renderShell({ status: { sidecar: "down", kiteSession: "authenticated" } });
     expect(screen.getByText(/sidecar down/i)).toBeTruthy();
     expect(screen.getByText(/kite authenticated/i)).toBeTruthy();
   });
 
   it("still reports the sidecar as down with the error tone once status is known", () => {
-    const { container } = renderShell({ status: { sidecar: "down", kiteSession: "authenticated", driftWarning: null } });
+    const { container } = renderShell({ status: { sidecar: "down", kiteSession: "authenticated" } });
     expect(container.querySelector(".status-dot-error")).toBeTruthy();
   });
 

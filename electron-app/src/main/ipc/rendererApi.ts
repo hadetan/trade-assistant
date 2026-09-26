@@ -20,10 +20,9 @@ export type KiteSessionStatus = "authenticated" | "needsLogin" | "unknown";
 export interface AppStatus {
   sidecar: SidecarStatus;
   kiteSession: KiteSessionStatus;
-  driftWarning: string | null;
 }
 
-export type BannerKind = "kiteLogin" | "mcpDrift" | "sidecarDown";
+export type BannerKind = "kiteLogin" | "sidecarDown";
 
 export interface BannerEvent {
   kind: BannerKind;

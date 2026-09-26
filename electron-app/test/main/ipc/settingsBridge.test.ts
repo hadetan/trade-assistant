@@ -63,7 +63,7 @@ describe("registerSettingsBridge", () => {
   });
 
   it("returns the status object for settings:getAccountStatus", () => {
-    const status = { sidecar: "up", kiteSession: "authenticated", driftWarning: null };
+    const status = { sidecar: "up", kiteSession: "authenticated" };
     const handlers = harness({
       history: { getScanConfig: vi.fn(), setScanConfig: vi.fn() },
       scanScheduler: { setConfig: vi.fn() },
