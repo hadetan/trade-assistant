@@ -9,6 +9,7 @@ import { KiteSessionState, classifyKiteResponse } from "./services/kite/kiteSess
 import { loadKiteConfig } from "./services/kite/kiteConfig";
 import { runKiteLogin } from "./services/kite/kiteLogin";
 import type { KiteSession } from "./services/kite/kiteLogin";
+import type { KiteTickerClient } from "./services/kite/kiteTicker";
 import { captureRequestToken, exchangeAccessToken } from "./services/kite/kiteOAuth";
 import { ClaudeCliProvider } from "./services/claude/claudeCliProvider";
 import { registerStatusBridge } from "./ipc/appBridge";
@@ -89,6 +90,7 @@ export function createApp(): AppRuntime {
 
   let sidecarStatus: SidecarStatus = "down";
   let session: KiteSession | null = null;
+  let ticker: KiteTickerClient | null = null;
   let loginInFlight: Promise<LoginResult> | null = null;
   let mainWindow: BrowserWindow | null = null;
   let settingsWindow: BrowserWindow | null = null;
@@ -105,16 +107,17 @@ export function createApp(): AppRuntime {
   sessionState.on("banner", dispatchBanner);
   // Once the session state moves to needsLogin — whether from a live
   // response/rejection classified as expired, or a failed re-login attempt
-  // below — the previous connection is no longer trustworthy. Closing and
-  // clearing it here (rather than only at quit) keeps `session` consistent
-  // with what the "needs login" banner is telling the user: kite:*
-  // IPC calls should reject with "not logged in", not keep succeeding
-  // against a stale connection.
+  // below — the previous session's REST caller is no longer trustworthy.
+  // Clearing it here (rather than only at quit) keeps `session` consistent
+  // with what the "needs login" banner is telling the user: kite:* IPC calls
+  // should reject with "not logged in", not keep succeeding against a stale
+  // session. The ticker itself is untouched — it is a process-lifetime
+  // singleton (see the `ticker` variable below) that only gets its
+  // credentials refreshed on the next successful login, never disconnected
+  // here.
   sessionState.on("change", (status: KiteSessionStatus) => {
     if (status === "needsLogin" && session) {
-      const closing = session;
       session = null;
-      void closing.close().catch(() => {});
     }
   });
 
@@ -124,7 +127,6 @@ export function createApp(): AppRuntime {
     if (loginInFlight) return loginInFlight;
     loginInFlight = (async (): Promise<LoginResult> => {
       try {
-        const previousSession = session;
         const openExternal = (url: string) => shell.openExternal(url);
         const onKiteResponse = (response: unknown) => handleKiteResponse(sessionState, response);
         const newSession = await runKiteLogin({
@@ -135,13 +137,9 @@ export function createApp(): AppRuntime {
           postForm,
           openExternal,
           onKiteResponse,
+          existingTicker: ticker ?? undefined,
         });
-        // Defense in depth: the "change" listener above already closes a
-        // session as soon as it goes stale, but close whatever is still
-        // referenced here too so a redundant login() call can never leak it.
-        if (previousSession && previousSession !== newSession) {
-          void previousSession.close().catch(() => {});
-        }
+        ticker = newSession.ticker;
         session = newSession;
         sessionState.markAuthenticated();
         return { status: "authenticated" };
@@ -271,7 +269,10 @@ export function createApp(): AppRuntime {
       // on. stop() only clears the interval timer; a tick already in flight is
       // caught by tickOneSymbol's own try/catch if it hits a closed store.
       scanScheduler.stop();
-      void session?.close().catch(() => {});
+      // The only point ticker.disconnect() is ever safe to call: main.ts's
+      // before-quit handler calls stop() exactly once, at real process quit,
+      // so there is no later reconnect attempt this could poison (P17§3).
+      ticker?.disconnect();
       history.close();
       supervisor.stop();
       benchmarkSupervisor.stop();

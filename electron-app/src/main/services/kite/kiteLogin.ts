@@ -16,12 +16,12 @@ export interface KiteLoginDeps {
   onKiteResponse?: (response: unknown) => void;
   createRestCaller?: typeof createKiteRestCaller;
   createTicker?: typeof createKiteTicker;
+  existingTicker?: KiteTickerClient;
 }
 
 export interface KiteSession {
   kite: KiteClient;
   ticker: KiteTickerClient;
-  close(): Promise<void>;
 }
 
 function extractAccessToken(tokenResponse: unknown): string {
@@ -43,12 +43,9 @@ export async function runKiteLogin(deps: KiteLoginDeps): Promise<KiteSession> {
   const createRestCaller = deps.createRestCaller ?? createKiteRestCaller;
   const caller = createRestCaller({ apiKey, accessToken, instrumentMaster });
   const kite = new KiteClient(caller, { onResponse: deps.onKiteResponse });
-  const createTicker = deps.createTicker ?? createKiteTicker;
-  const ticker = createTicker(apiKey, accessToken);
 
-  return {
-    kite,
-    ticker,
-    close: async () => ticker.disconnect(),
-  };
+  const ticker = deps.existingTicker ?? (deps.createTicker ?? createKiteTicker)(apiKey, accessToken);
+  ticker.updateCredentialsAndConnect(apiKey, accessToken);
+
+  return { kite, ticker };
 }

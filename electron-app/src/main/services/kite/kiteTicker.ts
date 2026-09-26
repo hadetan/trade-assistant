@@ -4,6 +4,7 @@ export type TickerConnectionStatus = "connected" | "reconnecting" | "error";
 
 export interface KiteTickerClient {
   connect(): void;
+  updateCredentialsAndConnect(apiKey: string, accessToken: string): void;
   subscribe(instrumentTokens: number[], mode?: "ltp" | "quote" | "full"): void;
   onTick(handler: (ticks: unknown[]) => void): void;
   onConnectionChange(handler: (status: TickerConnectionStatus) => void): void;
@@ -13,10 +14,11 @@ export interface KiteTickerClient {
 // The subset of the kiteconnect npm package's real KiteTicker surface this
 // wrapper depends on -- named so a test can inject a fake without importing
 // the real (network-opening) class. Verified against kiteconnectjs's own
-// lib/ticker.ts (github.com/zerodha/kiteconnectjs), not guessed from docs.
+// compiled source (dist/lib/ticker.js), not guessed from docs or types.
 export interface KiteTickerLike {
   connect(): void;
   disconnect(): void;
+  connected(): boolean;
   subscribe(tokens: number[]): void;
   setMode(mode: string, tokens: number[]): void;
   autoReconnect(enable: boolean, maxRetry: number, maxDelaySeconds: number): void;
@@ -24,6 +26,8 @@ export interface KiteTickerLike {
   modeLTP: string;
   modeQuote: string;
   modeFull: string;
+  api_key: string;
+  access_token: string;
 }
 
 export interface KiteTickerFactoryDeps {
@@ -61,6 +65,20 @@ export function createKiteTicker(
 
   return {
     connect: () => ticker.connect(),
+    // connect() is a no-op if the socket is already open/connecting (verified
+    // against the real library source), so this is always safe to call: on
+    // first-ever login it establishes the initial connection; on every later
+    // re-login it just updates the credentials the library will use the next
+    // time it naturally reconnects. This library's disconnect() permanently
+    // disables auto-reconnect at module scope for the rest of the process
+    // (see the comment on the autoReconnect() call above), so there is no way
+    // to force an immediate reconnect with the new token -- only a lazy one,
+    // the next time the socket drops on its own.
+    updateCredentialsAndConnect: (apiKey, accessToken) => {
+      ticker.api_key = apiKey;
+      ticker.access_token = accessToken;
+      ticker.connect();
+    },
     subscribe: (instrumentTokens, mode = "full") => {
       ticker.subscribe(instrumentTokens);
       const modeValue = mode === "ltp" ? ticker.modeLTP : mode === "quote" ? ticker.modeQuote : ticker.modeFull;

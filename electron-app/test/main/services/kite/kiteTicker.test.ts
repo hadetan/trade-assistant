@@ -8,8 +8,11 @@ function fakeTickerLike(): KiteTickerLike & { emit: (event: string, ...args: unk
     modeLTP: "ltp",
     modeQuote: "quote",
     modeFull: "full",
+    api_key: "",
+    access_token: "",
     connect: vi.fn(),
     disconnect: vi.fn(),
+    connected: vi.fn().mockReturnValue(false),
     subscribe: vi.fn(),
     setMode: vi.fn(),
     autoReconnect: vi.fn(),
@@ -44,6 +47,17 @@ describe("createKiteTicker", () => {
 
     expect(fake.connect).toHaveBeenCalledTimes(1);
     expect(fake.disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("updateCredentialsAndConnect() sets api_key/access_token on the underlying ticker then calls connect()", () => {
+    const fake = fakeTickerLike();
+    const client = createKiteTicker("k", "a", { createTicker: () => fake });
+
+    client.updateCredentialsAndConnect("k2", "at2");
+
+    expect(fake.api_key).toBe("k2");
+    expect(fake.access_token).toBe("at2");
+    expect(fake.connect).toHaveBeenCalledTimes(1);
   });
 
   it("subscribe() calls subscribe then setMode with the resolved mode constant, defaulting to full", () => {
