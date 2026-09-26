@@ -23,7 +23,7 @@ describe("LiveCandleTracker", () => {
     tracker.onTick(IST_0915_UTC_SECONDS + 120, 95);
     const closed = tracker.onTick(IST_0915_UTC_SECONDS + 300, 102); // exactly 09:20:00 -- next bucket
 
-    expect(closed).toEqual({ ts: IST_0915_UTC_SECONDS, open: 100, high: 105, low: 95, close: 95 });
+    expect(closed).toEqual({ ts: IST_0915_UTC_SECONDS, open: 100, high: 105, low: 95, close: 95, volume: 0 });
   });
 
   it("starts a fresh forming candle after a close, using the crossing tick as its first price", () => {
@@ -33,7 +33,7 @@ describe("LiveCandleTracker", () => {
 
     const closedSecond = tracker.onTick(IST_0915_UTC_SECONDS + 600, 110); // closes bucket 2
 
-    expect(closedSecond).toEqual({ ts: IST_0915_UTC_SECONDS + 300, open: 102, high: 102, low: 102, close: 102 });
+    expect(closedSecond).toEqual({ ts: IST_0915_UTC_SECONDS + 300, open: 102, high: 102, low: 102, close: 102, volume: 0 });
   });
 
   it("still closes correctly across a gap in ticks (no tick lands exactly on a boundary)", () => {
@@ -43,7 +43,7 @@ describe("LiveCandleTracker", () => {
     // simulating an illiquid instrument with no tick exactly at :20:00.
     const closed = tracker.onTick(IST_0915_UTC_SECONDS + 420, 108);
 
-    expect(closed).toEqual({ ts: IST_0915_UTC_SECONDS, open: 100, high: 100, low: 100, close: 100 });
+    expect(closed).toEqual({ ts: IST_0915_UTC_SECONDS, open: 100, high: 100, low: 100, close: 100, volume: 0 });
   });
 
   it("aligns bucket boundaries to wall-clock minutes since IST midnight, not session-open-relative offsets", () => {
@@ -56,5 +56,59 @@ describe("LiveCandleTracker", () => {
     const closed = tracker.onTick(IST_0915_UTC_SECONDS + 5 * 60, 105); // 09:20:00 -- crosses into [09:20,09:30)
 
     expect(closed?.ts).toBe(IST_0915_UTC_SECONDS - 5 * 60); // bucket started at 09:10:00
+  });
+
+  it("reports a bar's own volume as the rise in Kite's day-cumulative volume_traded, not the raw total", () => {
+    const tracker = new LiveCandleTracker(5);
+
+    tracker.onTick(IST_0915_UTC_SECONDS, 100, 1_000_000);
+    tracker.onTick(IST_0915_UTC_SECONDS + 120, 101, 1_000_450);
+    const closed = tracker.onTick(IST_0915_UTC_SECONDS + 300, 102, 1_000_700);
+
+    expect(closed?.volume).toBe(700);
+  });
+
+  it("starts the next bar's volume baseline at the closing tick's cumulative total", () => {
+    const tracker = new LiveCandleTracker(5);
+    tracker.onTick(IST_0915_UTC_SECONDS, 100, 1_000_000);
+    tracker.onTick(IST_0915_UTC_SECONDS + 300, 102, 1_000_700); // closes bar 1, opens bar 2
+
+    const closedSecond = tracker.onTick(IST_0915_UTC_SECONDS + 600, 110, 1_000_900);
+
+    // 1_000_900 - 1_000_700: the second bar must not inherit the first bar's
+    // volume, and no traded quantity may be counted into two bars at once.
+    expect(closedSecond?.volume).toBe(200);
+  });
+
+  it("keeps the forming bar's volume up to date on every tick, not only at close", () => {
+    const tracker = new LiveCandleTracker(5);
+    tracker.onTick(IST_0915_UTC_SECONDS, 100, 5_000);
+    tracker.onTick(IST_0915_UTC_SECONDS + 60, 101, 5_300);
+
+    // Observable only through the closed bar, which is what gets persisted.
+    const closed = tracker.onTick(IST_0915_UTC_SECONDS + 300, 102, 5_300);
+    expect(closed?.volume).toBe(300);
+  });
+
+  it("treats a tick with no volume_traded as no new volume rather than a reset to zero", () => {
+    const tracker = new LiveCandleTracker(5);
+    tracker.onTick(IST_0915_UTC_SECONDS, 100, 2_000);
+    tracker.onTick(IST_0915_UTC_SECONDS + 60, 101, 2_500);
+    tracker.onTick(IST_0915_UTC_SECONDS + 120, 102); // LTP-shaped tick, no volume field
+
+    const closed = tracker.onTick(IST_0915_UTC_SECONDS + 300, 103);
+
+    expect(closed?.volume).toBe(500);
+  });
+
+  it("never reports a negative volume if the cumulative total goes backwards", () => {
+    const tracker = new LiveCandleTracker(5);
+    tracker.onTick(IST_0915_UTC_SECONDS, 100, 9_000);
+
+    // A day rollover (or a malformed tick) resets volume_traded; clamping keeps
+    // a nonsense negative bar out of the shared candle lake.
+    const closed = tracker.onTick(IST_0915_UTC_SECONDS + 300, 102, 10);
+
+    expect(closed?.volume).toBe(0);
   });
 });

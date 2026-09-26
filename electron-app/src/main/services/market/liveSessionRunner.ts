@@ -51,7 +51,21 @@ export interface LiveSessionRunner {
 }
 
 function candleWire(candle: LiveCandle): CandleWire {
-  return { ts: candle.ts, open: candle.open, high: candle.high, low: candle.low, close: candle.close, volume: 0 };
+  return {
+    ts: candle.ts,
+    open: candle.open,
+    high: candle.high,
+    low: candle.low,
+    close: candle.close,
+    volume: candle.volume,
+  };
+}
+
+// Kite's full-mode ticks carry the day's running total under `volume_traded`;
+// the tracker turns that into a per-bar delta. Undefined (an LTP-mode tick,
+// which this runner never subscribes for) means "no reading", not "zero".
+function tickCumulativeVolume(tick: Record<string, unknown>): number | undefined {
+  return typeof tick.volume_traded === "number" ? tick.volume_traded : undefined;
 }
 
 // Kite ticks in "full" mode include exchange_timestamp as an ISO string;
@@ -90,7 +104,7 @@ export function createLiveSessionRunner(deps: LiveSessionRunnerDeps): LiveSessio
         const ts = tickTimestampSeconds(tick);
         deps.sendTick({ ts, price: tick.last_price });
 
-        const closed = tracker.onTick(ts, tick.last_price);
+        const closed = tracker.onTick(ts, tick.last_price, tickCumulativeVolume(tick));
         if (closed === null) return;
 
         void (async () => {

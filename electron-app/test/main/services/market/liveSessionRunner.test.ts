@@ -127,15 +127,22 @@ describe("createLiveSessionRunner", () => {
     history.updateMessage.mockImplementation(() => order.push("history"));
 
     // First tick opens the forming candle; a tick ~5 minutes later closes it.
-    tickHandlers[0]([{ instrument_token: 408065, last_price: 100, exchange_timestamp: "2026-09-26T09:15:00+05:30" }]);
-    tickHandlers[0]([{ instrument_token: 408065, last_price: 102, exchange_timestamp: "2026-09-26T09:20:00+05:30" }]);
+    tickHandlers[0]([
+      { instrument_token: 408065, last_price: 100, volume_traded: 1_000_000, exchange_timestamp: "2026-09-26T09:15:00+05:30" },
+    ]);
+    tickHandlers[0]([
+      { instrument_token: 408065, last_price: 102, volume_traded: 1_000_450, exchange_timestamp: "2026-09-26T09:20:00+05:30" },
+    ]);
     await new Promise((resolve) => setTimeout(resolve, 0)); // let the async close handler settle
 
     expect(order).toEqual(["persist", "compute", "history"]);
     expect(sidecar.persistCandles).toHaveBeenCalledWith(
       "NSE:INFY",
       "5minute",
-      [expect.objectContaining({ open: 100, close: 100 })],
+      // volume is the delta in Kite's day-cumulative volume_traded, never a
+      // hardcoded 0 -- this writes the lake partition every later analysis and
+      // every volume-sensitive algorithm reads from.
+      [expect.objectContaining({ open: 100, close: 100, volume: 450 })],
       "kite",
     );
     // The accumulated lake history, not the lone bar that just closed -- with a
