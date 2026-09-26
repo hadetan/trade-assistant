@@ -14,6 +14,7 @@ export interface SessionSummary {
 }
 
 export interface HistoryMessage {
+  id: string;
   role: MessageRole;
   rendered_text: string;
   structured_payload: unknown;
@@ -33,6 +34,13 @@ export interface AppendMessageParams {
   renderedText: string;
   structuredPayload?: unknown;
   trace?: TraceEvent[];
+}
+
+export interface UpdateMessageParams {
+  sessionId: string;
+  messageId: string;
+  renderedText: string;
+  structuredPayload?: unknown;
 }
 
 export interface HistoryStoreOptions {
@@ -60,7 +68,8 @@ function summarizePreview(latestMessageText: string | null): string {
 export class HistoryStore {
   private readonly db: DatabaseHandle;
   private readonly now: () => Date;
-  private readonly appendMessageTxn: (params: AppendMessageParams, timestamp: string) => void;
+  private readonly appendMessageTxn: (params: AppendMessageParams, timestamp: string) => string;
+  private readonly updateMessageTxn: (params: UpdateMessageParams, timestamp: string) => void;
 
   constructor(options: HistoryStoreOptions) {
     this.now = options.now ?? (() => new Date());
@@ -101,16 +110,29 @@ export class HistoryStore {
       `INSERT INTO messages (id, session_id, role, rendered_text, structured_payload, trace, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
+    const updateMessage = this.db.prepare(
+      `UPDATE messages SET rendered_text = ?, structured_payload = ? WHERE id = ?`,
+    );
     const bumpSession = this.db.prepare("UPDATE sessions SET last_active_at = ? WHERE id = ?");
-    this.appendMessageTxn = this.db.transaction((params: AppendMessageParams, timestamp: string) => {
+    this.appendMessageTxn = this.db.transaction((params: AppendMessageParams, timestamp: string): string => {
+      const id = randomUUID();
       insertMessage.run(
-        randomUUID(),
+        id,
         params.sessionId,
         params.role,
         params.renderedText,
         params.structuredPayload === undefined ? null : JSON.stringify(params.structuredPayload),
         params.trace === undefined ? null : JSON.stringify(params.trace),
         timestamp,
+      );
+      bumpSession.run(timestamp, params.sessionId);
+      return id;
+    });
+    this.updateMessageTxn = this.db.transaction((params: UpdateMessageParams, timestamp: string) => {
+      updateMessage.run(
+        params.renderedText,
+        params.structuredPayload === undefined ? null : JSON.stringify(params.structuredPayload),
+        params.messageId,
       );
       bumpSession.run(timestamp, params.sessionId);
     });
@@ -166,10 +188,11 @@ export class HistoryStore {
     if (!session) return null;
     const rows = this.db
       .prepare(
-        `SELECT role, rendered_text, structured_payload, trace, created_at FROM messages
+        `SELECT id, role, rendered_text, structured_payload, trace, created_at FROM messages
          WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`,
       )
       .all(id) as Array<{
+      id: string;
       role: MessageRole;
       rendered_text: string;
       structured_payload: string | null;
@@ -180,6 +203,7 @@ export class HistoryStore {
       id: session.id,
       response_mode: session.response_mode,
       messages: rows.map((row) => ({
+        id: row.id,
         role: row.role,
         rendered_text: row.rendered_text,
         structured_payload: row.structured_payload === null ? null : JSON.parse(row.structured_payload),
@@ -189,9 +213,14 @@ export class HistoryStore {
     };
   }
 
-  appendMessage(params: AppendMessageParams): void {
+  appendMessage(params: AppendMessageParams): string {
     const timestamp = this.now().toISOString();
-    this.appendMessageTxn(params, timestamp);
+    return this.appendMessageTxn(params, timestamp);
+  }
+
+  updateMessage(params: UpdateMessageParams): void {
+    const timestamp = this.now().toISOString();
+    this.updateMessageTxn(params, timestamp);
   }
 
   getClaudeSessionId(sessionId: string): string | null {

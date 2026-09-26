@@ -209,3 +209,63 @@ describe("HistoryStore scan_config", () => {
     second.close();
   });
 });
+
+describe("HistoryMessage.id", () => {
+  it("exposes each message's own id on getSession, matching what appendMessage returned", () => {
+    const store = memoryStore();
+    const session = store.createSession("engine_only");
+    const id = store.appendMessage({ sessionId: session.id, role: "assistant", renderedText: "x" });
+
+    const detail = store.getSession(session.id);
+
+    expect(detail?.messages[0].id).toBe(id);
+    store.close();
+  });
+});
+
+describe("appendMessage return value", () => {
+  it("returns the generated message id", () => {
+    const store = memoryStore();
+    const session = store.createSession("engine_only");
+
+    const id = store.appendMessage({ sessionId: session.id, role: "user", renderedText: "hi" });
+
+    expect(typeof id).toBe("string");
+    expect(id.length).toBeGreaterThan(0);
+    store.close();
+  });
+});
+
+describe("updateMessage", () => {
+  it("overwrites an existing message's rendered_text and structured_payload without creating a new row", () => {
+    const store = memoryStore();
+    const session = store.createSession("engine_only");
+    const id = store.appendMessage({
+      sessionId: session.id,
+      role: "assistant",
+      renderedText: "first",
+      structuredPayload: { n: 1 },
+    });
+
+    store.updateMessage({ sessionId: session.id, messageId: id, renderedText: "second", structuredPayload: { n: 2 } });
+
+    const detail = store.getSession(session.id);
+    expect(detail?.messages).toHaveLength(1);
+    expect(detail?.messages[0].rendered_text).toBe("second");
+    expect(detail?.messages[0].structured_payload).toEqual({ n: 2 });
+    store.close();
+  });
+
+  it("bumps the session's last_active_at", () => {
+    const store = memoryStore();
+    const session = store.createSession("engine_only");
+    const id = store.appendMessage({ sessionId: session.id, role: "assistant", renderedText: "x" });
+    const before = store.listSessions()[0].last_active_at;
+
+    store.updateMessage({ sessionId: session.id, messageId: id, renderedText: "y" });
+
+    const after = store.listSessions()[0].last_active_at;
+    expect(after >= before).toBe(true);
+    store.close();
+  });
+});
