@@ -1,18 +1,10 @@
 export class KiteConfigError extends Error {}
 
-export interface KiteFullConfig {
-  mode: "full";
+export interface KiteConfig {
   apiKey: string;
   apiSecret: string;
   loginPort: number;
 }
-
-export interface KiteMcpOnlyConfig {
-  mode: "mcpOnly";
-  loginPort: number;
-}
-
-export type KiteConfig = KiteFullConfig | KiteMcpOnlyConfig;
 
 const DEFAULT_LOGIN_PORT = 3000;
 
@@ -29,17 +21,11 @@ export function loadKiteConfig(env: NodeJS.ProcessEnv = process.env): KiteConfig
   const loginPort = parseLoginPort(env);
   const apiKey = env.KITE_API_KEY?.trim();
   const apiSecret = env.KITE_API_SECRET?.trim();
-  const hasKey = Boolean(apiKey);
-  const hasSecret = Boolean(apiSecret);
-
-  if (hasKey && hasSecret) {
-    return { mode: "full", apiKey: apiKey!, apiSecret: apiSecret!, loginPort };
+  if (!apiKey || !apiSecret) {
+    throw new KiteConfigError(
+      "KITE_API_KEY and KITE_API_SECRET are both required — register a Kite Connect developer app " +
+        "at developers.kite.trade (₹500/month) and set both in electron-app/.env. There is no fallback mode.",
+    );
   }
-  if (!hasKey && !hasSecret) {
-    return { mode: "mcpOnly", loginPort };
-  }
-  const missing = hasKey ? "KITE_API_SECRET" : "KITE_API_KEY";
-  throw new KiteConfigError(
-    `${missing} is missing while the other Kite credential is set — set both for full mode, or neither for MCP-only mode`,
-  );
+  return { apiKey, apiSecret, loginPort };
 }
