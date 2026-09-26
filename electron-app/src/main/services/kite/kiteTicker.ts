@@ -40,8 +40,14 @@ export function createKiteTicker(
   deps: KiteTickerFactoryDeps = {},
 ): KiteTickerClient {
   const ticker = (deps.createTicker ?? defaultCreateTicker)({ api_key: apiKey, access_token: accessToken });
-  // -1 max_retry means retry forever, per kiteconnectjs's own autoReconnect contract.
-  ticker.autoReconnect(true, -1, 5);
+  // -1 is a footgun, not "retry forever": kiteconnectjs's attemptReconnection()
+  // checks `current_reconnection_count > reconnect_max_tries` and calls
+  // process.exit(1) once that's true, so with max_retry = -1 the very first
+  // disconnect (0 > -1) already trips it and kills the whole Electron main
+  // process. 300 is the library's own documented maximum retry count --
+  // passing anything higher has no additional effect -- so it's used here
+  // to get the most real reconnect attempts the library supports.
+  ticker.autoReconnect(true, 300, 5);
 
   const tickHandlers: ((ticks: unknown[]) => void)[] = [];
   const connectionHandlers: ((status: TickerConnectionStatus) => void)[] = [];

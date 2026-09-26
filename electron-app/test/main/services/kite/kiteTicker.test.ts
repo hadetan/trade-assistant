@@ -25,14 +25,14 @@ function fakeTickerLike(): KiteTickerLike & { emit: (event: string, ...args: unk
 }
 
 describe("createKiteTicker", () => {
-  it("constructs with api_key/access_token and enables auto-reconnect with infinite retries", () => {
+  it("constructs with api_key/access_token and enables auto-reconnect with the library's max retry count", () => {
     const fake = fakeTickerLike();
     const createTicker = vi.fn().mockReturnValue(fake);
 
     createKiteTicker("k123", "at999", { createTicker });
 
     expect(createTicker).toHaveBeenCalledWith({ api_key: "k123", access_token: "at999" });
-    expect(fake.autoReconnect).toHaveBeenCalledWith(true, -1, 5);
+    expect(fake.autoReconnect).toHaveBeenCalledWith(true, 300, 5);
   });
 
   it("connect() and disconnect() delegate to the underlying ticker", () => {
