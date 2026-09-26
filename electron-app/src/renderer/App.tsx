@@ -3,6 +3,7 @@ import { ModePicker } from "./ModePicker";
 import { IntentLensSelector } from "./IntentLensSelector";
 import { InstrumentSearch } from "./InstrumentSearch";
 import { AnalysisResultView, readinessMessage } from "./AnalysisResult";
+import { LiveSessionView } from "./LiveSessionView";
 import { ChatView, historyToChatMessages } from "./ChatView";
 import { BenchmarkView } from "./BenchmarkView";
 import { AppShell } from "./AppShell";
@@ -20,6 +21,7 @@ import type {
   BannerEvent,
   CandleInterval,
   HistoryMessage,
+  InstrumentRef,
   InstrumentSelection,
   IntentLens,
   ReadinessResult,
@@ -32,12 +34,26 @@ interface ActiveSession {
   mode: AnalysisMode;
 }
 
-function deriveEngineOnlyView(detail: SessionDetail | null): { result?: AnalysisResult; history: HistoryMessage[] } {
+// AnalysisResult only ever carries an InstrumentRef (an as-of snapshot for
+// display/record-keeping, `kite_token_asof`) -- LiveSessionView needs the same
+// token under InstrumentSelection's live-subscription field name instead.
+function instrumentRefToSelection(ref: InstrumentRef): InstrumentSelection {
+  return { symbol: ref.symbol, exchange: ref.exchange, segment: ref.segment, instrumentToken: ref.kite_token_asof };
+}
+
+function deriveEngineOnlyView(
+  detail: SessionDetail | null,
+): { result?: AnalysisResult; resultMessageId: string; history: HistoryMessage[] } {
   const messages = detail?.messages ?? [];
   const lastAssistantIndex = messages.map((m) => m.role).lastIndexOf("assistant");
-  if (lastAssistantIndex === -1) return { history: messages };
+  if (lastAssistantIndex === -1) return { resultMessageId: "", history: messages };
   return {
     result: messages[lastAssistantIndex].structured_payload as AnalysisResult,
+    // Not stored inside structured_payload itself (P17 self-review): the id
+    // doesn't exist yet when history.appendMessage() builds that payload, so
+    // it's threaded through as a sibling of `result` instead, the same way
+    // `history` already is.
+    resultMessageId: messages[lastAssistantIndex].id,
     history: messages.filter((_, index) => index !== lastAssistantIndex),
   };
 }
@@ -183,7 +199,7 @@ export function App(): JSX.Element {
   };
 
   const authenticated = status?.kiteSession === "authenticated";
-  const { result, history } = deriveEngineOnlyView(sessionDetail);
+  const { result, resultMessageId, history } = deriveEngineOnlyView(sessionDetail);
 
   return (
     <AppShell
@@ -225,9 +241,22 @@ export function App(): JSX.Element {
               <InstrumentSearch onSubmit={onAnalyze} />
               {analysisError && <Banner variant="error">{analysisError}</Banner>}
               {readiness && <Banner variant="info">{readinessMessage(readiness)}</Banner>}
-              {!readiness && result && !(suppressStaleBlocked && result.mode === "engine_only_blocked") && (
-                <AnalysisResultView result={result} history={history} />
-              )}
+              {!readiness &&
+                result &&
+                !(suppressStaleBlocked && result.mode === "engine_only_blocked") &&
+                (result.mode === "engine_only" ? (
+                  <LiveSessionView
+                    sessionId={activeSession.id}
+                    assistantMessageId={resultMessageId}
+                    instrument={instrumentRefToSelection(result.instrument)}
+                    interval={result.interval}
+                    initialCandles={result.initialCandles}
+                    initialConfluence={result.response.confluence}
+                    bridge={bridge()}
+                  />
+                ) : (
+                  <AnalysisResultView result={result} history={history} />
+                ))}
             </>
           ) : (
             <ChatView

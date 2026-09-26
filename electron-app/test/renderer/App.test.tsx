@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/renderer/liveChart", () => ({
+  createLiveChart: vi.fn(() => ({ applyTick: vi.fn(), applyClosedCandle: vi.fn(), dispose: vi.fn() })),
+}));
+
 import { App } from "../../src/renderer/App";
 import { installBridge } from "./testBridge";
 
@@ -118,6 +123,68 @@ describe("App", () => {
         intent_lens: "selling",
       }),
     );
+  });
+
+  it("renders LiveSessionView (not AnalysisResultView's prose) after a successful Engine-Only analyze", async () => {
+    const bridge = installBridge({
+      getStatus: vi.fn().mockResolvedValue({ sidecar: "up", kiteSession: "authenticated" }),
+      searchInstruments: vi.fn().mockResolvedValue({
+        data: [{ tradingsymbol: "INFY", exchange: "NSE", segment: "NSE", instrument_token: 408065 }],
+      }),
+      runAnalysis: vi.fn().mockResolvedValue({
+        mode: "engine_only",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+        interval: "5minute",
+        response: {
+          direction: "bullish",
+          conviction: "high",
+          text: "Overall read: bullish.",
+          confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
+        },
+        algo_results: [],
+        initialCandles: [],
+      }),
+      getSession: vi.fn().mockResolvedValue({
+        id: "session-1",
+        response_mode: "engine_only",
+        messages: [
+          {
+            id: "assistant-msg-1",
+            role: "assistant",
+            rendered_text: "Overall read: bullish.",
+            structured_payload: {
+              mode: "engine_only",
+              instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+              interval: "5minute",
+              response: {
+                direction: "bullish",
+                conviction: "high",
+                text: "Overall read: bullish.",
+                confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
+              },
+              algo_results: [],
+              initialCandles: [],
+            },
+          },
+        ],
+      }),
+    });
+    render(<App />);
+    await startEngineOnlyChat();
+    fireEvent.change(await screen.findByLabelText(/instrument search/i), { target: { value: "infy" } });
+    fireEvent.click(await screen.findByRole("button", { name: "NSE:INFY" }));
+    fireEvent.click(screen.getByRole("button", { name: /analyze/i }));
+
+    await waitFor(() =>
+      expect(bridge.startLiveSession).toHaveBeenCalledWith({
+        sessionId: "session-1",
+        assistantMessageId: "assistant-msg-1",
+        instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+        interval: "5minute",
+      }),
+    );
+    // AnalysisResultView would have rendered this prose text; LiveSessionView never does.
+    expect(screen.queryByText(/overall read: bullish/i)).toBeNull();
   });
 
   it("shows an error message when analysis fails instead of failing silently", async () => {

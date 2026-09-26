@@ -2,7 +2,7 @@ import type { DeterministicResponse } from "../services/analysis/deterministicRe
 import type { InstrumentRef, Verdict } from "../services/analysis/contracts";
 import type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
 import type { AlgoResultWire, ConfluenceWire } from "../services/sidecar/sidecarProtocol";
-export type { IntentLens, Verdict } from "../services/analysis/contracts";
+export type { IntentLens, Verdict, InstrumentRef } from "../services/analysis/contracts";
 import type { IntentLens } from "../services/analysis/contracts";
 export type { SessionSummary, HistoryMessage, SessionDetail } from "../services/history/historyStore";
 import type { SessionSummary, HistoryMessage, SessionDetail } from "../services/history/historyStore";
@@ -66,6 +66,7 @@ export type AnalysisResult =
       interval: CandleInterval;
       response: DeterministicResponse;
       algo_results: AlgoResultWire[];
+      initialCandles: CandleWire[];
     }
   | {
       mode: "engine_only_blocked";

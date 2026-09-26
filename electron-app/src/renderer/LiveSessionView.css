@@ -1,0 +1,11 @@
+.live-session-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  margin-top: var(--space-5);
+}
+
+.live-session-chart {
+  flex: 1;
+  min-height: 0;
+}

@@ -127,6 +127,10 @@ export class ScanScheduler {
       interval: "5minute",
       response,
       algo_results: envelope.algo_results,
+      // A scan tick assembles its envelope directly, with no readinessGate
+      // call to hand a warmed candle set forward (unlike runAnalysisRequest) --
+      // reopening this turn's live view simply starts from an empty chart.
+      initialCandles: [],
     };
     const session = this.deps.history.createSession("engine_only");
     this.deps.history.appendMessage({

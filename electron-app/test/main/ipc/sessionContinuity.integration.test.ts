@@ -115,7 +115,7 @@ describe("session continuity across a simulated restart", () => {
       kite: kiteClient(),
       sidecar: mockSidecar() as never,
       history: store,
-      checkReadiness: vi.fn().mockResolvedValue({ ok: true }),
+      checkReadiness: vi.fn().mockResolvedValue({ ok: true, warmed: { candles: [], requiredBars: 0 } }),
       assembleEnvelope: vi.fn().mockResolvedValue({
         trigger: "reactive" as const,
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },

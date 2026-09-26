@@ -39,6 +39,11 @@ export function installBridge(overrides: Partial<RendererApi> = {}): RendererApi
     cancelBenchmark: vi.fn().mockResolvedValue(undefined),
     onBenchmarkProgress: vi.fn(),
     copyBenchmarkResult: vi.fn().mockResolvedValue(undefined),
+    startLiveSession: vi.fn().mockResolvedValue(undefined),
+    stopLiveSession: vi.fn().mockResolvedValue(undefined),
+    onLiveTick: vi.fn(),
+    onLiveCandleClose: vi.fn(),
+    onLiveStatus: vi.fn(),
     ...overrides,
   };
   (window as unknown as { tradeAssistant: RendererApi }).tradeAssistant = bridge;
