@@ -44,8 +44,8 @@ export class KiteClient {
 
   // Declared as an arrow-function field (not a `method() {}` shorthand) so it
   // stays an own property of each instance rather than landing on
-  // KiteClient.prototype — the exact-11-method-set test in kiteClient.test.ts
-  // enumerates prototype own-properties and must see only the 11 read tools.
+  // KiteClient.prototype — the exact-10-method-set test in kiteClient.test.ts
+  // enumerates prototype own-properties and must see only the 10 read tools.
   private readonly call = async (name: string, args: Record<string, unknown>): Promise<unknown> => {
     const response = await this.caller.callTool(name, args);
     this.onResponse?.(response);

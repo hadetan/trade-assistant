@@ -21,7 +21,7 @@ function methodNames(): string[] {
 }
 
 describe("KiteClient safety allowlist", () => {
-  it("exposes exactly the eleven read-tool methods and no others", () => {
+  it("exposes exactly the ten read-tool methods and no others", () => {
     expect(methodNames()).toEqual(EXPECTED_METHODS);
   });
 
