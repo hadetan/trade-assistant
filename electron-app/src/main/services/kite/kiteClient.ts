@@ -23,7 +23,6 @@ export const KITE_READ_TOOL_NAMES = {
   getPositions: "get_positions",
   getProfile: "get_profile",
   getGtts: "get_gtts",
-  login: "login",
 } as const;
 
 export const KITE_WRITE_TOOL_NAMES = [
@@ -101,9 +100,5 @@ export class KiteClient {
 
   getGtts(): Promise<unknown> {
     return this.call(KITE_READ_TOOL_NAMES.getGtts, {});
-  }
-
-  login(): Promise<unknown> {
-    return this.call(KITE_READ_TOOL_NAMES.login, {});
   }
 }

@@ -11,7 +11,6 @@ const EXPECTED_METHODS = [
   "getPositions",
   "getProfile",
   "getQuotes",
-  "login",
   "searchInstruments",
 ];
 
