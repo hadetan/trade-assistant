@@ -165,4 +165,16 @@ describe("buildRendererApi live wiring", () => {
     expect(subscribe).toHaveBeenCalledWith("live:candleClose", expect.any(Function));
     expect(subscribe).toHaveBeenCalledWith("live:status", expect.any(Function));
   });
+
+  it("onLiveTick/onLiveCandleClose/onLiveStatus hand back the transport's unsubscribe", () => {
+    // LiveSessionView remounts on every Analyze click; without this each mount
+    // would leave three more listeners on these channels forever.
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn().mockReturnValue(unsubscribe);
+    const api = buildRendererApi(vi.fn(), subscribe);
+
+    expect(api.onLiveTick(vi.fn())).toBe(unsubscribe);
+    expect(api.onLiveCandleClose(vi.fn())).toBe(unsubscribe);
+    expect(api.onLiveStatus(vi.fn())).toBe(unsubscribe);
+  });
 });

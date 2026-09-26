@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LiveSessionView } from "../../src/renderer/LiveSessionView";
 import { createLiveChart } from "../../src/renderer/liveChart";
@@ -14,11 +14,24 @@ function fakeBridge(overrides: Record<string, unknown> = {}) {
   return {
     startLiveSession: vi.fn().mockResolvedValue(undefined),
     stopLiveSession: vi.fn().mockResolvedValue(undefined),
-    onLiveTick: vi.fn(),
-    onLiveCandleClose: vi.fn(),
-    onLiveStatus: vi.fn(),
+    onLiveTick: vi.fn(() => vi.fn()),
+    onLiveCandleClose: vi.fn(() => vi.fn()),
+    onLiveStatus: vi.fn(() => vi.fn()),
     ...overrides,
   };
+}
+
+// Captures both the handler the view registers and the unsubscribe it gets back.
+function capturingSubscription<T>() {
+  const handlers: ((payload: T) => void)[] = [];
+  const unsubscribes: ReturnType<typeof vi.fn>[] = [];
+  const subscribe = vi.fn((handler: (payload: T) => void) => {
+    handlers.push(handler);
+    const unsubscribe = vi.fn();
+    unsubscribes.push(unsubscribe);
+    return unsubscribe;
+  });
+  return { handlers, unsubscribes, subscribe };
 }
 
 const BASE_RESULT = {
@@ -74,8 +87,15 @@ describe("LiveSessionView", () => {
 
     // The verdict meter itself asserts zero text content elsewhere (VerdictMeter.test.tsx);
     // this asserts the view as a whole adds nothing on top of it (no headings, no captions).
+    // The connection-status dot is deliberately exempt: it labels the websocket,
+    // not the market call, which is what the "no prose" rule is about.
+    const statusBar = container.querySelector(".live-session-status");
     const textNodes = Array.from(container.querySelectorAll("*")).filter(
-      (el) => el.children.length === 0 && el.textContent && el.textContent.trim().length > 0,
+      (el) =>
+        !statusBar?.contains(el) &&
+        el.children.length === 0 &&
+        el.textContent &&
+        el.textContent.trim().length > 0,
     );
     expect(textNodes).toHaveLength(0);
   });
@@ -85,6 +105,7 @@ describe("LiveSessionView", () => {
     const bridge = fakeBridge({
       onLiveCandleClose: vi.fn((handler) => {
         candleCloseHandler = handler;
+        return vi.fn();
       }),
     });
     const { container } = render(<LiveSessionView {...SESSION_PROPS} bridge={bridge} />);
@@ -104,13 +125,16 @@ describe("LiveSessionView", () => {
   });
 
   it("does not let a stale tick/candleClose/status handler from a torn-down session touch the new chart (Finding 2)", () => {
-    const tickHandlers: Array<(tick: unknown) => void> = [];
-    const candleCloseHandlers: Array<(payload: unknown) => void> = [];
-    const statusHandlers: Array<(status: unknown) => void> = [];
+    const tick = capturingSubscription<unknown>();
+    const candleClose = capturingSubscription<unknown>();
+    const status = capturingSubscription<unknown>();
+    const { handlers: tickHandlers } = tick;
+    const { handlers: candleCloseHandlers } = candleClose;
+    const { handlers: statusHandlers } = status;
     const bridge = fakeBridge({
-      onLiveTick: vi.fn((handler) => tickHandlers.push(handler)),
-      onLiveCandleClose: vi.fn((handler) => candleCloseHandlers.push(handler)),
-      onLiveStatus: vi.fn((handler) => statusHandlers.push(handler)),
+      onLiveTick: tick.subscribe,
+      onLiveCandleClose: candleClose.subscribe,
+      onLiveStatus: status.subscribe,
     });
 
     const { rerender } = render(<LiveSessionView {...SESSION_PROPS} sessionId="s1" bridge={bridge} />);
@@ -148,5 +172,76 @@ describe("LiveSessionView", () => {
     expect(firstChart.applyClosedCandle).not.toHaveBeenCalled();
     expect(secondChart.applyTick).not.toHaveBeenCalled();
     expect(secondChart.applyClosedCandle).not.toHaveBeenCalled();
+  });
+
+  it("unsubscribes all three IPC listeners on unmount, not just flipping the disposed flag", () => {
+    const tick = capturingSubscription<unknown>();
+    const candleClose = capturingSubscription<unknown>();
+    const status = capturingSubscription<unknown>();
+    const bridge = fakeBridge({
+      onLiveTick: tick.subscribe,
+      onLiveCandleClose: candleClose.subscribe,
+      onLiveStatus: status.subscribe,
+    });
+
+    const { unmount } = render(<LiveSessionView {...SESSION_PROPS} bridge={bridge} />);
+    unmount();
+
+    expect(tick.unsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(candleClose.unsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(status.unsubscribes[0]).toHaveBeenCalledTimes(1);
+  });
+
+  it("reflects each live:status value in the connection indicator", () => {
+    const status = capturingSubscription<string>();
+    const bridge = fakeBridge({ onLiveStatus: status.subscribe });
+    render(<LiveSessionView {...SESSION_PROPS} bridge={bridge} />);
+
+    expect(screen.getByText("Live")).toBeTruthy();
+
+    act(() => status.handlers[0]("reconnecting"));
+    expect(screen.getByText("Reconnecting…")).toBeTruthy();
+    expect(screen.queryByText("Live")).toBeNull();
+
+    act(() => status.handlers[0]("error"));
+    expect(screen.getByText("Disconnected")).toBeTruthy();
+
+    act(() => status.handlers[0]("connected"));
+    expect(screen.getByText("Live")).toBeTruthy();
+  });
+
+  it("shows the Reconnect button only in the error state", () => {
+    const status = capturingSubscription<string>();
+    const bridge = fakeBridge({ onLiveStatus: status.subscribe });
+    render(<LiveSessionView {...SESSION_PROPS} bridge={bridge} />);
+
+    expect(screen.queryByRole("button", { name: /reconnect/i })).toBeNull();
+
+    act(() => status.handlers[0]("reconnecting"));
+    expect(screen.queryByRole("button", { name: /^reconnect$/i })).toBeNull();
+
+    act(() => status.handlers[0]("error"));
+    expect(screen.getByRole("button", { name: /reconnect/i })).toBeTruthy();
+
+    act(() => status.handlers[0]("connected"));
+    expect(screen.queryByRole("button", { name: /reconnect/i })).toBeNull();
+  });
+
+  it("clicking Reconnect re-starts the live session with the same params", () => {
+    const status = capturingSubscription<string>();
+    const bridge = fakeBridge({ onLiveStatus: status.subscribe });
+    render(<LiveSessionView {...SESSION_PROPS} bridge={bridge} />);
+
+    act(() => status.handlers[0]("error"));
+    fireEvent.click(screen.getByRole("button", { name: /reconnect/i }));
+
+    expect(bridge.startLiveSession).toHaveBeenCalledTimes(2);
+    expect(bridge.startLiveSession).toHaveBeenNthCalledWith(2, {
+      sessionId: "s1",
+      assistantMessageId: "m1",
+      instrument: SESSION_PROPS.instrument,
+      interval: "5minute",
+      baseResult: BASE_RESULT,
+    });
   });
 });

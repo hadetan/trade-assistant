@@ -5,6 +5,13 @@
   margin-top: var(--space-5);
 }
 
+.live-session-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
 .live-session-chart {
   flex: 1;
   min-height: 0;

@@ -82,10 +82,21 @@ function tickTimestampSeconds(tick: Record<string, unknown>): number {
 
 export function createLiveSessionRunner(deps: LiveSessionRunnerDeps): LiveSessionRunner {
   let activeGeneration = 0;
+  let unsubscribes: (() => void)[] = [];
+
+  // The generation bump alone only makes the previous session's handlers inert;
+  // it never took them off the ticker, which outlives every session. Dropping
+  // the registrations is what actually satisfies P17's "stop() unsubscribes".
+  const teardown = (): void => {
+    activeGeneration += 1;
+    const pending = unsubscribes;
+    unsubscribes = [];
+    pending.forEach((unsubscribe) => unsubscribe());
+  };
 
   return {
     start(params: StartLiveSessionParams): void {
-      activeGeneration += 1;
+      teardown();
       const myGeneration = activeGeneration;
       const isActive = (): boolean => myGeneration === activeGeneration;
 
@@ -93,10 +104,10 @@ export function createLiveSessionRunner(deps: LiveSessionRunnerDeps): LiveSessio
       const tracker = new LiveCandleTracker(intervalMinutes(params.interval));
 
       deps.ticker.subscribe([instrumentToken], "full");
-      deps.ticker.onConnectionChange((status) => {
+      const unsubscribeStatus = deps.ticker.onConnectionChange((status) => {
         if (isActive()) deps.sendStatus(status);
       });
-      deps.ticker.onTick((ticks) => {
+      const unsubscribeTick = deps.ticker.onTick((ticks) => {
         if (!isActive()) return;
         const tick = (ticks as Record<string, unknown>[]).find((t) => t.instrument_token === instrumentToken);
         if (!tick || typeof tick.last_price !== "number") return;
@@ -151,10 +162,12 @@ export function createLiveSessionRunner(deps: LiveSessionRunnerDeps): LiveSessio
           }
         })();
       });
+
+      unsubscribes = [unsubscribeStatus, unsubscribeTick];
     },
 
     stop(): void {
-      activeGeneration += 1;
+      teardown();
     },
   };
 }

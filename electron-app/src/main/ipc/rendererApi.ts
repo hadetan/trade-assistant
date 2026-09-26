@@ -151,14 +151,18 @@ export interface RendererApi {
   copyBenchmarkResult(text: string): Promise<void>;
   startLiveSession(params: StartLiveSessionParams): Promise<void>;
   stopLiveSession(): Promise<void>;
-  onLiveTick(handler: (tick: LiveTickWire) => void): void;
-  onLiveCandleClose(handler: (payload: LiveCandleClosePayload) => void): void;
-  onLiveStatus(handler: (status: TickerConnectionStatus) => void): void;
+  // These three return an unsubscribe function, unlike the subscriptions above
+  // it: LiveSessionView remounts on every Analyze click, so without one each
+  // mount would leave three more listeners on the same IPC channels for the
+  // lifetime of the renderer process.
+  onLiveTick(handler: (tick: LiveTickWire) => void): () => void;
+  onLiveCandleClose(handler: (payload: LiveCandleClosePayload) => void): () => void;
+  onLiveStatus(handler: (status: TickerConnectionStatus) => void): () => void;
 }
 
 export function buildRendererApi(
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>,
-  subscribe: (channel: string, handler: (payload: unknown) => void) => void,
+  subscribe: (channel: string, handler: (payload: unknown) => void) => () => void,
 ): RendererApi {
   return {
     getStatus: () => invoke("status:get") as Promise<AppStatus>,

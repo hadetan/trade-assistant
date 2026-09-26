@@ -14,11 +14,25 @@ const LAKE_HISTORY = Array.from({ length: 60 }, (_, index) => ({
 }));
 
 function baseDeps() {
+  // Every handler ever registered, kept indefinitely so a test can still fire a
+  // handler the runner has since unsubscribed (the generation guard must keep
+  // those inert too). The unsubscribe spies are what prove the removal happened.
   const tickHandlers: ((ticks: unknown[]) => void)[] = [];
+  const tickUnsubscribes: ReturnType<typeof vi.fn>[] = [];
+  const connectionUnsubscribes: ReturnType<typeof vi.fn>[] = [];
   const ticker = {
     subscribe: vi.fn(),
-    onTick: vi.fn((h: (ticks: unknown[]) => void) => tickHandlers.push(h)),
-    onConnectionChange: vi.fn(),
+    onTick: vi.fn((h: (ticks: unknown[]) => void) => {
+      tickHandlers.push(h);
+      const unsubscribe = vi.fn();
+      tickUnsubscribes.push(unsubscribe);
+      return unsubscribe;
+    }),
+    onConnectionChange: vi.fn(() => {
+      const unsubscribe = vi.fn();
+      connectionUnsubscribes.push(unsubscribe);
+      return unsubscribe;
+    }),
   };
   const sidecar = {
     persistCandles: vi.fn().mockResolvedValue({ type: "persist_candles", id: 1, written: 1 }),
@@ -37,6 +51,8 @@ function baseDeps() {
 
   return {
     tickHandlers,
+    tickUnsubscribes,
+    connectionUnsubscribes,
     ticker,
     sidecar,
     history,
@@ -174,21 +190,42 @@ describe("createLiveSessionRunner", () => {
   });
 
   it("stop() unsubscribes and further ticks are ignored", () => {
-    const { deps, tickHandlers, sendTick } = baseDeps();
+    const { deps, tickHandlers, tickUnsubscribes, connectionUnsubscribes, sendTick } = baseDeps();
     const runner = createLiveSessionRunner(deps);
     runner.start(START_PARAMS);
     runner.stop();
+
+    // The listener is actually off the ticker, not merely inert: the ticker
+    // outlives every session, so a generation guard alone leaks one tick and
+    // one connection handler per start() for the life of the process.
+    expect(tickUnsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(connectionUnsubscribes[0]).toHaveBeenCalledTimes(1);
 
     tickHandlers[0]([{ instrument_token: 408065, last_price: 999, exchange_timestamp: "2026-09-26T09:15:00+05:30" }]);
 
     expect(sendTick).not.toHaveBeenCalled();
   });
 
+  it("stop() is idempotent and does not re-run an already-spent unsubscribe", () => {
+    const { deps, tickUnsubscribes, connectionUnsubscribes } = baseDeps();
+    const runner = createLiveSessionRunner(deps);
+    runner.start(START_PARAMS);
+    runner.stop();
+    runner.stop();
+
+    expect(tickUnsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(connectionUnsubscribes[0]).toHaveBeenCalledTimes(1);
+  });
+
   it("starting a new session while one is running stops the previous one first", () => {
-    const { deps, tickHandlers, sendTick } = baseDeps();
+    const { deps, tickHandlers, tickUnsubscribes, connectionUnsubscribes, sendTick } = baseDeps();
     const runner = createLiveSessionRunner(deps);
     runner.start(START_PARAMS);
     runner.start({ ...START_PARAMS, sessionId: "s2", assistantMessageId: "m2" });
+
+    expect(tickUnsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(connectionUnsubscribes[0]).toHaveBeenCalledTimes(1);
+    expect(tickUnsubscribes[1]).not.toHaveBeenCalled();
 
     tickHandlers[0]([{ instrument_token: 408065, last_price: 999, exchange_timestamp: "2026-09-26T09:15:00+05:30" }]);
     tickHandlers[1]([{ instrument_token: 408065, last_price: 111, exchange_timestamp: "2026-09-26T09:15:00+05:30" }]);

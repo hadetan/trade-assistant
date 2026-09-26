@@ -41,9 +41,11 @@ export function installBridge(overrides: Partial<RendererApi> = {}): RendererApi
     copyBenchmarkResult: vi.fn().mockResolvedValue(undefined),
     startLiveSession: vi.fn().mockResolvedValue(undefined),
     stopLiveSession: vi.fn().mockResolvedValue(undefined),
-    onLiveTick: vi.fn(),
-    onLiveCandleClose: vi.fn(),
-    onLiveStatus: vi.fn(),
+    // These three hand back an unsubscribe function (see RendererApi); a bare
+    // vi.fn() returning undefined would blow up in LiveSessionView's cleanup.
+    onLiveTick: vi.fn(() => vi.fn()),
+    onLiveCandleClose: vi.fn(() => vi.fn()),
+    onLiveStatus: vi.fn(() => vi.fn()),
     ...overrides,
   };
   (window as unknown as { tradeAssistant: RendererApi }).tradeAssistant = bridge;

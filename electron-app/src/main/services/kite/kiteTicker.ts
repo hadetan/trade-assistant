@@ -6,8 +6,12 @@ export interface KiteTickerClient {
   connect(): void;
   updateCredentialsAndConnect(apiKey: string, accessToken: string): void;
   subscribe(instrumentTokens: number[], mode?: "ltp" | "quote" | "full"): void;
-  onTick(handler: (ticks: unknown[]) => void): void;
-  onConnectionChange(handler: (status: TickerConnectionStatus) => void): void;
+  // Both return an unsubscribe function. The ticker outlives every live
+  // session (it is built once, on first login), so a handler that can only
+  // ever be added would grow this client's handler lists for the lifetime of
+  // the process -- once per liveSessionRunner.start().
+  onTick(handler: (ticks: unknown[]) => void): () => void;
+  onConnectionChange(handler: (status: TickerConnectionStatus) => void): () => void;
   disconnect(): void;
 }
 
@@ -38,6 +42,13 @@ function defaultCreateTicker(opts: { api_key: string; access_token: string }): K
   return new KiteTicker(opts) as unknown as KiteTickerLike;
 }
 
+// Removes by reference, and only the first match, so registering the same
+// function twice and unsubscribing once still leaves one live registration.
+function removeHandler<T>(handlers: T[], handler: T): void {
+  const index = handlers.indexOf(handler);
+  if (index !== -1) handlers.splice(index, 1);
+}
+
 export function createKiteTicker(
   apiKey: string,
   accessToken: string,
@@ -55,13 +66,17 @@ export function createKiteTicker(
 
   const tickHandlers: ((ticks: unknown[]) => void)[] = [];
   const connectionHandlers: ((status: TickerConnectionStatus) => void)[] = [];
-  const notifyConnection = (status: TickerConnectionStatus): void => connectionHandlers.forEach((h) => h(status));
+  // Dispatch over a snapshot: a handler is allowed to unsubscribe itself from
+  // inside its own callback, which would otherwise shift the array mid-forEach
+  // and skip the handler queued right after it.
+  const notifyConnection = (status: TickerConnectionStatus): void =>
+    [...connectionHandlers].forEach((h) => h(status));
 
   ticker.on("connect", () => notifyConnection("connected"));
   ticker.on("reconnect", () => notifyConnection("reconnecting"));
   ticker.on("noreconnect", () => notifyConnection("error"));
   ticker.on("error", () => notifyConnection("error"));
-  ticker.on("ticks", (...args: unknown[]) => tickHandlers.forEach((h) => h(args[0] as unknown[])));
+  ticker.on("ticks", (...args: unknown[]) => [...tickHandlers].forEach((h) => h(args[0] as unknown[])));
 
   return {
     connect: () => ticker.connect(),
@@ -84,8 +99,14 @@ export function createKiteTicker(
       const modeValue = mode === "ltp" ? ticker.modeLTP : mode === "quote" ? ticker.modeQuote : ticker.modeFull;
       ticker.setMode(modeValue, instrumentTokens);
     },
-    onTick: (handler) => tickHandlers.push(handler),
-    onConnectionChange: (handler) => connectionHandlers.push(handler),
+    onTick: (handler) => {
+      tickHandlers.push(handler);
+      return () => removeHandler(tickHandlers, handler);
+    },
+    onConnectionChange: (handler) => {
+      connectionHandlers.push(handler);
+      return () => removeHandler(connectionHandlers, handler);
+    },
     disconnect: () => ticker.disconnect(),
   };
 }
