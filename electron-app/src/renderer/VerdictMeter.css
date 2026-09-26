@@ -1,0 +1,39 @@
+.verdict-meter {
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+}
+
+.verdict-meter-track {
+  position: relative;
+  height: 12px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+
+.verdict-meter-center {
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--border-strong);
+}
+
+.verdict-meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+}
+
+.verdict-meter-fill-bullish {
+  background: var(--bullish);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.verdict-meter-fill-bearish {
+  left: auto;
+  right: 50%;
+  background: var(--bearish);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
