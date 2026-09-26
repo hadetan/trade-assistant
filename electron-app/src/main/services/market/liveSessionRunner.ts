@@ -8,6 +8,7 @@ import type { SidecarSupervisor } from "../sidecar/sidecarSupervisor";
 import type { HistoryStore } from "../history/historyStore";
 import type { CandleWire, AlgoResultWire, ConfluenceWire } from "../sidecar/sidecarProtocol";
 import type { AnalysisResult } from "../../ipc/rendererApi";
+import { requiredBarsFor } from "../analysis/warmedEnvelope";
 
 export interface LiveTickWire {
   ts: number;
@@ -38,7 +39,7 @@ export interface StartLiveSessionParams {
 
 export interface LiveSessionRunnerDeps {
   ticker: Pick<KiteTickerClient, "subscribe" | "onTick" | "onConnectionChange">;
-  sidecar: Pick<SidecarSupervisor, "persistCandles" | "compute" | "readLakeCandles">;
+  sidecar: Pick<SidecarSupervisor, "persistCandles" | "compute" | "readLakeCandles" | "listAlgorithms">;
   history: Pick<HistoryStore, "updateMessage">;
   sendTick: (tick: LiveTickWire) => void;
   sendCandleClose: (payload: { candle: CandleWire; algo_results: AlgoResultWire[]; confluence: ConfluenceWire }) => void;
@@ -133,11 +134,18 @@ export function createLiveSessionRunner(deps: LiveSessionRunnerDeps): LiveSessio
               WARMUP_SOURCE,
             );
             if (lake.error != null) throw new Error(lake.error);
+            // Same bounding as analyze-time's assembleWarmedEnvelope: path-dependent
+            // indicators (Wilder smoothing, GARCH, MA state) disagree across window
+            // sizes, so recomputing over the whole unbounded lake partition here
+            // would jump the verdict meter away from its analyze-time value on the
+            // very first candle close, for reasons unrelated to the market.
+            const requiredBars = await requiredBarsFor(deps.sidecar);
+            const window = lake.candles.slice(Math.max(0, lake.candles.length - requiredBars));
             const computeResult = await deps.sidecar.compute(
               params.instrument.symbol,
               params.interval,
               "intraday",
-              lake.candles,
+              window,
             );
             if (!isActive()) return;
             // direction/conviction/text stay at their analyze-time values: nothing

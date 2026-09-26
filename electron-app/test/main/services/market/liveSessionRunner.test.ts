@@ -4,6 +4,11 @@ import { createLiveSessionRunner } from "../../../../src/main/services/market/li
 // Stands in for the warm-up history already sitting in the shared "kite" lake
 // partition: the runner must hand *this* to compute(), not just the one bar
 // that closed, or rust-core's required_lookback filter drops every algorithm.
+// Deliberately smaller than LAKE_HISTORY.length (60): the runner must bound
+// the lake read down to this many bars before calling compute(), matching
+// analyze-time's assembleWarmedEnvelope window sizing exactly.
+const REQUIRED_BARS = 20;
+
 const LAKE_HISTORY = Array.from({ length: 60 }, (_, index) => ({
   ts: 1_758_000_000 + index * 300,
   open: 100 + index,
@@ -37,6 +42,14 @@ function baseDeps() {
   const sidecar = {
     persistCandles: vi.fn().mockResolvedValue({ type: "persist_candles", id: 1, written: 1 }),
     readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 3, candles: LAKE_HISTORY }),
+    // Sized so requiredBarsFor resolves to REQUIRED_BARS (20), well under
+    // LAKE_HISTORY's 60 -- proves the runner bounds the lake read before
+    // handing it to compute(), not just that some array reaches compute().
+    listAlgorithms: vi.fn().mockResolvedValue({
+      type: "algorithms",
+      id: 4,
+      algorithms: [{ id: "rsi", cost: "fast", required_lookback: REQUIRED_BARS }],
+    }),
     compute: vi.fn().mockResolvedValue({
       type: "compute",
       id: 2,
@@ -161,12 +174,21 @@ describe("createLiveSessionRunner", () => {
       [expect.objectContaining({ open: 100, close: 100, volume: 450 })],
       "kite",
     );
-    // The accumulated lake history, not the lone bar that just closed -- with a
+    // The runner reads the whole accumulated lake history back -- with a
     // single candle rust-core's lookback filter qualifies zero algorithms and
-    // the verdict meter would sit at neutral forever.
+    // the verdict meter would sit at neutral forever -- but must then bound it
+    // down to requiredBars before calling compute(), the same window analyze-time's
+    // assembleWarmedEnvelope uses, or path-dependent indicators (Wilder smoothing,
+    // GARCH, MA state) disagree across window sizes and the verdict meter jumps
+    // for reasons unrelated to the market.
     expect(sidecar.readLakeCandles).toHaveBeenCalledWith("NSE:INFY", "5minute", "kite");
-    expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "5minute", "intraday", LAKE_HISTORY);
-    expect((sidecar.compute.mock.calls[0][3] as unknown[]).length).toBe(60);
+    expect(sidecar.compute).toHaveBeenCalledWith(
+      "NSE:INFY",
+      "5minute",
+      "intraday",
+      LAKE_HISTORY.slice(LAKE_HISTORY.length - REQUIRED_BARS),
+    );
+    expect((sidecar.compute.mock.calls[0][3] as unknown[]).length).toBe(REQUIRED_BARS);
     // A complete AnalysisResult, not a bare {algo_results, confluence}: App.tsx
     // reads this row back as one on reopen.
     expect(history.updateMessage).toHaveBeenCalledWith({
