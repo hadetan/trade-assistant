@@ -1,28 +1,26 @@
-import type { KiteFullConfig, KiteMcpOnlyConfig } from "./kiteConfig";
+import { KiteInstrumentMaster } from "./kiteInstrumentMaster";
+import { createKiteRestCaller } from "./kiteRestCaller";
+import { createKiteTicker } from "./kiteTicker";
+import type { KiteTickerClient } from "./kiteTicker";
 import { captureRequestToken, exchangeAccessToken } from "./kiteOAuth";
 import { KiteClient } from "./kiteClient";
-import { connectKiteMcp, connectKiteMcpAnonymous } from "./mcpConnection";
-import type { ConnectKiteMcpDeps, ConnectKiteMcpAnonymousDeps, McpConnection } from "./mcpConnection";
-import { checkKiteToolDrift } from "./mcpDriftMonitor";
-import type { DriftResult, ToolListing } from "./mcpDriftMonitor";
-import { extractKiteLoginUrl, pollForKiteLogin } from "./kiteMcpLoginFlow";
-import type { PollForKiteLoginDeps } from "./kiteMcpLoginFlow";
+import type { KiteConfig } from "./kiteConfig";
 
 export interface KiteLoginDeps {
-  config: KiteFullConfig;
+  config: KiteConfig;
+  cacheDir: string;
   captureRequestToken: typeof captureRequestToken;
   exchangeAccessToken: typeof exchangeAccessToken;
   postForm: (url: string, form: Record<string, string>) => Promise<unknown>;
   openExternal: (url: string) => void;
-  connectMcp?: (d: ConnectKiteMcpDeps) => Promise<McpConnection>;
-  checkDrift?: (listing: ToolListing) => Promise<DriftResult>;
   onKiteResponse?: (response: unknown) => void;
+  createRestCaller?: typeof createKiteRestCaller;
+  createTicker?: typeof createKiteTicker;
 }
 
 export interface KiteSession {
   kite: KiteClient;
-  connection: McpConnection;
-  drift: DriftResult;
+  ticker: KiteTickerClient;
   close(): Promise<void>;
 }
 
@@ -35,73 +33,22 @@ function extractAccessToken(tokenResponse: unknown): string {
 }
 
 export async function runKiteLogin(deps: KiteLoginDeps): Promise<KiteSession> {
-  const connectMcp = deps.connectMcp ?? connectKiteMcp;
-  const checkDrift = deps.checkDrift ?? checkKiteToolDrift;
   const { apiKey, apiSecret, loginPort } = deps.config;
-
   const loginUrl = `https://kite.zerodha.com/connect/login?api_key=${encodeURIComponent(apiKey)}&v=3`;
   const requestToken = await deps.captureRequestToken({ port: loginPort, loginUrl, openExternal: deps.openExternal });
   const tokenResponse = await deps.exchangeAccessToken({ apiKey, apiSecret, requestToken, postForm: deps.postForm });
   const accessToken = extractAccessToken(tokenResponse);
 
-  const connection = await connectMcp({ apiKey, accessToken });
-  try {
-    const kite = new KiteClient(connection.caller, { onResponse: deps.onKiteResponse });
-    const drift = await checkDrift(connection.listing);
-    return { kite, connection, drift, close: connection.close };
-  } catch (error) {
-    // checkDrift is a real network call (mcp.kite.trade's tools/list); if it
-    // fails after connectMcp already opened the connection, close it here —
-    // the caller only sees this rejection, never the open connection.
-    await connection.close().catch(() => {});
-    throw error;
-  }
-}
+  const instrumentMaster = new KiteInstrumentMaster({ apiKey, accessToken, cacheDir: deps.cacheDir });
+  const createRestCaller = deps.createRestCaller ?? createKiteRestCaller;
+  const caller = createRestCaller({ apiKey, accessToken, instrumentMaster });
+  const kite = new KiteClient(caller, { onResponse: deps.onKiteResponse });
+  const createTicker = deps.createTicker ?? createKiteTicker;
+  const ticker = createTicker(apiKey, accessToken);
 
-export interface KiteMcpOnlyLoginDeps {
-  config: KiteMcpOnlyConfig;
-  openExternal: (url: string) => void;
-  connectMcp?: (d: ConnectKiteMcpAnonymousDeps) => Promise<McpConnection>;
-  checkDrift?: (listing: ToolListing) => Promise<DriftResult>;
-  onKiteResponse?: (response: unknown) => void;
-  verifyLogin?: PollForKiteLoginDeps["verifyLogin"];
-  delayFn?: PollForKiteLoginDeps["delayFn"];
-  pollIntervalMs?: number;
-  pollTimeoutMs?: number;
-}
-
-export async function runKiteMcpOnlyLogin(deps: KiteMcpOnlyLoginDeps): Promise<KiteSession> {
-  const connectMcp = deps.connectMcp ?? connectKiteMcpAnonymous;
-  const checkDrift = deps.checkDrift ?? checkKiteToolDrift;
-
-  const connection = await connectMcp({});
-  try {
-    const kite = new KiteClient(connection.caller, { onResponse: deps.onKiteResponse });
-    // Kite's MCP server has no transport-level auth challenge (see
-    // mcpConnection.ts's connectKiteMcpAnonymous) -- calling "login" is the
-    // real mechanism: it returns a URL for the user to complete Zerodha login
-    // in their browser, tied server-side to this same connection.
-    const loginResponse = await kite.login();
-    const loginUrl = extractKiteLoginUrl(loginResponse);
-    deps.openExternal(loginUrl);
-    // Do not mark this session authenticated until a real call actually
-    // succeeds -- the server gives no synchronous "login complete" signal, so
-    // this is the only way to avoid returning a session that looks fine but
-    // fails on the first real use.
-    await pollForKiteLogin({
-      kite,
-      verifyLogin: deps.verifyLogin,
-      delayFn: deps.delayFn,
-      pollIntervalMs: deps.pollIntervalMs,
-      pollTimeoutMs: deps.pollTimeoutMs,
-    });
-    const drift = await checkDrift(connection.listing);
-    return { kite, connection, drift, close: connection.close };
-  } catch (error) {
-    // Mirrors runKiteLogin: if anything above fails after connectMcp already
-    // opened the connection, close it here so the caller only sees the
-    // rejection, never a leaked open connection.
-    await connection.close().catch(() => {});
-    throw error;
-  }
+  return {
+    kite,
+    ticker,
+    close: async () => ticker.disconnect(),
+  };
 }
