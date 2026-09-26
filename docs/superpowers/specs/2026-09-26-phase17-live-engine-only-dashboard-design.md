@@ -160,7 +160,17 @@ ticker = newSession.ticker; // first login: stores it; every later login: same r
 session = newSession;
 ```
 
-The old `if (previousSession && previousSession !== newSession) void previousSession.close().catch(...)` block is deleted — there is no `close()` anymore (P17§3.2).
+The old `if (previousSession && previousSession !== newSession) void previousSession.close().catch(...)` block is deleted — there is no `close()` anymore (P17§3.2). **A second, separate call site needs the same fix**, found by re-reading `bootstrap.ts`'s current (post-Phase-16) state rather than relying on this document's earlier draft: `sessionState.on("change", (status) => { if (status === "needsLogin" && session) { const closing = session; session = null; void closing.close().catch(() => {}); } })` (bootstrap.ts:113-119) fires whenever *any* live REST call detects session expiry, not only on explicit re-login. It becomes:
+
+```typescript
+sessionState.on("change", (status: KiteSessionStatus) => {
+  if (status === "needsLogin" && session) {
+    session = null;
+  }
+});
+```
+
+(nulling `session` is still necessary — that's what makes subsequent IPC calls correctly reject with "not logged in" — only the now-nonexistent `.close()` call is removed.)
 
 A new one-time hook disconnects the ticker at process exit, the only point `.disconnect()` is ever safe to call:
 
