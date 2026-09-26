@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- `.disconnect()` is called on the Kite ticker in exactly one place in the whole app: an `app.on("before-quit", ...)` hook. Nowhere else, ever.
+- `.disconnect()` is called on the Kite ticker in exactly one place in the whole app: inside `bootstrap.ts`'s existing `stop()` function (already wired to real app quit via `main.ts`'s `before-quit` handler — no new event listener is added). Nowhere else, ever.
 - Exactly one `KiteTicker` instance exists for the process's entire lifetime.
 - The full algo suite + confluence recompute happens only on candle close, never per-tick.
 - No projected/forecasted future candles or price paths are rendered anywhere — direction + magnitude from the real confluence scorecard only.
@@ -320,7 +320,9 @@ export async function runKiteLogin(deps: KiteLoginDeps): Promise<KiteSession> {
 Run: `npm test -- kiteLogin.test.ts`
 Expected: PASS (4 tests: the 3 original minus the deleted `close()` one, plus the new `existingTicker` one)
 
-- [ ] **Step 9: Update `bootstrap.ts` — thread the ticker across logins, drop both `close()` call sites, add the quit hook**
+- [ ] **Step 9: Update `bootstrap.ts` — thread the ticker across logins, fix all three `close()` call sites**
+
+**Correction found during Task 1's own implementation attempt:** there are three `session.close()` call sites in this file, not two — the third is inside the `stop()` function this `createApp()` call returns (around line 274: `void session?.close().catch(() => {});`). That function is already the app's real teardown path — `electron-app/src/main/main.ts:12-15` already calls `app.on("before-quit", () => { ...; runtime.stop(); })` — so there is no need to add a *new* `before-quit` hook inside `bootstrap.ts` itself; the existing `stop()` function already runs at the right time. Fix that third call site by replacing it with a ticker disconnect, not by adding new event wiring.
 
 In `electron-app/src/main/bootstrap.ts`:
 
@@ -397,13 +399,44 @@ to:
         sessionState.markAuthenticated();
 ```
 
-Add the quit hook right after `createApp()`'s other one-time event wiring (near the `supervisor.on("statusChange", ...)` block, around line 102-105):
+Change the `stop()` function's session-close line (around line 274) from:
 
 ```typescript
-  app.on("before-quit", () => {
-    ticker?.disconnect();
-  });
+    stop: () => {
+      // Stop the scheduler first, before the sidecar/history teardown it depends
+      // on. stop() only clears the interval timer; a tick already in flight is
+      // caught by tickOneSymbol's own try/catch if it hits a closed store.
+      scanScheduler.stop();
+      void session?.close().catch(() => {});
+      history.close();
+      supervisor.stop();
+      benchmarkSupervisor.stop();
+      tray?.destroy();
+      tray = null;
+    },
 ```
+
+to:
+
+```typescript
+    stop: () => {
+      // Stop the scheduler first, before the sidecar/history teardown it depends
+      // on. stop() only clears the interval timer; a tick already in flight is
+      // caught by tickOneSymbol's own try/catch if it hits a closed store.
+      scanScheduler.stop();
+      // The only point ticker.disconnect() is ever safe to call: main.ts's
+      // before-quit handler calls stop() exactly once, at real process quit,
+      // so there is no later reconnect attempt this could poison (P17§3).
+      ticker?.disconnect();
+      history.close();
+      supervisor.stop();
+      benchmarkSupervisor.stop();
+      tray?.destroy();
+      tray = null;
+    },
+```
+
+No new `app.on("before-quit", ...)` listener is added anywhere — `stop()` already runs at the correct time via `main.ts`'s existing wiring.
 
 - [ ] **Step 10: Run the full suite and typecheck**
 

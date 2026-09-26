@@ -172,19 +172,13 @@ sessionState.on("change", (status: KiteSessionStatus) => {
 
 (nulling `session` is still necessary — that's what makes subsequent IPC calls correctly reject with "not logged in" — only the now-nonexistent `.close()` call is removed.)
 
-A new one-time hook disconnects the ticker at process exit, the only point `.disconnect()` is ever safe to call:
-
-```typescript
-app.on("before-quit", () => {
-  ticker?.disconnect();
-});
-```
+`bootstrap.ts`'s returned `stop()` function is already the app's real teardown, already wired to `app.on("before-quit", ...)` by `main.ts` — it is not a new hook this phase adds. It currently contains a **third** `.close()` call site this document's earlier draft missed (`void session?.close().catch(() => {});`, alongside the two in P17§3.3's `login()`/`sessionState.on("change")` fixes above). That line is replaced with `ticker?.disconnect();` — the only point `.disconnect()` is ever safe to call, since `stop()` runs exactly once, at real process quit.
 
 ### P17§3.4 Testing
 
 - `kiteTicker.test.ts` — new case: `updateCredentialsAndConnect` sets both credential fields on the fake then calls `.connect()`.
 - `kiteLogin.test.ts` — new case: passing `existingTicker` in deps skips constructing a new one and calls `updateCredentialsAndConnect` on the passed-in fake instead; the no-`existingTicker` (first-login) path still constructs via `createTicker`.
-- `bootstrap.test.ts` — new case (or extend existing login-flow coverage): a second `login()` call reuses the same ticker reference as the first; `app.on("before-quit")` calls `disconnect()` exactly once on whatever ticker is current.
+- No new `bootstrap.test.ts` case — this codebase's established precedent (also followed by Phase 16, P8§9.3 before it) is not unit-testing `createApp()`'s Electron-object wiring; the underlying logic (ticker reuse, credential update) is fully covered by `kiteLogin.test.ts`'s new case above.
 
 ## P17§4 Live data pipeline architecture
 
@@ -336,14 +330,14 @@ Requires a live, paid Kite Connect connection during market hours — the same r
 **Exact modified file paths:**
 - `electron-app/src/main/services/kite/kiteTicker.ts` — `updateCredentialsAndConnect`, `KiteTickerLike` gains `api_key`/`access_token`/`connected()` (P17§3.1).
 - `electron-app/src/main/services/kite/kiteLogin.ts` — `existingTicker` dep, `KiteSession` drops `close()` (P17§3.2).
-- `electron-app/src/main/bootstrap.ts` — ticker held across logins, `before-quit` disconnect hook, `previousSession.close()` removed (P17§3.3).
+- `electron-app/src/main/bootstrap.ts` — ticker held across logins; all three pre-existing `session.close()` call sites fixed (`sessionState.on("change", ...)`, `login()`'s previous-session cleanup, and the returned `stop()` function, which already runs at real app quit via `main.ts`'s existing `before-quit` wiring — no new listener added) (P17§3.3).
 - `electron-app/src/main/services/history/historyStore.ts` — `appendMessage` returns the message id (was `void`); new `updateMessage` (P17§8).
 - `electron-app/src/main/ipc/rendererApi.ts` — new `live:*` methods/types.
 - `electron-app/src/renderer/App.tsx` — Engine-Only branch renders `LiveSessionView` instead of `AnalysisResultView`.
 - `electron-app/src/renderer/InstrumentSearch.tsx` — `onSubmit` also triggers `startLiveSession` after a successful `runAnalysis`.
 
 **Binding invariants:**
-- (a) `.disconnect()` is called on the ticker in exactly one place in the whole app: the `before-quit` handler in `bootstrap.ts`.
+- (a) `.disconnect()` is called on the ticker in exactly one place in the whole app: inside `bootstrap.ts`'s existing `stop()` function (already wired to real app quit by `main.ts`, no new listener added).
 - (b) Exactly one `KiteTicker` instance exists for the process's entire lifetime.
 - (c) The full algo suite/confluence recompute happens only on candle close, never per-tick.
 - (d) No projected/forecasted future price data is rendered anywhere — direction + magnitude from the real confluence scorecard only.
