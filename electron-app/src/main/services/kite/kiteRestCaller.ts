@@ -22,8 +22,13 @@ export function createKiteRestCaller(deps: KiteRestCallerDeps): McpToolCaller {
     for (const [key, value] of Object.entries(query ?? {})) {
       for (const v of Array.isArray(value) ? value : [value]) url.searchParams.append(key, v);
     }
-    const response = await fetchFn(url, { headers: authHeaders });
-    const body = await response.json();
+    const response = await fetchFn(url, { headers: authHeaders, signal: AbortSignal.timeout(15000) });
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new Error(`Kite API error (${response.status} ${response.statusText}): non-JSON response body`);
+    }
     if (!response.ok) {
       // error_type/message are Kite Connect's own documented error envelope
       // shape; embedding error_type verbatim keeps kiteSessionState.ts's
@@ -42,10 +47,13 @@ export function createKiteRestCaller(deps: KiteRestCallerDeps): McpToolCaller {
         case "search_instruments":
           return { data: await deps.instrumentMaster.search(String(args.query)) };
         case "get_historical_data":
-          return getJson(`/instruments/historical/${args.instrument_token}/${args.interval}`, {
-            from: String(args.from),
-            to: String(args.to),
-          });
+          return getJson(
+            `/instruments/historical/${encodeURIComponent(String(args.instrument_token))}/${encodeURIComponent(String(args.interval))}`,
+            {
+              from: String(args.from),
+              to: String(args.to),
+            },
+          );
         case "get_quotes":
           return getJson("/quote", { i: args.instruments as string[] });
         case "get_ohlc":

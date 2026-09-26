@@ -43,6 +43,47 @@ describe("createKiteRestCaller", () => {
     expect(init.headers).toEqual({ Authorization: "token k123:at999", "X-Kite-Version": "3" });
   });
 
+  it("get_historical_data encodes path-traversal-relevant characters in instrument_token/interval instead of passing them through raw", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ data: { candles: [] } }));
+    const caller = createKiteRestCaller(baseDeps(fetchFn));
+
+    await caller.callTool("get_historical_data", {
+      instrument_token: "../secret",
+      interval: "5minute",
+      from: "2026-09-01 09:15:00",
+      to: "2026-09-26 15:30:00",
+    });
+
+    const [url] = fetchFn.mock.calls[0];
+    expect(String(url)).not.toContain("/../");
+    expect(String(url)).toContain(encodeURIComponent("../secret"));
+  });
+
+  it("passes an AbortSignal.timeout signal alongside headers on every request", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ data: {} }));
+    const caller = createKiteRestCaller(baseDeps(fetchFn));
+
+    await caller.callTool("get_profile", {});
+
+    expect(fetchFn.mock.calls[0][1].signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("throws a clean error instead of a raw SyntaxError when the response body isn't valid JSON", async () => {
+    const fetchFn = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      statusText: "Bad Gateway",
+      json: async () => {
+        throw new SyntaxError("Unexpected token '<'");
+      },
+    });
+    const caller = createKiteRestCaller(baseDeps(fetchFn));
+
+    await expect(caller.callTool("get_profile", {})).rejects.toThrow(
+      /Kite API error \(502 Bad Gateway\): non-JSON response body/,
+    );
+  });
+
   it("get_quotes/get_ohlc/get_ltp send repeated i= params for each instrument", async () => {
     const fetchFn = vi.fn().mockResolvedValue(fakeResponse({ data: {} }));
     const caller = createKiteRestCaller(baseDeps(fetchFn));
