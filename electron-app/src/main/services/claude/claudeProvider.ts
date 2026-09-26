@@ -5,13 +5,11 @@ import { KITE_READ_TOOL_NAMES, KITE_WRITE_TOOL_NAMES } from "../kite/kiteClient"
 type SpawnFn = (command: string, args: string[]) => ChildProcess;
 
 // A positive allowlist, not a subtraction from any baseline that might grow:
-// Task 5's EXPECTED_KITE_TOOLS is explicitly slated to absorb the live
-// tools/list surface (see mcpDriftMonitor.ts), which would include any
-// currently-unnamed write tool -- deriving this allowlist from that baseline
-// would silently widen it to cover a write tool the moment that happens.
-// KITE_READ_TOOL_NAMES is KiteClient's own closed, hand-curated method set
-// instead, so this allowlist can only ever grow when a human adds a new
-// method to KiteClient itself.
+// KITE_READ_TOOL_NAMES is KiteClient's own closed, hand-curated method set,
+// so this allowlist can only ever grow when a human adds a new method to
+// KiteClient itself -- there is no live remote tool listing it could
+// silently inherit a write tool from (the MCP-era tools/list drift check
+// this comment used to reference no longer exists).
 export const KITE_READ_TOOL_ALLOWLIST = Object.values(KITE_READ_TOOL_NAMES)
   .map((name) => `mcp__kite__${name}`)
   .join(",");
