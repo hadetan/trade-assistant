@@ -36,4 +36,12 @@ describe("VerdictMeter", () => {
     const fill = container.querySelector(".verdict-meter-fill") as HTMLElement;
     expect(fill.style.width).toBe("50%");
   });
+
+  it("renders the direction arrow for a non-neutral vote but omits it when neutral", () => {
+    const { container: nonNeutral } = render(<VerdictMeter weightedVote={0.5} />);
+    expect(nonNeutral.querySelector(".verdict-meter-arrow")).not.toBeNull();
+
+    const { container: neutral } = render(<VerdictMeter weightedVote={0} />);
+    expect(neutral.querySelector(".verdict-meter-arrow")).toBeNull();
+  });
 });
