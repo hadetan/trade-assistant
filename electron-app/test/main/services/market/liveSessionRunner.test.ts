@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { createLiveSessionRunner } from "../../../../src/main/services/market/liveSessionRunner";
 
+// Stands in for the warm-up history already sitting in the shared "kite" lake
+// partition: the runner must hand *this* to compute(), not just the one bar
+// that closed, or rust-core's required_lookback filter drops every algorithm.
+const LAKE_HISTORY = Array.from({ length: 60 }, (_, index) => ({
+  ts: 1_758_000_000 + index * 300,
+  open: 100 + index,
+  high: 101 + index,
+  low: 99 + index,
+  close: 100.5 + index,
+  volume: 1_000 + index,
+}));
+
 function baseDeps() {
   const tickHandlers: ((ticks: unknown[]) => void)[] = [];
   const ticker = {
@@ -10,6 +22,7 @@ function baseDeps() {
   };
   const sidecar = {
     persistCandles: vi.fn().mockResolvedValue({ type: "persist_candles", id: 1, written: 1 }),
+    readLakeCandles: vi.fn().mockResolvedValue({ type: "lake_candles", id: 3, candles: LAKE_HISTORY }),
     compute: vi.fn().mockResolvedValue({
       type: "compute",
       id: 2,
@@ -34,11 +47,38 @@ function baseDeps() {
   };
 }
 
+const BASE_RESULT = {
+  mode: "engine_only" as const,
+  instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+  interval: "5minute" as const,
+  response: {
+    direction: "bullish" as const,
+    conviction: "high" as const,
+    text: "Overall read: bullish.",
+    confluence: { bullish_count: 4, bearish_count: 1, neutral_count: 0, weighted_vote: 0.62 },
+  },
+  algo_results: [
+    {
+      algo_id: "rsi",
+      symbol: "NSE:INFY",
+      timeframe: "5minute",
+      horizon: "intraday",
+      direction: "bullish",
+      magnitude: 0.7,
+      confidence: 0.8,
+      evidence: ["analyze-time"],
+      computed_at: "2026-09-26T09:15:00Z",
+    },
+  ],
+  initialCandles: [],
+};
+
 const START_PARAMS = {
   sessionId: "s1",
   assistantMessageId: "m1",
   instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
   interval: "5minute" as const,
+  baseResult: BASE_RESULT,
 };
 
 describe("createLiveSessionRunner", () => {
@@ -98,16 +138,25 @@ describe("createLiveSessionRunner", () => {
       [expect.objectContaining({ open: 100, close: 100 })],
       "kite",
     );
-    expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "5minute", "intraday", [
-      expect.objectContaining({ open: 100, close: 100 }),
-    ]);
+    // The accumulated lake history, not the lone bar that just closed -- with a
+    // single candle rust-core's lookback filter qualifies zero algorithms and
+    // the verdict meter would sit at neutral forever.
+    expect(sidecar.readLakeCandles).toHaveBeenCalledWith("NSE:INFY", "5minute", "kite");
+    expect(sidecar.compute).toHaveBeenCalledWith("NSE:INFY", "5minute", "intraday", LAKE_HISTORY);
+    expect((sidecar.compute.mock.calls[0][3] as unknown[]).length).toBe(60);
+    // A complete AnalysisResult, not a bare {algo_results, confluence}: App.tsx
+    // reads this row back as one on reopen.
     expect(history.updateMessage).toHaveBeenCalledWith({
       sessionId: "s1",
       messageId: "m1",
-      renderedText: "",
+      renderedText: "Overall read: bullish.",
       structuredPayload: {
+        ...BASE_RESULT,
         algo_results: [],
-        confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 0.3 },
+        response: {
+          ...BASE_RESULT.response,
+          confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 0.3 },
+        },
       },
     });
     expect(sendCandleClose).toHaveBeenCalledWith({

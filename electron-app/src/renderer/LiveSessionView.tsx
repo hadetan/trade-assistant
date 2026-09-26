@@ -5,6 +5,7 @@ import { intervalMinutes } from "../main/services/market/candleInterval";
 import type { CandleInterval } from "../main/services/market/candleInterval";
 import type { CandleWire, ConfluenceWire } from "../main/services/sidecar/sidecarProtocol";
 import type { InstrumentSelection, RendererApi } from "../main/ipc/rendererApi";
+import type { LiveBaseResult } from "../main/services/market/liveSessionRunner";
 import "./LiveSessionView.css";
 
 export interface LiveSessionViewProps {
@@ -14,6 +15,7 @@ export interface LiveSessionViewProps {
   interval: CandleInterval;
   initialCandles: CandleWire[];
   initialConfluence: ConfluenceWire;
+  baseResult: LiveBaseResult;
   bridge: Pick<RendererApi, "startLiveSession" | "stopLiveSession" | "onLiveTick" | "onLiveCandleClose" | "onLiveStatus">;
 }
 
@@ -55,6 +57,7 @@ export function LiveSessionView(props: LiveSessionViewProps): JSX.Element {
       assistantMessageId: props.assistantMessageId,
       instrument: props.instrument,
       interval: props.interval,
+      baseResult: props.baseResult,
     });
 
     return () => {

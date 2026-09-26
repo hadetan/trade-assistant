@@ -182,6 +182,12 @@ describe("App", () => {
         assistantMessageId: "assistant-msg-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
         interval: "5minute",
+        // The full stored AnalysisResult, so the runner can rewrite the row as a
+        // complete one on every candle close instead of a partial shape.
+        baseResult: expect.objectContaining({
+          mode: "engine_only",
+          response: expect.objectContaining({ text: "Overall read: bullish." }),
+        }),
       }),
     );
     // AnalysisResultView would have rendered this prose text; LiveSessionView never does.
@@ -333,6 +339,7 @@ describe("App", () => {
         assistantMessageId: "assistant-msg-1",
         instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
         interval: "5minute",
+        baseResult: expect.objectContaining({ response: expect.objectContaining({ text: "INFY read" }) }),
       }),
     );
 
@@ -346,6 +353,7 @@ describe("App", () => {
         assistantMessageId: "assistant-msg-2",
         instrument: { symbol: "NSE:TCS", exchange: "NSE", segment: "NSE", instrumentToken: "500410" },
         interval: "5minute",
+        baseResult: expect.objectContaining({ response: expect.objectContaining({ text: "TCS read" }) }),
       }),
     );
     // The remount (new `key`) tore down the old LiveSessionView instance before

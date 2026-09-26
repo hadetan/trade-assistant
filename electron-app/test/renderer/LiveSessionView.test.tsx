@@ -21,6 +21,20 @@ function fakeBridge(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const BASE_RESULT = {
+  mode: "engine_only" as const,
+  instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+  interval: "5minute" as const,
+  response: {
+    direction: "bullish" as const,
+    conviction: "high" as const,
+    text: "Overall read: bullish.",
+    confluence: { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 },
+  },
+  algo_results: [],
+  initialCandles: [],
+};
+
 const SESSION_PROPS = {
   sessionId: "s1",
   assistantMessageId: "m1",
@@ -28,6 +42,7 @@ const SESSION_PROPS = {
   interval: "5minute" as const,
   initialCandles: [],
   initialConfluence: { bullish_count: 0, bearish_count: 0, neutral_count: 0, weighted_vote: 0 },
+  baseResult: BASE_RESULT,
 };
 
 describe("LiveSessionView", () => {
@@ -40,6 +55,7 @@ describe("LiveSessionView", () => {
       assistantMessageId: "m1",
       instrument: SESSION_PROPS.instrument,
       interval: "5minute",
+      baseResult: BASE_RESULT,
     });
   });
 

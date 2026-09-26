@@ -258,6 +258,7 @@ export function App(): JSX.Element {
                     // such field at all; fall back rather than send undefined on.
                     initialCandles={result.initialCandles ?? []}
                     initialConfluence={result.response.confluence}
+                    baseResult={result}
                     bridge={bridge()}
                   />
                 ) : (

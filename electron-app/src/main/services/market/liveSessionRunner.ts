@@ -2,10 +2,12 @@ import { LiveCandleTracker } from "./liveCandleTracker";
 import type { LiveCandle } from "./liveCandleTracker";
 import { intervalMinutes } from "./candleInterval";
 import type { CandleInterval } from "./candleInterval";
+import { WARMUP_SOURCE } from "./candleWarmup";
 import type { KiteTickerClient, TickerConnectionStatus } from "../kite/kiteTicker";
 import type { SidecarSupervisor } from "../sidecar/sidecarSupervisor";
 import type { HistoryStore } from "../history/historyStore";
 import type { CandleWire, AlgoResultWire, ConfluenceWire } from "../sidecar/sidecarProtocol";
+import type { AnalysisResult } from "../../ipc/rendererApi";
 
 export interface LiveTickWire {
   ts: number;
@@ -19,16 +21,24 @@ export interface LiveInstrument {
   instrumentToken: string;
 }
 
+// The analyze-time turn this live session keeps up to date. Every recompute
+// rewrites the stored message as a *complete* AnalysisResult derived from this
+// base, because App.tsx's deriveEngineOnlyView reads that row back as one on
+// reopen -- a partial {algo_results, confluence} shape would leave `mode`
+// undefined and render nothing for the rest of the session's life.
+export type LiveBaseResult = Extract<AnalysisResult, { mode: "engine_only" }>;
+
 export interface StartLiveSessionParams {
   sessionId: string;
   assistantMessageId: string;
   instrument: LiveInstrument;
   interval: CandleInterval;
+  baseResult: LiveBaseResult;
 }
 
 export interface LiveSessionRunnerDeps {
   ticker: Pick<KiteTickerClient, "subscribe" | "onTick" | "onConnectionChange">;
-  sidecar: Pick<SidecarSupervisor, "persistCandles" | "compute">;
+  sidecar: Pick<SidecarSupervisor, "persistCandles" | "compute" | "readLakeCandles">;
   history: Pick<HistoryStore, "updateMessage">;
   sendTick: (tick: LiveTickWire) => void;
   sendCandleClose: (payload: { candle: CandleWire; algo_results: AlgoResultWire[]; confluence: ConfluenceWire }) => void;
@@ -86,19 +96,40 @@ export function createLiveSessionRunner(deps: LiveSessionRunnerDeps): LiveSessio
         void (async () => {
           try {
             const candle = candleWire(closed);
-            await deps.sidecar.persistCandles(params.instrument.symbol, params.interval, [candle], "kite");
+            await deps.sidecar.persistCandles(params.instrument.symbol, params.interval, [candle], WARMUP_SOURCE);
+            // compute() is stateless: rust-core keeps only the algorithms whose
+            // required_lookback() fits the candles it is handed, so passing just
+            // the one bar that closed would qualify zero algorithms and return an
+            // all-zero scorecard. Read the whole accumulated history back instead
+            // -- the warm-up and this runner write the same lake partition.
+            const lake = await deps.sidecar.readLakeCandles(
+              params.instrument.symbol,
+              params.interval,
+              WARMUP_SOURCE,
+            );
+            if (lake.error != null) throw new Error(lake.error);
             const computeResult = await deps.sidecar.compute(
               params.instrument.symbol,
               params.interval,
               "intraday",
-              [candle],
+              lake.candles,
             );
             if (!isActive()) return;
+            // direction/conviction/text stay at their analyze-time values: nothing
+            // in the live view or the reopen path reads them, and recomputing them
+            // here would duplicate deterministicResponseGenerator's derivation.
+            const updated: LiveBaseResult = {
+              ...params.baseResult,
+              algo_results: computeResult.algo_results,
+              response: { ...params.baseResult.response, confluence: computeResult.confluence },
+            };
             deps.history.updateMessage({
               sessionId: params.sessionId,
               messageId: params.assistantMessageId,
-              renderedText: "",
-              structuredPayload: { algo_results: computeResult.algo_results, confluence: computeResult.confluence },
+              // listSessions' sidebar preview is the latest message's
+              // rendered_text; blanking it would leave this session's row empty.
+              renderedText: params.baseResult.response.text,
+              structuredPayload: updated,
             });
             deps.sendCandleClose({ candle, algo_results: computeResult.algo_results, confluence: computeResult.confluence });
           } catch (error) {
