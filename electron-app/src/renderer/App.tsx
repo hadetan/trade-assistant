@@ -3,6 +3,7 @@ import { ModePicker } from "./ModePicker";
 import { IntentLensSelector } from "./IntentLensSelector";
 import { InstrumentSearch } from "./InstrumentSearch";
 import { AnalysisResultView, readinessMessage } from "./AnalysisResult";
+import { LiveSessionView } from "./LiveSessionView";
 import { ChatView, historyToChatMessages } from "./ChatView";
 import { BenchmarkView } from "./BenchmarkView";
 import { AppShell } from "./AppShell";
@@ -20,6 +21,7 @@ import type {
   BannerEvent,
   CandleInterval,
   HistoryMessage,
+  InstrumentRef,
   InstrumentSelection,
   IntentLens,
   ReadinessResult,
@@ -32,12 +34,26 @@ interface ActiveSession {
   mode: AnalysisMode;
 }
 
-function deriveEngineOnlyView(detail: SessionDetail | null): { result?: AnalysisResult; history: HistoryMessage[] } {
+// AnalysisResult only ever carries an InstrumentRef (an as-of snapshot for
+// display/record-keeping, `kite_token_asof`) -- LiveSessionView needs the same
+// token under InstrumentSelection's live-subscription field name instead.
+function instrumentRefToSelection(ref: InstrumentRef): InstrumentSelection {
+  return { symbol: ref.symbol, exchange: ref.exchange, segment: ref.segment, instrumentToken: ref.kite_token_asof };
+}
+
+function deriveEngineOnlyView(
+  detail: SessionDetail | null,
+): { result?: AnalysisResult; resultMessageId: string; history: HistoryMessage[] } {
   const messages = detail?.messages ?? [];
   const lastAssistantIndex = messages.map((m) => m.role).lastIndexOf("assistant");
-  if (lastAssistantIndex === -1) return { history: messages };
+  if (lastAssistantIndex === -1) return { resultMessageId: "", history: messages };
   return {
     result: messages[lastAssistantIndex].structured_payload as AnalysisResult,
+    // Not stored inside structured_payload itself (P17 self-review): the id
+    // doesn't exist yet when history.appendMessage() builds that payload, so
+    // it's threaded through as a sibling of `result` instead, the same way
+    // `history` already is.
+    resultMessageId: messages[lastAssistantIndex].id,
     history: messages.filter((_, index) => index !== lastAssistantIndex),
   };
 }
@@ -63,6 +79,13 @@ export function App(): JSX.Element {
   // must not be replayed (P13§2 decision 4 applies to a leftover failure banner
   // exactly as much as a fresh one). Reset on every new analysis and every reopen.
   const [suppressStaleBlocked, setSuppressStaleBlocked] = useState(false);
+  // ScanScheduler.recordWorthLook also stores engine_only turns, so
+  // `result.mode` alone cannot tell a proactive-scan alert apart from a real
+  // analyze. A scan turn never went through the readiness gate and carries no
+  // warmed candles, so starting a live subscription off it would open an
+  // ungated websocket (possibly outside market hours) onto an empty chart.
+  // Those keep the original prose view; only analyze-originated turns go live.
+  const [scanOriginated, setScanOriginated] = useState(false);
 
   useEffect(() => {
     void bridge().getStatus().then(setStatus);
@@ -93,6 +116,7 @@ export function App(): JSX.Element {
     // stale blocked/closed banner would otherwise render on the new one too.
     setReadiness(null);
     setSuppressStaleBlocked(false);
+    setScanOriginated(false);
     void bridge().listSessions().then(setSessions);
   };
 
@@ -109,6 +133,7 @@ export function App(): JSX.Element {
     setSessionDetail(null);
     setActiveSession({ id: session.id, mode });
     setShowModePicker(false);
+    setScanOriginated(false);
   };
 
   const onOpenSession = async (id: string): Promise<void> => {
@@ -121,6 +146,7 @@ export function App(): JSX.Element {
     setAnalysisError(null);
     setReadiness(null);
     setSuppressStaleBlocked(false);
+    setScanOriginated(false);
     const detail = await bridge().getSession(id);
     setSessionDetail(detail);
     setActiveSession({ id: detail.id, mode: detail.response_mode });
@@ -134,7 +160,10 @@ export function App(): JSX.Element {
       // `payload.mode === "engine_only"` to false via `undefined`; checked here
       // explicitly instead so that can never look like an intentional skip by luck.
       // Building a scan-appropriate readiness recheck is out of scope (P13 design).
-      if ("trigger" in rawPayload) return;
+      if ("trigger" in rawPayload) {
+        setScanOriginated(true);
+        return;
+      }
       const payload = lastUserMessage.structured_payload as AnalysisRunParams;
       // The gate is re-evaluated as of right now, not replayed from whenever this
       // session was last open: data and market state both move (P13§2 decision 5).
@@ -174,6 +203,7 @@ export function App(): JSX.Element {
     setAnalysisError(null);
     setReadiness(null);
     setSuppressStaleBlocked(false);
+    setScanOriginated(false);
     try {
       await bridge().runAnalysis({ mode: "engine_only", sessionId: activeSession.id, instrument, interval, intent_lens: intentLens });
       setSessionDetail(await bridge().getSession(activeSession.id));
@@ -183,7 +213,7 @@ export function App(): JSX.Element {
   };
 
   const authenticated = status?.kiteSession === "authenticated";
-  const { result, history } = deriveEngineOnlyView(sessionDetail);
+  const { result, resultMessageId, history } = deriveEngineOnlyView(sessionDetail);
 
   return (
     <AppShell
@@ -225,9 +255,29 @@ export function App(): JSX.Element {
               <InstrumentSearch onSubmit={onAnalyze} />
               {analysisError && <Banner variant="error">{analysisError}</Banner>}
               {readiness && <Banner variant="info">{readinessMessage(readiness)}</Banner>}
-              {!readiness && result && !(suppressStaleBlocked && result.mode === "engine_only_blocked") && (
-                <AnalysisResultView result={result} history={history} />
-              )}
+              {!readiness &&
+                result &&
+                !(suppressStaleBlocked && result.mode === "engine_only_blocked") &&
+                (result.mode === "engine_only" && !scanOriginated ? (
+                  <LiveSessionView
+                    // Forces a full unmount+remount on every new analyze (a fresh
+                    // resultMessageId each time) rather than reusing the previous
+                    // instrument's live session -- see Finding 3 of the Task 8 review.
+                    key={resultMessageId}
+                    sessionId={activeSession.id}
+                    assistantMessageId={resultMessageId}
+                    instrument={instrumentRefToSelection(result.instrument)}
+                    interval={result.interval}
+                    // A session stored before this PR's initialCandles addition has no
+                    // such field at all; fall back rather than send undefined on.
+                    initialCandles={result.initialCandles ?? []}
+                    initialConfluence={result.response.confluence}
+                    baseResult={result}
+                    bridge={bridge()}
+                  />
+                ) : (
+                  <AnalysisResultView result={result} history={history} />
+                ))}
             </>
           ) : (
             <ChatView

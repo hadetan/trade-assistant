@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildRendererApi } from "../../../src/main/ipc/rendererApi";
 
 describe("buildRendererApi", () => {
-  it("exposes exactly the sixteen bridge methods and never leaks the raw transport", () => {
+  it("exposes exactly the twenty-one bridge methods and never leaks the raw transport", () => {
     const api = buildRendererApi(vi.fn().mockResolvedValue({}), vi.fn());
     expect(Object.keys(api).sort()).toEqual([
       "cancelBenchmark",
@@ -17,10 +17,15 @@ describe("buildRendererApi", () => {
       "login",
       "onBanner",
       "onBenchmarkProgress",
+      "onLiveCandleClose",
+      "onLiveStatus",
+      "onLiveTick",
       "onTrace",
       "runAnalysis",
       "runBenchmark",
       "searchInstruments",
+      "startLiveSession",
+      "stopLiveSession",
     ]);
     expect((api as Record<string, unknown>).ipcRenderer).toBeUndefined();
     expect((api as Record<string, unknown>).invoke).toBeUndefined();
@@ -123,5 +128,53 @@ describe("buildRendererApi history wiring", () => {
     };
     expect(await buildRendererApi(invoke, vi.fn()).checkReadiness(params)).toEqual({ ok: true });
     expect(invoke).toHaveBeenCalledWith("analysis:checkReadiness", params);
+  });
+});
+
+describe("buildRendererApi live wiring", () => {
+  it("startLiveSession invokes live:start with the given params", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const params = {
+      sessionId: "s1",
+      assistantMessageId: "m1",
+      instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", instrumentToken: "408065" },
+      interval: "5minute" as const,
+    };
+    await buildRendererApi(invoke, vi.fn()).startLiveSession(params);
+    expect(invoke).toHaveBeenCalledWith("live:start", params);
+  });
+
+  it("stopLiveSession invokes live:stop", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    await buildRendererApi(invoke, vi.fn()).stopLiveSession();
+    expect(invoke).toHaveBeenCalledWith("live:stop");
+  });
+
+  it("onLiveTick/onLiveCandleClose/onLiveStatus subscribe to their channels", () => {
+    const subscribe = vi.fn();
+    const api = buildRendererApi(vi.fn(), subscribe);
+    const tickHandler = vi.fn();
+    const closeHandler = vi.fn();
+    const statusHandler = vi.fn();
+
+    api.onLiveTick(tickHandler);
+    api.onLiveCandleClose(closeHandler);
+    api.onLiveStatus(statusHandler);
+
+    expect(subscribe).toHaveBeenCalledWith("live:tick", expect.any(Function));
+    expect(subscribe).toHaveBeenCalledWith("live:candleClose", expect.any(Function));
+    expect(subscribe).toHaveBeenCalledWith("live:status", expect.any(Function));
+  });
+
+  it("onLiveTick/onLiveCandleClose/onLiveStatus hand back the transport's unsubscribe", () => {
+    // LiveSessionView remounts on every Analyze click; without this each mount
+    // would leave three more listeners on these channels forever.
+    const unsubscribe = vi.fn();
+    const subscribe = vi.fn().mockReturnValue(unsubscribe);
+    const api = buildRendererApi(vi.fn(), subscribe);
+
+    expect(api.onLiveTick(vi.fn())).toBe(unsubscribe);
+    expect(api.onLiveCandleClose(vi.fn())).toBe(unsubscribe);
+    expect(api.onLiveStatus(vi.fn())).toBe(unsubscribe);
   });
 });

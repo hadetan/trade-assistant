@@ -114,6 +114,7 @@ export async function runAnalysisRequest(
     interval: params.interval,
     response,
     algo_results: envelope.algo_results,
+    initialCandles: readiness.warmed.candles,
   };
   // If assembleEnvelope throws, this second write never runs — the user
   // message is left orphaned with no assistant reply, matching ordinary

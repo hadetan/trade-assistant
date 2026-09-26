@@ -4,7 +4,11 @@ import { buildRendererApi } from "./rendererApi";
 const api = buildRendererApi(
   (channel, ...args) => ipcRenderer.invoke(channel, ...args),
   (channel, handler) => {
-    ipcRenderer.on(channel, (_event, payload) => handler(payload));
+    const wrapped = (_event: unknown, payload: unknown): void => handler(payload);
+    ipcRenderer.on(channel, wrapped);
+    return () => {
+      ipcRenderer.off(channel, wrapped);
+    };
   },
 );
 

@@ -2,7 +2,7 @@ import type { DeterministicResponse } from "../services/analysis/deterministicRe
 import type { InstrumentRef, Verdict } from "../services/analysis/contracts";
 import type { InstrumentSelection } from "../services/analysis/analysisEnvelope";
 import type { AlgoResultWire, ConfluenceWire } from "../services/sidecar/sidecarProtocol";
-export type { IntentLens, Verdict } from "../services/analysis/contracts";
+export type { IntentLens, Verdict, InstrumentRef } from "../services/analysis/contracts";
 import type { IntentLens } from "../services/analysis/contracts";
 export type { SessionSummary, HistoryMessage, SessionDetail } from "../services/history/historyStore";
 import type { SessionSummary, HistoryMessage, SessionDetail } from "../services/history/historyStore";
@@ -66,6 +66,7 @@ export type AnalysisResult =
       interval: CandleInterval;
       response: DeterministicResponse;
       algo_results: AlgoResultWire[];
+      initialCandles: CandleWire[];
     }
   | {
       mode: "engine_only_blocked";
@@ -115,6 +116,22 @@ export type TraceEmitter = (event: TraceEventInput) => void;
 
 export type LoginResult = { status: "authenticated" } | { status: "error"; message: string };
 
+export type { LiveTickWire, StartLiveSessionParams, LiveInstrument } from "../services/market/liveSessionRunner";
+import type { LiveTickWire, StartLiveSessionParams } from "../services/market/liveSessionRunner";
+// CandleWire is new; AlgoResultWire/ConfluenceWire are already imported at the
+// top of this file (line 4) -- do not re-import them, TS treats a second
+// `import type` of the same named binding from the same module as a
+// duplicate-identifier error.
+import type { CandleWire } from "../services/sidecar/sidecarProtocol";
+import type { TickerConnectionStatus } from "../services/kite/kiteTicker";
+export type { TickerConnectionStatus } from "../services/kite/kiteTicker";
+
+export interface LiveCandleClosePayload {
+  candle: CandleWire;
+  algo_results: AlgoResultWire[];
+  confluence: ConfluenceWire;
+}
+
 export interface RendererApi {
   getStatus(): Promise<AppStatus>;
   onBanner(handler: (banner: BannerEvent) => void): void;
@@ -132,11 +149,20 @@ export interface RendererApi {
   cancelBenchmark(): Promise<void>;
   onBenchmarkProgress(handler: (progress: BenchmarkProgress) => void): void;
   copyBenchmarkResult(text: string): Promise<void>;
+  startLiveSession(params: StartLiveSessionParams): Promise<void>;
+  stopLiveSession(): Promise<void>;
+  // Unlike the app-lifetime subscriptions above, these three return an
+  // unsubscribe function: LiveSessionView remounts on every Analyze click, so
+  // without one each mount would leave three more listeners on the same IPC
+  // channels for the rest of the renderer process's life.
+  onLiveTick(handler: (tick: LiveTickWire) => void): () => void;
+  onLiveCandleClose(handler: (payload: LiveCandleClosePayload) => void): () => void;
+  onLiveStatus(handler: (status: TickerConnectionStatus) => void): () => void;
 }
 
 export function buildRendererApi(
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>,
-  subscribe: (channel: string, handler: (payload: unknown) => void) => void,
+  subscribe: (channel: string, handler: (payload: unknown) => void) => () => void,
 ): RendererApi {
   return {
     getStatus: () => invoke("status:get") as Promise<AppStatus>,
@@ -155,6 +181,11 @@ export function buildRendererApi(
     cancelBenchmark: () => invoke("benchmark:cancelBenchmark") as Promise<void>,
     onBenchmarkProgress: (handler) => subscribe("benchmark:progress", handler as (payload: unknown) => void),
     copyBenchmarkResult: (text) => invoke("benchmark:copyToClipboard", text) as Promise<void>,
+    startLiveSession: (params) => invoke("live:start", params) as Promise<void>,
+    stopLiveSession: () => invoke("live:stop") as Promise<void>,
+    onLiveTick: (handler) => subscribe("live:tick", handler as (p: unknown) => void),
+    onLiveCandleClose: (handler) => subscribe("live:candleClose", handler as (p: unknown) => void),
+    onLiveStatus: (handler) => subscribe("live:status", handler as (p: unknown) => void),
   };
 }
 

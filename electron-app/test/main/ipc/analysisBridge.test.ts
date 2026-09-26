@@ -408,6 +408,25 @@ describe("runAnalysisRequest readiness gate", () => {
     expect(deps.assembleEnvelope).toHaveBeenCalledTimes(1);
   });
 
+  it("returns the readiness gate's own warmed candles as initialCandles, without a second fetch", async () => {
+    const warmedCandles: CandleWire[] = [{ ts: 1_758_000_000, open: 1, high: 2, low: 0.5, close: 1.5, volume: 10 }];
+    const deps = gateDeps({ ok: true, warmed: { candles: warmedCandles, requiredBars: 256 } });
+    deps.assembleEnvelope = vi.fn().mockResolvedValue({
+      trigger: "reactive",
+      instrument: { symbol: "NSE:INFY", exchange: "NSE", segment: "NSE", kite_token_asof: "408065" },
+      horizon_requested: "intraday",
+      intent_lens: "buying",
+      algo_results: [],
+      confluence: { bullish_count: 1, bearish_count: 0, neutral_count: 0, weighted_vote: 1 },
+      overlays: {},
+    });
+
+    const result = await runAnalysisRequest(deps as never, PARAMS);
+
+    expect(result.mode).toBe("engine_only");
+    expect((result as { initialCandles: CandleWire[] }).initialCandles).toBe(warmedCandles);
+  });
+
   it("leaves the user's message with no assistant reply when assembleEnvelope throws after the gate passes", async () => {
     const deps = gateDeps({ ok: true, warmed: { candles: [], requiredBars: 256 } });
     deps.assembleEnvelope = vi.fn().mockRejectedValue(new Error("boom"));

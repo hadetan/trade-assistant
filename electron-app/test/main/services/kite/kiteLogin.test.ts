@@ -5,6 +5,7 @@ function baseDeps() {
   const callTool = vi.fn().mockResolvedValue({ ok: true });
   const ticker = {
     connect: vi.fn(),
+    updateCredentialsAndConnect: vi.fn(),
     disconnect: vi.fn(),
     subscribe: vi.fn(),
     onTick: vi.fn(),
@@ -47,6 +48,7 @@ describe("runKiteLogin", () => {
       expect.objectContaining({ apiKey: "k123", accessToken: "at_999" }),
     );
     expect(deps.createTicker).toHaveBeenCalledWith("k123", "at_999");
+    expect(ticker.updateCredentialsAndConnect).toHaveBeenCalledWith("k123", "at_999");
     expect(session.ticker).toBe(ticker);
 
     await session.kite.getLTP(["NSE:INFY"]);
@@ -72,12 +74,14 @@ describe("runKiteLogin", () => {
     expect(deps.createRestCaller).not.toHaveBeenCalled();
   });
 
-  it("close() disconnects the ticker", async () => {
+  it("reuses an existingTicker instead of constructing a new one, and updates its credentials", async () => {
     const { deps, ticker } = baseDeps();
-    const session = await runKiteLogin(deps);
+    const existingTicker = { ...ticker, updateCredentialsAndConnect: vi.fn() };
 
-    await session.close();
+    const session = await runKiteLogin({ ...deps, existingTicker });
 
-    expect(ticker.disconnect).toHaveBeenCalledTimes(1);
+    expect(deps.createTicker).not.toHaveBeenCalled();
+    expect(existingTicker.updateCredentialsAndConnect).toHaveBeenCalledWith("k123", "at_999");
+    expect(session.ticker).toBe(existingTicker);
   });
 });

@@ -1,0 +1,61 @@
+.verdict-meter {
+  width: 100%;
+  padding: var(--space-2) var(--space-4);
+}
+
+.verdict-meter-track {
+  position: relative;
+  height: 12px;
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+}
+
+.verdict-meter-center {
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  background: var(--border-strong);
+}
+
+.verdict-meter-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+}
+
+.verdict-meter-fill-bullish {
+  background: var(--bullish);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.verdict-meter-fill-bearish {
+  left: auto;
+  right: 50%;
+  background: var(--bearish);
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.verdict-meter-arrow {
+  position: absolute;
+  top: 50%;
+  width: 0;
+  height: 0;
+  transform: translateY(-50%);
+}
+
+.verdict-meter-arrow-bullish {
+  right: -6px;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 6px solid var(--bullish);
+}
+
+.verdict-meter-arrow-bearish {
+  left: -6px;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 6px solid var(--bearish);
+}
